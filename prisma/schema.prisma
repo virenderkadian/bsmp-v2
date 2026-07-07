@@ -1,0 +1,332 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  ROUTE_OPERATOR
+  CASHIER
+}
+
+enum RouteShift {
+  MORNING
+  EVENING
+}
+
+enum RouteAssignmentStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum EntrySyncStatus {
+  DRAFT
+  SAVED_OFFLINE
+  PENDING_SYNC
+  SYNCED
+  CONFLICT
+  FAILED
+}
+
+enum PaymentMode {
+  CASH
+  UPI
+  BANK_TRANSFER
+  CHEQUE
+}
+
+enum PaymentStatus {
+  PENDING
+  VERIFIED
+  CANCELLED
+}
+
+enum BillingStatus {
+  DRAFT
+  GENERATED
+  LOCKED
+  CANCELLED
+}
+
+model User {
+  id           String            @id @default(uuid())
+  fullName     String
+  email        String            @unique
+  role         UserRole
+  isActive     Boolean           @default(true)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  routeEntries DailyRouteEntry[]
+  payments     Payment[]
+}
+
+model Vehicle {
+  id           String   @id @default(uuid())
+  code         String   @unique
+  name         String
+  registration String?  @unique
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  routes       Route[]
+}
+
+model Product {
+  id               String                        @id @default(uuid())
+  code             String                        @unique
+  name             String
+  shortName        String?
+  unit             String
+  defaultRate      Decimal                       @db.Decimal(10, 2)
+  displayOrder     Int                           @default(0)
+  showInDailyEntry Boolean                       @default(true)
+  isActive         Boolean                       @default(true)
+  createdAt        DateTime                      @default(now())
+  updatedAt        DateTime                      @updatedAt
+  routeDefaults    RouteCustomerProductDefault[]
+  lineProducts     DailyRouteEntryLineProduct[]
+  billItems        MonthlyBillItem[]
+
+  @@index([isActive, showInDailyEntry, displayOrder])
+}
+
+model Route {
+  id               String                         @id @default(uuid())
+  code             String                         @unique
+  name             String
+  shift            RouteShift
+  vehicleId        String?
+  driverName       String?
+  driverPhone      String?
+  isActive         Boolean                        @default(true)
+  createdAt        DateTime                       @default(now())
+  updatedAt        DateTime                       @updatedAt
+  vehicle          Vehicle?                       @relation(fields: [vehicleId], references: [id])
+  assignments      RouteCustomerAssignment[]
+  monthlySequences MonthlyRouteCustomerSequence[]
+  entries          DailyRouteEntry[]
+  paymentBatches   PaymentBatch[]
+  payments         Payment[]
+  monthlyBills     MonthlyBill[]
+}
+
+model Customer {
+  id               String                         @id @default(uuid())
+  code             String                         @unique
+  name             String
+  mobile           String?
+  addressLine1     String?
+  addressLine2     String?
+  area             String?
+  latitude         Decimal?                       @db.Decimal(9, 6)
+  longitude        Decimal?                       @db.Decimal(9, 6)
+  openingBalance   Decimal                        @default(0) @db.Decimal(12, 2)
+  isActive         Boolean                        @default(true)
+  createdAt        DateTime                       @default(now())
+  updatedAt        DateTime                       @updatedAt
+  assignments      RouteCustomerAssignment[]
+  monthlySequences MonthlyRouteCustomerSequence[]
+  entryLines       DailyRouteEntryLine[]
+  payments         Payment[]
+  monthlyBills     MonthlyBill[]
+}
+
+model RouteCustomerAssignment {
+  id         String                        @id @default(uuid())
+  routeId    String
+  customerId String
+  sequenceNo Int
+  status     RouteAssignmentStatus         @default(ACTIVE)
+  createdAt  DateTime                      @default(now())
+  updatedAt  DateTime                      @updatedAt
+  route      Route                         @relation(fields: [routeId], references: [id])
+  customer   Customer                      @relation(fields: [customerId], references: [id])
+  defaults   RouteCustomerProductDefault[]
+
+  @@unique([routeId, customerId])
+  @@unique([routeId, sequenceNo])
+}
+
+model RouteCustomerProductDefault {
+  id           String                  @id @default(uuid())
+  assignmentId String
+  productId    String
+  defaultQty   Decimal                 @default(0) @db.Decimal(10, 3)
+  defaultRate  Decimal                 @db.Decimal(10, 2)
+  createdAt    DateTime                @default(now())
+  updatedAt    DateTime                @updatedAt
+  assignment   RouteCustomerAssignment @relation(fields: [assignmentId], references: [id])
+  product      Product                 @relation(fields: [productId], references: [id])
+
+  @@unique([assignmentId, productId])
+}
+
+model MonthlyRouteCustomerSequence {
+  id            String                @id @default(uuid())
+  routeId       String
+  customerId    String
+  sequenceMonth DateTime              @db.Date
+  sequenceNo    Int
+  status        RouteAssignmentStatus @default(ACTIVE)
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  route         Route                 @relation(fields: [routeId], references: [id])
+  customer      Customer              @relation(fields: [customerId], references: [id])
+
+  @@unique([routeId, sequenceMonth, customerId])
+  @@unique([routeId, sequenceMonth, sequenceNo])
+}
+
+model DailyRouteEntry {
+  id         String                @id @default(uuid())
+  routeId    String
+  entryDate  DateTime              @db.Date
+  operatorId String?
+  syncStatus EntrySyncStatus       @default(DRAFT)
+  notes      String?
+  createdAt  DateTime              @default(now())
+  updatedAt  DateTime              @updatedAt
+  route      Route                 @relation(fields: [routeId], references: [id])
+  operator   User?                 @relation(fields: [operatorId], references: [id])
+  lines      DailyRouteEntryLine[]
+
+  @@unique([routeId, entryDate])
+}
+
+model DailyRouteEntryLine {
+  id             String                       @id @default(uuid())
+  entryId        String
+  customerId     String
+  sequenceNo     Int
+  skipped        Boolean                      @default(false)
+  remarks        String?
+  createdAt      DateTime                     @default(now())
+  updatedAt      DateTime                     @updatedAt
+  entry          DailyRouteEntry              @relation(fields: [entryId], references: [id])
+  customer       Customer                     @relation(fields: [customerId], references: [id])
+  productEntries DailyRouteEntryLineProduct[]
+
+  @@unique([entryId, customerId])
+  @@index([entryId, sequenceNo])
+}
+
+model DailyRouteEntryLineProduct {
+  id           String              @id @default(uuid())
+  lineId       String
+  productId    String
+  quantity     Decimal             @default(0) @db.Decimal(10, 3)
+  rateSnapshot Decimal             @db.Decimal(10, 2)
+  createdAt    DateTime            @default(now())
+  updatedAt    DateTime            @updatedAt
+  line         DailyRouteEntryLine @relation(fields: [lineId], references: [id])
+  product      Product             @relation(fields: [productId], references: [id])
+
+  @@unique([lineId, productId])
+  @@index([productId])
+}
+
+model Payment {
+  id            String        @id @default(uuid())
+  customerId    String
+  routeId       String?
+  batchId       String?
+  collectedById String?
+  amount        Decimal       @db.Decimal(12, 2)
+  paymentDate   DateTime      @db.Date
+  mode          PaymentMode
+  status        PaymentStatus @default(PENDING)
+  referenceNo   String?
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  customer      Customer      @relation(fields: [customerId], references: [id])
+  route         Route?        @relation(fields: [routeId], references: [id])
+  batch         PaymentBatch? @relation(fields: [batchId], references: [id])
+  collectedBy   User?         @relation(fields: [collectedById], references: [id])
+
+  @@index([customerId, routeId, paymentDate])
+  @@index([routeId, paymentDate, status])
+  @@index([batchId])
+}
+
+model PaymentBatch {
+  id            String        @id @default(uuid())
+  routeId       String
+  billingMonth  DateTime      @db.Date
+  paymentDate   DateTime      @db.Date
+  mode          PaymentMode
+  defaultStatus PaymentStatus @default(VERIFIED)
+  totalAmount   Decimal       @default(0) @db.Decimal(12, 2)
+  referenceNo   String?
+  notes         String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  route         Route         @relation(fields: [routeId], references: [id])
+  payments      Payment[]
+
+  @@index([routeId, billingMonth])
+  @@index([paymentDate])
+}
+
+model MonthlyBill {
+  id             String            @id @default(uuid())
+  customerId     String
+  routeId        String
+  billingMonth   DateTime          @db.Date
+  openingBalance Decimal           @db.Decimal(12, 2)
+  deliveryAmount Decimal           @db.Decimal(12, 2)
+  paymentAmount  Decimal           @db.Decimal(12, 2)
+  closingBalance Decimal           @db.Decimal(12, 2)
+  status         BillingStatus     @default(DRAFT)
+  generatedAt    DateTime?
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  customer       Customer          @relation(fields: [customerId], references: [id])
+  route          Route             @relation(fields: [routeId], references: [id])
+  items          MonthlyBillItem[]
+
+  @@unique([customerId, routeId, billingMonth])
+}
+
+model MonthlyBillItem {
+  id            String      @id @default(uuid())
+  monthlyBillId String
+  productId     String
+  totalQty      Decimal     @db.Decimal(12, 3)
+  averageRate   Decimal     @db.Decimal(10, 2)
+  totalAmount   Decimal     @db.Decimal(12, 2)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  monthlyBill   MonthlyBill @relation(fields: [monthlyBillId], references: [id])
+  product       Product     @relation(fields: [productId], references: [id])
+
+  @@unique([monthlyBillId, productId])
+}
+
+// Singleton row (id is always "default") holding the printed-bill letterhead:
+// business identity, bank/UPI details, and the configurable reminder footer.
+model BusinessProfile {
+  id                String   @id @default("default")
+  businessName      String
+  contactPhone      String?
+  addressLine1      String?
+  addressLine2      String?
+  bankAccountName   String?
+  bankAccountNumber String?
+  bankIfsc          String?
+  bankName          String?
+  upiId             String?
+  // Cached data: URI for the UPI QR code, regenerated on save rather than
+  // per bill-view — QR generation is pure CPU work with no reason to repeat
+  // it on every print/view request.
+  upiQrDataUrl      String?
+  footerNote        String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
