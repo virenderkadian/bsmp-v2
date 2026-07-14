@@ -163,7 +163,7 @@ function CustomerDialog({
             {state.message}
           </p>
         ) : null}
-        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 pt-4">
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-surface-border pt-4">
           <StatusBadge tone={dbConnected ? "success" : "warning"}>
             {dbConnected ? "Live data" : "Offline fallback"}
           </StatusBadge>
@@ -186,7 +186,7 @@ function CustomerRowActions({ onEdit }: { onEdit: () => void }) {
         type="button"
         icon={<EditIcon className="h-[18px] w-[18px]" />}
         onClick={onEdit}
-        className="h-8 w-8 rounded-md border-none bg-transparent px-0 text-slate-900 shadow-none hover:bg-slate-100"
+        className="h-8 w-8 rounded-md border-none bg-transparent px-0 text-text-primary shadow-none hover:bg-surface-muted"
         aria-label="Edit customer"
         title="Edit customer"
       >
@@ -243,7 +243,7 @@ function CustomerStatusToggle({ customer }: { customer: CustomerRecord }) {
       >
         <input type="hidden" name="id" value={customer.id} />
         <input type="hidden" name="isActive" value={customer.isActive ? "false" : "true"} />
-        <span className="text-sm text-slate-500 mb-4 block">
+        <span className="text-sm text-text-secondary mb-4 block">
           {customer.isActive
             ? "This customer will no longer be available for route allocation, daily entry, and billing."
             : "This customer will be available for route allocation, daily entry, and billing."}
@@ -354,7 +354,7 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
               onChange={(event) => setRouteId(event.target.value)}
               placeholder="All sequence routes"
               options={routeOptions}
-              className="h-10 rounded-md bg-white text-sm"
+              className="h-10 rounded-md bg-surface text-sm"
             />
             <SelectInput
               name="status"
@@ -365,7 +365,7 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
                 { value: "ACTIVE", label: "Active" },
                 { value: "INACTIVE", label: "Inactive" },
               ]}
-              className="h-10 rounded-md bg-white text-sm"
+              className="h-10 rounded-md bg-surface text-sm"
             />
           </div>
           <div className="flex items-center gap-2">
@@ -394,8 +394,8 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
             key: customer.id,
             cells: [
               <div key="name" className="min-w-[260px]">
-                <p className="text-[15px] font-semibold leading-6 text-slate-900">{customer.name}</p>
-                {customer.area ? <p className="mt-0.5 text-sm text-slate-500">{customer.area}</p> : null}
+                <p className="text-[15px] font-semibold leading-6 text-text-primary">{customer.name}</p>
+                {customer.area ? <p className="mt-0.5 text-sm text-text-secondary">{customer.area}</p> : null}
               </div>,
               <span key="phone" className="text-sm text-slate-800">
                 {customer.mobile || "-"}
@@ -411,10 +411,10 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
           }))}
           emptyMessage="No customers match the selected filters"
           minWidth="min-w-[760px]"
-          className="rounded-md border-slate-200 shadow-none"
-          headClassName="bg-slate-100/70"
+          className="rounded-md border-surface-border shadow-none"
+          headClassName="bg-surface-muted/70"
           headerCellClassName="px-5 py-3"
-          rowClassName="align-middle hover:bg-slate-50/60"
+          rowClassName="align-middle hover:bg-surface-muted/60"
           cellClassName="px-5 py-3.5"
         />
       </section>

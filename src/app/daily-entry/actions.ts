@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { getCurrentCityId } from "@/lib/current-city";
+import { logAudit } from "@/lib/audit";
 
 export type DailyEntryActionState = {
   status: "idle" | "success" | "error";
@@ -94,6 +96,46 @@ export async function saveDailyEntry(
       return { status: "error", message: parsed.error.issues[0]?.message };
     }
 
+    // Daily entry is destructive on save (deletes and rebuilds every line for
+    // this route+date), but a bill generated from this month's entries is a
+    // frozen snapshot with no link back to the source rows — if we let a
+    // resave go through after generation, the bill's own totals stay correct
+    // while the "what was delivered" trail silently disappears underneath
+    // it. Block the save instead; the user can set the bill back to Draft,
+    // correct the entry, then regenerate.
+    const entryDateValue = new Date(parsed.data.entryDate);
+    const billingMonthStart = new Date(
+      Date.UTC(entryDateValue.getUTCFullYear(), entryDateValue.getUTCMonth(), 1),
+    );
+    const blockingBill = await prisma.monthlyBill.findFirst({
+      where: {
+        routeId: parsed.data.routeId,
+        billingMonth: billingMonthStart,
+        status: { in: ["GENERATED", "LOCKED"] },
+      },
+      select: { status: true },
+    });
+
+    if (blockingBill) {
+      const cityId = await getCurrentCityId();
+      await logAudit(prisma, {
+        cityId,
+        entityType: "DailyRouteEntry",
+        action: "BLOCKED",
+        summary: `Blocked daily entry save for route ${parsed.data.routeId} on ${parsed.data.entryDate}: bill already ${blockingBill.status}.`,
+        after: { routeId: parsed.data.routeId, entryDate: parsed.data.entryDate, billStatus: blockingBill.status },
+      });
+
+      return {
+        status: "error",
+        message: `Bills for this route and month are already ${
+          blockingBill.status === "LOCKED" ? "Locked" : "Generated"
+        }. Set the bill status back to Draft on the Monthly Bills page before editing this date, then regenerate.`,
+      };
+    }
+
+    const cityId = await getCurrentCityId();
+
     await prisma.$transaction(async (tx) => {
       const entry = await tx.dailyRouteEntry.upsert({
         where: {
@@ -117,9 +159,28 @@ export async function saveDailyEntry(
           lines: {
             select: {
               id: true,
+              customerId: true,
+              productEntries: {
+                select: { productId: true, quantity: true },
+              },
             },
           },
         },
+      });
+
+      // Captured before the delete below, so a resave can tell "this
+      // product was already 0 (or absent) and still is" — skip storing it —
+      // apart from "this product had a real quantity before and is being
+      // corrected to 0 now" — keep that as an explicit row rather than
+      // letting the correction silently vanish.
+      const previousQtyByCustomerProduct = new Map<string, number>();
+      entry.lines.forEach((line) => {
+        line.productEntries.forEach((productEntry) => {
+          previousQtyByCustomerProduct.set(
+            `${line.customerId}:${productEntry.productId}`,
+            Number(productEntry.quantity),
+          );
+        });
       });
 
       if (entry.lines.length > 0) {
@@ -152,12 +213,29 @@ export async function saveDailyEntry(
           },
         });
 
-        const productRows = line.products.map((product) => ({
-          lineId: createdLine.id,
-          productId: product.productId,
-          quantity: product.quantity,
-          rateSnapshot: product.rateSnapshot,
-        }));
+        // A quantity that was never anything but 0 carries no information —
+        // the edit form and every downstream reader (billing, reconciliation,
+        // dashboards) already default a *missing* product row to 0 (see
+        // src/lib/daily-entry.ts), so skipping it here is transparent and
+        // meaningfully cuts row count (most customers only take a few of the
+        // full product catalog on a given day). But a product that DID have
+        // a real quantity before this save and is now being corrected down
+        // to 0 keeps its row — that's a real edit worth a trail, not a
+        // no-op, so it must not silently disappear.
+        const productRows = line.products
+          .filter((product) => {
+            if (product.quantity > 0) {
+              return true;
+            }
+            const previousQty = previousQtyByCustomerProduct.get(`${line.customerId}:${product.productId}`) ?? 0;
+            return previousQty > 0;
+          })
+          .map((product) => ({
+            lineId: createdLine.id,
+            productId: product.productId,
+            quantity: product.quantity,
+            rateSnapshot: product.rateSnapshot,
+          }));
 
         if (productRows.length > 0) {
           await tx.dailyRouteEntryLineProduct.createMany({
@@ -165,6 +243,15 @@ export async function saveDailyEntry(
           });
         }
       }
+
+      await logAudit(tx, {
+        cityId,
+        entityType: "DailyRouteEntry",
+        entityId: entry.id,
+        action: "SAVE",
+        summary: `Saved daily entry for route ${parsed.data.routeId} on ${parsed.data.entryDate} (${parsed.data.lines.length} customer line${parsed.data.lines.length === 1 ? "" : "s"}).`,
+        after: { routeId: parsed.data.routeId, entryDate: parsed.data.entryDate, lineCount: parsed.data.lines.length },
+      });
     });
 
     revalidatePath("/daily-entry");

@@ -89,20 +89,20 @@ function CustomerSuggestionRow({
       type="button"
       className={cn(
         "flex w-full items-center justify-between gap-4 px-3 py-2.5 text-left transition",
-        active ? "bg-blue-50" : "bg-white hover:bg-slate-50",
+        active ? "bg-accent-soft" : "bg-surface hover:bg-surface-muted",
       )}
       onClick={() => onSelect(customer.id)}
     >
       <span>
-        <span className="block text-sm font-semibold text-slate-900">{customer.name}</span>
-        <span className="mt-0.5 block text-xs font-medium uppercase tracking-[0.12em] text-slate-500">
+        <span className="block text-sm font-semibold text-text-primary">{customer.name}</span>
+        <span className="mt-0.5 block text-xs font-medium uppercase tracking-[0.12em] text-text-secondary">
           {formatCustomerMeta(customer) || "-"}
         </span>
       </span>
       <span
         className={cn(
           "rounded-full px-2.5 py-1 text-xs font-semibold",
-          alreadyAdded ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-600",
+          alreadyAdded ? "bg-amber-50 text-amber-700" : "bg-surface-muted text-text-secondary",
         )}
       >
         {alreadyAdded ? "Already added" : "Enter"}
@@ -113,7 +113,7 @@ function CustomerSuggestionRow({
 
 function RouteMonthToolbar({ payload }: { payload: MonthlyRouteSequencePayload }) {
   return (
-    <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
+    <section className="rounded-md border border-surface-border bg-surface p-4 shadow-sm">
       <PageHeader
         title="Monthly Route Customer Sequence"
         subtitle="Build and manage route-wise customer delivery order."
@@ -129,15 +129,15 @@ function RouteMonthToolbar({ payload }: { payload: MonthlyRouteSequencePayload }
               value: route.id,
               label: `${route.code} - ${route.name}`,
             }))}
-            className="h-10 rounded-md bg-white text-sm"
+            className="h-10 rounded-md bg-surface text-sm"
           />
           <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-slate-500">Month</span>
+            <span className="text-xs font-medium text-text-secondary">Month</span>
             <input
               type="month"
               name="month"
               defaultValue={payload.selectedMonth}
-              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-blue-600"
+              className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
             />
           </label>
           <PrimaryButton type="submit" className="h-10 rounded-md px-5 text-sm font-semibold">
@@ -192,11 +192,11 @@ function AddCustomerBar({
   const selectedCustomer = suggestions[activeSuggestionIndex] ?? suggestions[0];
 
   return (
-    <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
+    <section className="rounded-md border border-surface-border bg-surface p-4 shadow-sm">
       <div className="mb-2 flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-base font-semibold text-slate-900">Add customer</h2>
-          <p className="mt-0.5 text-xs text-slate-500">Type and press Enter. Use arrows to pick from matches.</p>
+          <h2 className="text-base font-semibold text-text-primary">Add customer</h2>
+          <p className="mt-0.5 text-xs text-text-secondary">Type and press Enter. Use arrows to pick from matches.</p>
         </div>
       </div>
 
@@ -248,12 +248,12 @@ function AddCustomerBar({
             placeholder={
               disabled ? "Select route or fix setup warning first" : "Search by name, code, area, or phone..."
             }
-            className="h-10 rounded-md bg-white text-sm"
+            className="h-10 rounded-md bg-surface text-sm"
             autoComplete="off"
           />
 
           {suggestionsOpen ? (
-            <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-20 overflow-hidden rounded-md border border-slate-200 bg-white shadow-lg">
+            <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-20 overflow-hidden rounded-md border border-surface-border bg-surface shadow-lg">
               {suggestions.length > 0 ? (
                 suggestions.map((customer, index) => (
                   <CustomerSuggestionRow
@@ -265,7 +265,7 @@ function AddCustomerBar({
                   />
                 ))
               ) : (
-                <div className="px-3 py-3 text-sm text-slate-500">No matching active customer found.</div>
+                <div className="px-3 py-3 text-sm text-text-secondary">No matching active customer found.</div>
               )}
             </div>
           ) : null}
@@ -386,35 +386,35 @@ function SequenceTable({
       <section className="space-y-3">
         <div className="flex items-end justify-between gap-3">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">Sequence Sheet</h2>
-            <p className="mt-0.5 text-sm text-slate-500">{lines.length} customers</p>
+            <h2 className="text-base font-semibold text-text-primary">Sequence Sheet</h2>
+            <p className="mt-0.5 text-sm text-text-secondary">{lines.length} customers</p>
           </div>
-          <p className="text-xs font-medium text-slate-500">Drag handle or use Arrow Up/Down from handle.</p>
+          <p className="text-xs font-medium text-text-secondary">Drag handle or use Arrow Up/Down from handle.</p>
         </div>
 
         {lines.length === 0 ? (
           <EmptyState message="No customers added for this route and month" />
         ) : (
-          <div className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
+          <div className="overflow-hidden rounded-md border border-surface-border bg-surface shadow-sm">
             <div className="overflow-x-auto">
-              <table className="min-w-[760px] w-full divide-y divide-slate-200">
-                <thead className="bg-slate-100/80">
+              <table className="min-w-[760px] w-full divide-y divide-surface-border">
+                <thead className="bg-surface-muted/80">
                   <tr>
-                    <th className="w-14 px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    <th className="w-14 px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary">
                       Move
                     </th>
-                    <th className="w-20 px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    <th className="w-20 px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary">
                       Sr No
                     </th>
-                    <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    <th className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary">
                       Customer
                     </th>
-                    <th className="w-24 px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                    <th className="w-24 px-4 py-2.5 text-right text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary">
                       Action
                     </th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-200 bg-white">
+                <tbody className="divide-y divide-surface-border bg-surface">
                   {lines.map((line, index) => {
                     const isDragging = draggedLineId === line.id;
                     const isDragOver = dragOverLineId === line.id && draggedLineId !== line.id;
@@ -455,7 +455,7 @@ function SequenceTable({
                         className={cn(
                           "transition",
                           isDragging && "opacity-50",
-                          isDragOver && "bg-blue-50",
+                          isDragOver && "bg-accent-soft",
                           isHighlighted && "bg-amber-50",
                         )}
                       >
@@ -463,7 +463,7 @@ function SequenceTable({
                           <IconButton
                             type="button"
                             disabled={disabled || saving}
-                            className="cursor-grab text-slate-400"
+                            className="cursor-grab text-text-muted"
                             aria-label={`Move ${line.customerName}`}
                             title="Drag to reorder. Use Arrow Up or Arrow Down from this handle."
                             onKeyDown={(event) => {
@@ -481,12 +481,12 @@ function SequenceTable({
                             <GripIcon className="h-5 w-5" />
                           </IconButton>
                         </td>
-                        <td className="px-4 py-2.5 align-middle text-sm font-semibold text-slate-500">{index + 1}</td>
+                        <td className="px-4 py-2.5 align-middle text-sm font-semibold text-text-secondary">{index + 1}</td>
                         <td className="px-4 py-2.5 align-middle">
-                          <p className="text-[15px] font-semibold uppercase leading-5 text-slate-900">
+                          <p className="text-[15px] font-semibold uppercase leading-5 text-text-primary">
                             {line.customerName}
                           </p>
-                          <p className="mt-0.5 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">
+                          <p className="mt-0.5 text-xs font-medium uppercase tracking-[0.12em] text-text-secondary">
                             {formatLineMeta(line) || "-"}
                           </p>
                         </td>
@@ -539,7 +539,7 @@ function SequenceTable({
 
       {saving ? (
         <StickyActionBar>
-          <span className="text-sm font-medium text-slate-600">Saving sequence changes...</span>
+          <span className="text-sm font-medium text-text-secondary">Saving sequence changes...</span>
         </StickyActionBar>
       ) : null}
     </>

@@ -88,7 +88,7 @@ export function CustomerQuickCreateDialog({
           </p>
         ) : null}
 
-        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 pt-4">
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-surface-border pt-4">
           <StatusChip tone={dbConnected ? "success" : "warning"}>
             {dbConnected ? "Live data" : "Offline fallback"}
           </StatusChip>

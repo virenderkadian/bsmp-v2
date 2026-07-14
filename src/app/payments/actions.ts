@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { getCurrentCityId } from "@/lib/current-city";
+import { logAudit } from "@/lib/audit";
 
 export type PaymentActionState = {
   status: "idle" | "success" | "error";
@@ -120,7 +122,8 @@ export async function createPayment(
   }
 
   return runAction(async () => {
-    await prisma.payment.create({
+    const cityId = await getCurrentCityId();
+    const payment = await prisma.payment.create({
       data: {
         customerId: parsed.data.customerId,
         routeId: parsed.data.routeId,
@@ -131,6 +134,15 @@ export async function createPayment(
         referenceNo: asOptional(parsed.data.referenceNo ?? ""),
         notes: asOptional(parsed.data.notes ?? ""),
       },
+    });
+
+    await logAudit(prisma, {
+      cityId,
+      entityType: "Payment",
+      entityId: payment.id,
+      action: "CREATE",
+      summary: `Recorded payment of ${payment.amount} for customer ${payment.customerId}.`,
+      after: payment,
     });
   }, "Payment recorded.");
 }
@@ -158,7 +170,9 @@ export async function updatePayment(
   }
 
   return runAction(async () => {
-    await prisma.payment.update({
+    const cityId = await getCurrentCityId();
+    const before = await prisma.payment.findUnique({ where: { id: parsed.data.id } });
+    const after = await prisma.payment.update({
       where: { id: parsed.data.id },
       data: {
         customerId: parsed.data.customerId,
@@ -170,6 +184,16 @@ export async function updatePayment(
         referenceNo: asOptional(parsed.data.referenceNo ?? ""),
         notes: asOptional(parsed.data.notes ?? ""),
       },
+    });
+
+    await logAudit(prisma, {
+      cityId,
+      entityType: "Payment",
+      entityId: after.id,
+      action: "UPDATE",
+      summary: `Updated payment for customer ${after.customerId}.`,
+      before,
+      after,
     });
   }, "Payment updated.");
 }
@@ -190,11 +214,23 @@ export async function setPaymentStatus(
   }
 
   return runAction(async () => {
-    await prisma.payment.update({
+    const cityId = await getCurrentCityId();
+    const before = await prisma.payment.findUnique({ where: { id: parsed.data.id } });
+    const after = await prisma.payment.update({
       where: { id: parsed.data.id },
       data: {
         status: parsed.data.status,
       },
+    });
+
+    await logAudit(prisma, {
+      cityId,
+      entityType: "Payment",
+      entityId: after.id,
+      action: "STATUS_CHANGE",
+      summary: `Payment status changed from ${before?.status ?? "UNKNOWN"} to ${after.status}.`,
+      before,
+      after,
     });
   }, "Payment status updated.");
 }
@@ -246,6 +282,8 @@ export async function createBulkRoutePayments(
   const totalAmount = entries.reduce((sum, entry) => sum + entry.amount, 0);
 
   return runAction(async () => {
+    const cityId = await getCurrentCityId();
+
     await prisma.$transaction(async (transaction) => {
       const sequenceCustomers = await transaction.monthlyRouteCustomerSequence.findMany({
         where: {
@@ -294,6 +332,15 @@ export async function createBulkRoutePayments(
           referenceNo: asOptional(parsed.data.referenceNo ?? ""),
           notes: asOptional(parsed.data.notes ?? ""),
         })),
+      });
+
+      await logAudit(transaction, {
+        cityId,
+        entityType: "PaymentBatch",
+        entityId: batch.id,
+        action: "CREATE",
+        summary: `Recorded ${entries.length} bulk route payments totaling ${totalAmount} for route ${parsed.data.routeId}.`,
+        after: { batchId: batch.id, routeId: parsed.data.routeId, billingMonth, entries },
       });
     });
   }, `Saved ${entries.length} route payments.`);

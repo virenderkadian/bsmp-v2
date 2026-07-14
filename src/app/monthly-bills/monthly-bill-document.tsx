@@ -2,7 +2,7 @@ import { Fragment } from "react";
 import type { MonthlyBillDetail } from "@/lib/monthly-bills";
 
 function formatMoney(value: string | number) {
-  return `Rs ${Number(value).toLocaleString("en-IN", {
+  return `₹${Number(value).toLocaleString("en-IN", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -10,7 +10,7 @@ function formatMoney(value: string | number) {
 
 function formatRate(value: string) {
   const rate = Number(value);
-  return rate % 1 === 0 ? `Rs ${rate}` : `Rs ${rate.toFixed(2)}`;
+  return rate % 1 === 0 ? `₹${rate}` : `₹${rate.toFixed(2)}`;
 }
 
 function formatQuantity(value: string) {
@@ -104,7 +104,7 @@ export function MonthlyBillDocument({
                 return (
                   <th key={product.id} colSpan={2} className="border border-slate-300 px-1.5 py-1.5 print:py-1">
                     {product.name}
-                    {rate ? <span className="font-normal text-slate-500"> ({formatRate(rate)})</span> : null}
+                    {rate ? <span className="font-normal text-slate-600"> ({formatRate(rate)})</span> : null}
                   </th>
                 );
               })}

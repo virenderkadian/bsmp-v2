@@ -218,8 +218,16 @@ export async function createCustomerAndAddToMonthlyRouteSequence(
 
   try {
     const customer = await prisma.$transaction(async (tx) => {
+      // The new customer must belong to the same city as the route they're
+      // being added to, not some independently-chosen "current" city.
+      const route = await tx.route.findUniqueOrThrow({
+        where: { id: parsed.data.routeId },
+        select: { cityId: true },
+      });
+
       const createdCustomer = await tx.customer.create({
         data: {
+          cityId: route.cityId,
           code: parsed.data.code,
           name: parsed.data.name,
           area: asOptional(parsed.data.area),

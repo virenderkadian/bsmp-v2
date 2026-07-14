@@ -13,10 +13,10 @@ export function BusinessProfileForm({ profile }: { profile: BusinessProfile | nu
   const [state, action, pending] = useActionState(updateBusinessProfile, initialState);
 
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+    <section className="rounded-xl border border-surface-border bg-surface p-5 shadow-sm">
       <div className="mb-4">
-        <h2 className="text-lg font-semibold text-slate-900">Business profile</h2>
-        <p className="mt-1 text-sm text-slate-500">
+        <h2 className="text-lg font-semibold text-text-primary">Business profile</h2>
+        <p className="mt-1 text-sm text-text-secondary">
           Letterhead, bank details, and the reminder footer shown on every printed customer bill.
         </p>
       </div>
@@ -49,8 +49,8 @@ export function BusinessProfileForm({ profile }: { profile: BusinessProfile | nu
           />
         </div>
 
-        <div className="border-t border-slate-200 pt-4">
-          <p className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+        <div className="border-t border-surface-border pt-4">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-text-secondary">
             Bank &amp; UPI details
           </p>
           <div className="grid gap-4 md:grid-cols-2">
@@ -87,7 +87,7 @@ export function BusinessProfileForm({ profile }: { profile: BusinessProfile | nu
           </div>
         </div>
 
-        <div className="border-t border-slate-200 pt-4">
+        <div className="border-t border-surface-border pt-4">
           <FormTextarea
             label="Bill footer note"
             name="footerNote"
@@ -103,7 +103,7 @@ export function BusinessProfileForm({ profile }: { profile: BusinessProfile | nu
           </p>
         ) : null}
 
-        <div className="flex justify-end border-t border-slate-200 pt-4">
+        <div className="flex justify-end border-t border-surface-border pt-4">
           <PrimaryButton type="submit" disabled={pending}>
             {pending ? "Saving..." : "Save business profile"}
           </PrimaryButton>

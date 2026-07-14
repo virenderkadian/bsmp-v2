@@ -1,10 +1,19 @@
 import type { Product, Route, Vehicle, Customer } from "@prisma/client";
+import { getCurrentCityId } from "@/lib/current-city";
 import { withDbTimeout } from "@/lib/db-timeout";
 import { prisma } from "@/lib/prisma";
 
 export type ProductRecord = Pick<
   Product,
-  "id" | "code" | "name" | "shortName" | "unit" | "displayOrder" | "showInDailyEntry" | "isActive"
+  | "id"
+  | "code"
+  | "name"
+  | "shortName"
+  | "unit"
+  | "displayOrder"
+  | "showInDailyEntry"
+  | "includeInReconciliation"
+  | "isActive"
 > & {
   defaultRate: string;
 };
@@ -45,7 +54,9 @@ function fallbackPayload(error?: string): MastersPayload {
 
 export async function getMastersPayload(): Promise<MastersPayload> {
   try {
+    const cityId = await getCurrentCityId();
     const products = await withDbTimeout(prisma.product.findMany({
+      where: { cityId },
       orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
       select: {
         id: true,
@@ -56,11 +67,13 @@ export async function getMastersPayload(): Promise<MastersPayload> {
         defaultRate: true,
         displayOrder: true,
         showInDailyEntry: true,
+        includeInReconciliation: true,
         isActive: true,
       },
     }), "Product master request");
 
     const vehicles = await withDbTimeout(prisma.vehicle.findMany({
+      where: { cityId },
       orderBy: { code: "asc" },
       select: {
         id: true,
@@ -72,6 +85,7 @@ export async function getMastersPayload(): Promise<MastersPayload> {
     }), "Vehicle master request");
 
     const routes = await withDbTimeout(prisma.route.findMany({
+      where: { cityId },
       orderBy: { code: "asc" },
       select: {
         id: true,
@@ -91,6 +105,7 @@ export async function getMastersPayload(): Promise<MastersPayload> {
     }), "Route master request");
 
     const customers = await withDbTimeout(prisma.customer.findMany({
+      where: { cityId },
       orderBy: { code: "asc" },
       select: {
         id: true,

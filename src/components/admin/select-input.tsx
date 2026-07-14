@@ -10,10 +10,10 @@ type SelectInputProps = SelectHTMLAttributes<HTMLSelectElement> & {
 export function SelectInput({ label, options, placeholder, className, ...props }: SelectInputProps) {
   return (
     <label className="flex flex-col gap-1.5">
-      {label ? <span className="text-xs font-medium text-slate-500">{label}</span> : null}
+      {label ? <span className="text-xs font-medium text-text-secondary">{label}</span> : null}
       <select
         className={cn(
-          "h-10 rounded-lg border border-slate-300 bg-slate-50 px-3 text-sm text-slate-900 outline-none transition focus:border-blue-600 focus:bg-white",
+          "h-10 rounded-lg border border-surface-border-strong bg-surface-muted px-3 text-sm text-text-primary outline-none transition focus:border-accent focus:bg-surface",
           className,
         )}
         {...props}

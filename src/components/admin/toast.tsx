@@ -13,11 +13,11 @@ export function Toast({
   return (
     <div
       className={cn(
-        "fixed right-5 top-5 z-50 rounded-lg border bg-white px-4 py-3 text-sm font-medium shadow-lg",
-        tone === "success" && "border-emerald-200 text-emerald-700",
-        tone === "warning" && "border-amber-200 text-amber-700",
-        tone === "error" && "border-rose-200 text-rose-700",
-        tone === "info" && "border-blue-200 text-blue-700",
+        "fixed right-5 top-5 z-50 rounded-lg border bg-surface px-4 py-3 text-sm font-medium shadow-lg",
+        tone === "success" && "border-status-success-text/30 text-status-success-text",
+        tone === "warning" && "border-status-warning-text/30 text-status-warning-text",
+        tone === "error" && "border-status-danger-text/30 text-status-danger-text",
+        tone === "info" && "border-status-info-text/30 text-status-info-text",
       )}
       role="status"
     >

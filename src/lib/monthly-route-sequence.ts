@@ -1,4 +1,5 @@
 import { Prisma, type RouteAssignmentStatus, type RouteShift } from "@prisma/client";
+import { getCurrentCityId } from "@/lib/current-city";
 import { withDbTimeout } from "@/lib/db-timeout";
 import { prisma } from "@/lib/prisma";
 
@@ -93,9 +94,10 @@ export async function getMonthlyRouteSequencePayload(input?: {
   const sequenceMonth = monthInputToDate(selectedMonth);
 
   try {
+    const cityId = await getCurrentCityId();
     const [routes, customers] = await withDbTimeout(Promise.all([
       prisma.route.findMany({
-        where: { isActive: true },
+        where: { cityId, isActive: true },
         orderBy: [{ shift: "asc" }, { code: "asc" }],
         select: {
           id: true,
@@ -110,7 +112,7 @@ export async function getMonthlyRouteSequencePayload(input?: {
         },
       }),
       prisma.customer.findMany({
-        where: { isActive: true },
+        where: { cityId, isActive: true },
         orderBy: { code: "asc" },
         select: {
           id: true,

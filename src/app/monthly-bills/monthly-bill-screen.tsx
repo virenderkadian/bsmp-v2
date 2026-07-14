@@ -31,6 +31,17 @@ import type {
 
 const initialState: MonthlyBillActionState = { status: "idle" };
 
+// A real window name, not "_blank" — "_blank" is a magic keyword meaning
+// "always open a brand-new browsing context," so every click spawned
+// another tab regardless of one already being open. A stable name makes
+// the browser reuse/navigate the same window on repeat clicks instead —
+// but only without "noopener": that flag forces the new window into a
+// disconnected browsing-context group, which breaks the spec's name-based
+// window-reuse lookup entirely (it only searches the opener's *related*
+// contexts). Safe to drop here since both print targets are same-origin
+// routes within this app, not third-party links.
+const PRINT_WINDOW_NAME = "bsm-print-preview";
+
 function formatMonthInput(value: Date) {
   return new Date(value).toISOString().slice(0, 7);
 }
@@ -43,7 +54,7 @@ function formatMonth(value: Date) {
 }
 
 function formatMoney(value: string | number) {
-  return `Rs ${Number(value).toLocaleString("en-IN", {
+  return `₹${Number(value).toLocaleString("en-IN", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -159,7 +170,7 @@ function GenerateBillsDialog({
           defaultValue={defaultMonth}
           autoFocus
         />
-        <div className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
+        <div className="rounded-lg bg-surface-muted px-3 py-2 text-sm text-text-secondary">
           This will create or refresh bill snapshots for the selected month. Existing generated
           bills for the same customer-route-month will be updated.
         </div>
@@ -168,7 +179,7 @@ function GenerateBillsDialog({
             {state.message}
           </p>
         ) : null}
-        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 pt-4">
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-surface-border pt-4">
           <StatusBadge tone={dbConnected ? "success" : "warning"}>
             {dbConnected ? "Live data" : "Offline fallback"}
           </StatusBadge>
@@ -241,8 +252,8 @@ function BillStatusButton({
           onChange={(event) => setNextStatus(event.target.value)}
           options={statuses}
         />
-        <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
-          <span className="font-semibold text-slate-900">{bill.customerName}</span> · {bill.routeName} ·{" "}
+        <p className="rounded-lg bg-surface-muted px-3 py-2 text-sm text-text-secondary">
+          <span className="font-semibold text-text-primary">{bill.customerName}</span> · {bill.routeName} ·{" "}
           {formatMoney(bill.closingBalance)}
         </p>
         {submitted && state.status === "error" && state.message ? (
@@ -255,63 +266,13 @@ function BillStatusButton({
 
 function CustomerSummaryTab({
   summaryPayload,
-  routes,
 }: {
   summaryPayload: MonthlyBillSummaryPayload;
-  routes: MonthlyBillPayload["routes"];
 }) {
-  const router = useRouter();
-  const { selectedMonth, selectedRouteId } = summaryPayload;
-
-  const goTo = (nextMonth: string, nextRouteId: string) => {
-    const params = new URLSearchParams();
-    params.set("month", nextMonth);
-    if (nextRouteId) {
-      params.set("routeId", nextRouteId);
-    }
-    router.push(`/monthly-bills?${params.toString()}`);
-  };
-
-  const printAllHref = selectedRouteId
-    ? `/monthly-bills/print-all?month=${selectedMonth}&routeId=${selectedRouteId}`
-    : null;
+  const { selectedMonth } = summaryPayload;
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-end justify-between gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <FormInput
-            label="Month"
-            type="month"
-            value={selectedMonth}
-            onChange={(event) => goTo(event.target.value, selectedRouteId)}
-          />
-          <SelectInput
-            label="Route"
-            value={selectedRouteId}
-            onChange={(event) => goTo(selectedMonth, event.target.value)}
-            placeholder="All routes"
-            options={routes.map((route) => ({
-              value: route.id,
-              label: `${route.code} - ${route.name}`,
-            }))}
-          />
-        </div>
-        <SecondaryButton
-          type="button"
-          disabled={!printAllHref}
-          onClick={() => {
-            if (printAllHref) {
-              window.open(printAllHref, "_blank", "noopener,noreferrer");
-            }
-          }}
-          icon={<BillIcon className="h-4 w-4" />}
-          title={printAllHref ? undefined : "Select a single route to print all its bills"}
-        >
-          Print all bills
-        </SecondaryButton>
-      </div>
-
       {summaryPayload.error ? (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
           {summaryPayload.error}
@@ -322,16 +283,31 @@ function CustomerSummaryTab({
         <EmptyState message="No active routes found for this selection." />
       ) : (
         summaryPayload.routes.map((route) => (
-          <section key={route.id} className="rounded-lg border border-slate-200 bg-white shadow-sm">
-            <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
+          <section key={route.id} className="rounded-lg border border-surface-border bg-surface shadow-sm">
+            <div className="flex items-center justify-between gap-3 border-b border-surface-border bg-surface-muted px-4 py-3">
               <div>
-                <h3 className="text-sm font-semibold text-slate-900">
+                <h3 className="text-sm font-semibold text-text-primary">
                   {route.code} - {route.name}
                 </h3>
-                <p className="mt-0.5 text-xs text-slate-500">
+                <p className="mt-0.5 text-xs text-text-secondary">
                   {route.shift === "MORNING" ? "Morning" : "Evening"} · {route.rows.length} customers
                 </p>
               </div>
+              <button
+                type="button"
+                disabled={route.rows.length === 0}
+                onClick={() => {
+                  window.open(
+                    `/monthly-bills/summary?month=${selectedMonth}&routeId=${route.id}`,
+                    PRINT_WINDOW_NAME,
+                  );
+                }}
+                title="Print this route's summary"
+                aria-label={`Print summary for ${route.name}`}
+                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-secondary transition hover:bg-slate-200 hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <BillIcon className="h-[18px] w-[18px]" />
+              </button>
             </div>
 
             {route.rows.length === 0 ? (
@@ -354,56 +330,83 @@ function CustomerSummaryTab({
                   { key: "pending", label: "Pending", className: "w-32 text-right", headerClassName: "text-right" },
                   { key: "actions", label: "Actions", className: "w-20 text-right", headerClassName: "text-right" },
                 ]}
-                rows={route.rows.map((row) => ({
-                  key: row.key,
-                  cells: [
-                    row.sequenceNo,
-                    <div key="customer" className="min-w-[200px] truncate">
-                      <span className="font-medium text-slate-900">{row.customerName}</span>
-                      <span className="ml-1.5 text-sm text-slate-400">{row.customerCode}</span>
-                    </div>,
-                    ...summaryPayload.products.map((product) => (
-                      <span key={product.id} className="block text-right">
-                        {formatQty(row.productQuantities[product.id] ?? "0")}
-                      </span>
-                    )),
-                    <span key="amount" className="block text-right font-medium text-slate-900">
-                      {formatMoney(row.deliveryAmount)}
-                    </span>,
-                    <span key="received" className="block text-right text-emerald-700">
-                      {formatMoney(row.paymentAmount)}
-                    </span>,
-                    <span key="pending" className="block text-right font-semibold text-rose-700">
-                      {formatMoney(row.pendingAmount)}
-                    </span>,
-                    <div key="actions" className="flex justify-end">
-                      {row.billId ? (
-                        <Link
-                          href={`/monthly-bills/${row.billId}`}
-                          aria-label={`View bill for ${row.customerName}`}
-                          title="View bill"
-                          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-900 transition hover:bg-slate-100"
-                        >
-                          <ViewIcon className="h-[18px] w-[18px]" />
-                          <span className="sr-only">View bill</span>
-                        </Link>
-                      ) : (
-                        <span
-                          className="text-xs text-slate-400"
-                          title="Generate bills for this route and month to view this customer's bill"
-                        >
-                          Not generated
+                rows={[
+                  ...route.rows.map((row) => ({
+                    key: row.key,
+                    cells: [
+                      row.sequenceNo,
+                      <div key="customer" className="min-w-[200px] truncate">
+                        <span className="font-medium text-text-primary">{row.customerName}</span>
+                        <span className="ml-1.5 text-sm text-text-muted">{row.customerCode}</span>
+                      </div>,
+                      ...summaryPayload.products.map((product) => (
+                        <span key={product.id} className="block text-right">
+                          {formatQty(row.productQuantities[product.id] ?? "0")}
                         </span>
-                      )}
-                    </div>,
-                  ],
-                }))}
+                      )),
+                      <span key="amount" className="block text-right font-medium text-text-primary">
+                        {formatMoney(row.deliveryAmount)}
+                      </span>,
+                      <span key="received" className="block text-right text-emerald-700">
+                        {formatMoney(row.paymentAmount)}
+                      </span>,
+                      <span key="pending" className="block text-right font-semibold text-rose-700">
+                        {formatMoney(row.pendingAmount)}
+                      </span>,
+                      <div key="actions" className="flex justify-end">
+                        {row.billId ? (
+                          <Link
+                            href={`/monthly-bills/${row.billId}`}
+                            aria-label={`View bill for ${row.customerName}`}
+                            title="View bill"
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-text-primary transition hover:bg-surface-muted"
+                          >
+                            <ViewIcon className="h-[18px] w-[18px]" />
+                            <span className="sr-only">View bill</span>
+                          </Link>
+                        ) : (
+                          <span
+                            className="text-xs text-text-muted"
+                            title="Generate bills for this route and month to view this customer's bill"
+                          >
+                            Not generated
+                          </span>
+                        )}
+                      </div>,
+                    ],
+                  })),
+                  {
+                    key: "totals",
+                    className: "bg-surface-muted font-semibold",
+                    cells: [
+                      "",
+                      <span key="label" className="font-semibold text-text-primary">
+                        Route Total
+                      </span>,
+                      ...summaryPayload.products.map((product) => (
+                        <span key={product.id} className="block text-right text-text-primary">
+                          {formatQty(route.totals.productQuantities[product.id] ?? "0")}
+                        </span>
+                      )),
+                      <span key="amount" className="block text-right text-text-primary">
+                        {formatMoney(route.totals.deliveryAmount)}
+                      </span>,
+                      <span key="received" className="block text-right text-emerald-700">
+                        {formatMoney(route.totals.paymentAmount)}
+                      </span>,
+                      <span key="pending" className="block text-right text-rose-700">
+                        {formatMoney(route.totals.pendingAmount)}
+                      </span>,
+                      "",
+                    ],
+                  },
+                ]}
                 emptyMessage="No customers found"
                 minWidth="min-w-[900px]"
                 className="rounded-none border-0 shadow-none"
-                headClassName="bg-slate-50"
+                headClassName="bg-surface-muted"
                 headerCellClassName="px-4 py-2.5"
-                rowClassName="align-middle hover:bg-slate-50/60"
+                rowClassName="align-middle hover:bg-surface-muted/60"
                 cellClassName="px-4 py-2.5"
               />
             )}
@@ -421,6 +424,7 @@ export function MonthlyBillScreen({
   payload: MonthlyBillPayload;
   summaryPayload: MonthlyBillSummaryPayload;
 }) {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<"summary" | "bills">("summary");
   const defaultMonth = new Date().toISOString().slice(0, 7);
   const [search, setSearch] = useState("");
@@ -429,6 +433,19 @@ export function MonthlyBillScreen({
   const [status, setStatus] = useState("");
   const [generateOpen, setGenerateOpen] = useState(false);
   const [printSummaryOpen, setPrintSummaryOpen] = useState(false);
+
+  const { selectedMonth: summaryMonth, selectedRouteId: summaryRouteId } = summaryPayload;
+  const goToSummary = (nextMonth: string, nextRouteId: string) => {
+    const params = new URLSearchParams();
+    params.set("month", nextMonth);
+    if (nextRouteId) {
+      params.set("routeId", nextRouteId);
+    }
+    router.push(`/monthly-bills?${params.toString()}`);
+  };
+  const printAllHref = summaryRouteId
+    ? `/monthly-bills/print-all?month=${summaryMonth}&routeId=${summaryRouteId}`
+    : null;
 
   const filteredBills = useMemo(() => {
     return payload.bills.filter((bill) => {
@@ -500,19 +517,55 @@ export function MonthlyBillScreen({
         }
       />
 
-      <MasterTabs
-        tabs={[
-          { value: "summary", label: "Customer Summary" },
-          { value: "bills", label: "Bills" },
-        ]}
-        activeValue={activeTab}
-        onChange={setActiveTab}
-        className="w-fit"
-      />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <MasterTabs
+          tabs={[
+            { value: "summary", label: "Customer Summary" },
+            { value: "bills", label: "Bills" },
+          ]}
+          activeValue={activeTab}
+          onChange={setActiveTab}
+          className="w-fit"
+        />
 
-      {activeTab === "summary" ? (
-        <CustomerSummaryTab summaryPayload={summaryPayload} routes={payload.routes} />
-      ) : null}
+        {activeTab === "summary" ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="month"
+              value={summaryMonth}
+              onChange={(event) => goToSummary(event.target.value, summaryRouteId)}
+              className="h-9 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
+              aria-label="Filter by billing month"
+            />
+            <SelectInput
+              value={summaryRouteId}
+              onChange={(event) => goToSummary(summaryMonth, event.target.value)}
+              placeholder="All routes"
+              options={payload.routes.map((route) => ({
+                value: route.id,
+                label: `${route.code} - ${route.name}`,
+              }))}
+              className="h-9 rounded-md bg-surface text-sm"
+            />
+            <SecondaryButton
+              type="button"
+              disabled={!printAllHref}
+              onClick={() => {
+                if (printAllHref) {
+                  window.open(printAllHref, PRINT_WINDOW_NAME);
+                }
+              }}
+              icon={<BillIcon className="h-4 w-4" />}
+              title={printAllHref ? undefined : "Select a single route to print all its bills"}
+              className="h-9 px-3 text-sm"
+            >
+              Print all bills
+            </SecondaryButton>
+          </div>
+        ) : null}
+      </div>
+
+      {activeTab === "summary" ? <CustomerSummaryTab summaryPayload={summaryPayload} /> : null}
 
       {activeTab === "bills" ? (
         <section className="space-y-3">
@@ -542,7 +595,7 @@ export function MonthlyBillScreen({
                 type="month"
                 value={month}
                 onChange={(event) => setMonth(event.target.value)}
-                className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-blue-600"
+                className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
                 aria-label="Filter by billing month"
               />
               <SelectInput
@@ -553,18 +606,18 @@ export function MonthlyBillScreen({
                   value: route.id,
                   label: `${route.code} - ${route.name}`,
                 }))}
-                className="h-10 rounded-md bg-white text-sm"
+                className="h-10 rounded-md bg-surface text-sm"
               />
               <SelectInput
                 value={status}
                 onChange={(event) => setStatus(event.target.value)}
                 placeholder="All statuses"
                 options={payload.statuses}
-                className="h-10 rounded-md bg-white text-sm"
+                className="h-10 rounded-md bg-surface text-sm"
               />
             </div>
             <div className="flex items-center gap-3">
-              <span className="whitespace-nowrap text-sm text-slate-500">
+              <span className="whitespace-nowrap text-sm text-text-secondary">
                 {filteredBills.length} of {payload.bills.length} bills
               </span>
               {payload.dbConnected ? null : <StatusBadge tone="warning">Offline fallback</StatusBadge>}
@@ -592,21 +645,21 @@ export function MonthlyBillScreen({
                 key: bill.id,
                 cells: [
                   <div key="customer" className="min-w-[240px] truncate">
-                    <span className="text-[15px] font-semibold text-slate-900">{bill.customerName}</span>
-                    <span className="ml-1.5 text-sm text-slate-400">{bill.customerCode}</span>
+                    <span className="text-[15px] font-semibold text-text-primary">{bill.customerName}</span>
+                    <span className="ml-1.5 text-sm text-text-muted">{bill.customerCode}</span>
                   </div>,
                   <div key="route" className="truncate">
-                    <span className="font-medium text-slate-900">{bill.routeName}</span>
-                    <span className="ml-1.5 text-sm text-slate-400">{bill.routeCode}</span>
+                    <span className="font-medium text-text-primary">{bill.routeName}</span>
+                    <span className="ml-1.5 text-sm text-text-muted">{bill.routeCode}</span>
                   </div>,
                   formatMonth(bill.billingMonth),
-                  <span key="delivery" className="block text-right font-medium text-slate-900">
+                  <span key="delivery" className="block text-right font-medium text-text-primary">
                     {formatMoney(bill.deliveryAmount)}
                   </span>,
-                  <span key="payments" className="block text-right text-slate-700">
+                  <span key="payments" className="block text-right text-text-primary">
                     {formatMoney(bill.paymentAmount)}
                   </span>,
-                  <span key="closing" className="block text-right font-semibold text-slate-900">
+                  <span key="closing" className="block text-right font-semibold text-text-primary">
                     {formatMoney(bill.closingBalance)}
                   </span>,
                   <BillStatusButton key="status" bill={bill} statuses={payload.statuses} />,
@@ -615,7 +668,7 @@ export function MonthlyBillScreen({
                       href={`/monthly-bills/${bill.id}`}
                       aria-label={`View bill for ${bill.customerName}`}
                       title="View bill"
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-900 transition hover:bg-slate-100"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-text-primary transition hover:bg-surface-muted"
                     >
                       <ViewIcon className="h-[18px] w-[18px]" />
                       <span className="sr-only">View bill</span>
@@ -625,10 +678,10 @@ export function MonthlyBillScreen({
               }))}
               emptyMessage="No monthly bills match the selected filters"
               minWidth="min-w-[1100px]"
-              className="rounded-md border-slate-200 shadow-none"
-              headClassName="bg-slate-100/70"
+              className="rounded-md border-surface-border shadow-none"
+              headClassName="bg-surface-muted/70"
               headerCellClassName="px-5 py-2.5"
-              rowClassName="align-middle hover:bg-slate-50/60"
+              rowClassName="align-middle hover:bg-surface-muted/60"
               cellClassName="px-5 py-2.5"
             />
           </section>

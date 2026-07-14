@@ -25,12 +25,12 @@ export default async function DailyEntryPage({
               name="entryDate"
               type="date"
               defaultValue={payload.selectedDate}
-              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-blue-600"
+              className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
             />
             <select
               name="routeId"
               defaultValue={payload.selectedRouteId}
-              className="h-10 min-w-72 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-blue-600"
+              className="h-10 min-w-72 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
             >
               {payload.routes.length === 0 ? (
                 <option value="">Select route</option>

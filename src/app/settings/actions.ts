@@ -2,8 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { getCurrentCityId } from "@/lib/current-city";
 import { prisma } from "@/lib/prisma";
-import { BUSINESS_PROFILE_ID } from "@/lib/settings";
 import { generateUpiQrDataUrl } from "@/lib/upi-qr";
 
 export type SettingsActionState = {
@@ -59,12 +59,13 @@ export async function updateBusinessProfile(
   }
 
   try {
+    const cityId = await getCurrentCityId();
     const upiId = asNullable(parsed.data.upiId);
     // Regenerated only here, on save — not on every bill view/print.
     const upiQrDataUrl = upiId ? await generateUpiQrDataUrl(upiId, parsed.data.businessName) : null;
 
     await prisma.businessProfile.upsert({
-      where: { id: BUSINESS_PROFILE_ID },
+      where: { cityId },
       update: {
         businessName: parsed.data.businessName,
         contactPhone: asNullable(parsed.data.contactPhone),
@@ -79,7 +80,7 @@ export async function updateBusinessProfile(
         footerNote: asNullable(parsed.data.footerNote),
       },
       create: {
-        id: BUSINESS_PROFILE_ID,
+        cityId,
         businessName: parsed.data.businessName,
         contactPhone: asNullable(parsed.data.contactPhone),
         addressLine1: asNullable(parsed.data.addressLine1),

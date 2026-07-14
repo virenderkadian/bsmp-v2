@@ -1,4 +1,5 @@
 import type { BillingStatus, MonthlyBill, PaymentMode } from "@prisma/client";
+import { getCurrentCityId } from "@/lib/current-city";
 import { withDbTimeout } from "@/lib/db-timeout";
 import { prisma } from "@/lib/prisma";
 
@@ -298,9 +299,10 @@ function buildCalendarDays(
 
 export async function getMonthlyBillsPayload(): Promise<MonthlyBillPayload> {
   try {
+    const cityId = await getCurrentCityId();
     const [customers, routes, bills] = await withDbTimeout(Promise.all([
       prisma.customer.findMany({
-        where: { isActive: true },
+        where: { cityId, isActive: true },
         orderBy: { code: "asc" },
         select: {
           id: true,
@@ -309,7 +311,7 @@ export async function getMonthlyBillsPayload(): Promise<MonthlyBillPayload> {
         },
       }),
       prisma.route.findMany({
-        where: { isActive: true },
+        where: { cityId, isActive: true },
         orderBy: { code: "asc" },
         select: {
           id: true,
@@ -318,6 +320,7 @@ export async function getMonthlyBillsPayload(): Promise<MonthlyBillPayload> {
         },
       }),
       prisma.monthlyBill.findMany({
+        where: { route: { cityId } },
         orderBy: [{ billingMonth: "desc" }, { createdAt: "desc" }],
         select: {
           id: true,
@@ -383,7 +386,7 @@ export async function getMonthlyBillsPayload(): Promise<MonthlyBillPayload> {
         routeCode: bill.route.code,
         routeName: bill.route.name,
         itemSummary: bill.items
-          .map((item) => `${item.product.shortName ?? item.product.code} ${toQuantity(item.totalQty)} / Rs ${toMoney(item.totalAmount)}`)
+          .map((item) => `${item.product.shortName ?? item.product.code} ${toQuantity(item.totalQty)} / ₹${toMoney(item.totalAmount)}`)
           .join(", "),
         items: bill.items.map((item) => ({
           id: item.id,
@@ -422,9 +425,11 @@ export async function getMonthlyBillSummary(input?: {
   };
 
   try {
+    const cityId = await getCurrentCityId();
     const [products, routes] = await withDbTimeout(Promise.all([
       prisma.product.findMany({
         where: {
+          cityId,
           isActive: true,
           showInDailyEntry: true,
         },
@@ -439,6 +444,7 @@ export async function getMonthlyBillSummary(input?: {
       }),
       prisma.route.findMany({
         where: {
+          cityId,
           isActive: true,
           ...(selectedRouteId ? { id: selectedRouteId } : {}),
         },
@@ -744,6 +750,7 @@ export async function getMonthlyBillDetail(id: string): Promise<MonthlyBillDetai
         },
         route: {
           select: {
+            cityId: true,
             code: true,
             name: true,
             shift: true,
@@ -782,11 +789,11 @@ export async function getMonthlyBillDetail(id: string): Promise<MonthlyBillDetai
     const [calendarProducts, businessProfile, sequenceLine, deliveryEntries, payments] = await withDbTimeout(
       Promise.all([
         prisma.product.findMany({
-          where: { isActive: true, showInDailyEntry: true },
+          where: { cityId: bill.route.cityId, isActive: true, showInDailyEntry: true },
           orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
           select: { id: true, code: true, name: true, shortName: true, unit: true },
         }),
-        prisma.businessProfile.findUnique({ where: { id: "default" } }),
+        prisma.businessProfile.findUnique({ where: { cityId: bill.route.cityId } }),
         prisma.monthlyRouteCustomerSequence.findUnique({
           where: {
             routeId_sequenceMonth_customerId: {
@@ -915,7 +922,7 @@ export async function getMonthlyBillDetail(id: string): Promise<MonthlyBillDetai
         calendarTotals,
         businessProfile,
         itemSummary: items
-          .map((item) => `${item.productShortName ?? item.productCode} ${item.totalQty} / Rs ${item.totalAmount}`)
+          .map((item) => `${item.productShortName ?? item.productCode} ${item.totalQty} / ₹${item.totalAmount}`)
           .join(", "),
         items,
         deliveryRows: deliveryEntries.flatMap((entry) =>
@@ -987,7 +994,7 @@ export async function getMonthlyBillsForRoutePrint(
     const route = await withDbTimeout(
       prisma.route.findUnique({
         where: { id: routeId },
-        select: { code: true, name: true, shift: true, driverName: true, driverPhone: true },
+        select: { cityId: true, code: true, name: true, shift: true, driverName: true, driverPhone: true },
       }),
       "Route request",
     );
@@ -999,11 +1006,11 @@ export async function getMonthlyBillsForRoutePrint(
     const [calendarProducts, businessProfile, bills, sequenceLines, dailyEntries] = await withDbTimeout(
       Promise.all([
         prisma.product.findMany({
-          where: { isActive: true, showInDailyEntry: true },
+          where: { cityId: route.cityId, isActive: true, showInDailyEntry: true },
           orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
           select: { id: true, code: true, name: true, shortName: true, unit: true },
         }),
-        prisma.businessProfile.findUnique({ where: { id: "default" } }),
+        prisma.businessProfile.findUnique({ where: { cityId: route.cityId } }),
         prisma.monthlyBill.findMany({
           where: { routeId, billingMonth: start },
           select: {

@@ -13,7 +13,7 @@ export function FilterBar({
   gridClassName?: string;
 }) {
   return (
-    <section className={cn("rounded-xl border border-slate-200 bg-white p-4 shadow-sm", className)}>
+    <section className={cn("rounded-xl border border-surface-border bg-surface p-4 shadow-sm", className)}>
       <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div
           className={cn("grid flex-1 gap-4 md:grid-cols-2 xl:grid-cols-4", gridClassName)}

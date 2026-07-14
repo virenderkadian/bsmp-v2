@@ -9,10 +9,16 @@ datasource db {
 }
 
 enum UserRole {
+  // Global scope: manages cities, users, and city assignments; can view/edit
+  // any city via the city switcher.
+  SUPERADMIN
+  // City-scoped: masters, rates, bill generation/locking, payment
+  // verification, business profile — the money-affecting actions.
   ADMIN
-  MANAGER
-  ROUTE_OPERATOR
-  CASHIER
+  // City-scoped: daily operations only — entry, sequence, recording
+  // payments, viewing/printing bills. Cannot lock/cancel bills, change
+  // rates, edit masters, or touch the business profile.
+  USER
 }
 
 enum RouteShift {
@@ -54,71 +60,131 @@ enum BillingStatus {
   CANCELLED
 }
 
+// One row per operating city/branch. Customers, routes, vehicles, products,
+// and the printed-bill business profile all belong to exactly one city;
+// everything else (entries, sequences, payments, bills) inherits its city
+// through the route/customer it belongs to.
+model City {
+  id                 String               @id @default(uuid()) @db.Uuid
+  code               String               @unique
+  name               String
+  isActive           Boolean              @default(true)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  customers          Customer[]
+  routes             Route[]
+  vehicles           Vehicle[]
+  products           Product[]
+  businessProfile    BusinessProfile?
+  userAssignments    UserCityAssignment[]
+  auditLogs          AuditLog[]
+  dailyEntryArchives DailyEntryArchive[]
+}
+
+// id matches the Supabase Auth user id directly (no separate mapping table) —
+// a row here is created the moment a superadmin invites/creates the user.
 model User {
-  id           String            @id @default(uuid())
-  fullName     String
-  email        String            @unique
-  role         UserRole
-  isActive     Boolean           @default(true)
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
-  routeEntries DailyRouteEntry[]
-  payments     Payment[]
+  id              String               @id @db.Uuid
+  fullName        String
+  email           String               @unique
+  role            UserRole
+  isActive        Boolean              @default(true)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  routeEntries    DailyRouteEntry[]
+  payments        Payment[]
+  cityAssignments UserCityAssignment[]
+  auditLogs       AuditLog[]
+}
+
+// Which cities a non-superadmin user can access. A user with exactly one
+// assignment skips the city switcher; more than one shows it, scoped to
+// just their cities (superadmins see every city regardless of assignment).
+model UserCityAssignment {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  cityId    String   @db.Uuid
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id])
+  city      City     @relation(fields: [cityId], references: [id])
+
+  @@unique([userId, cityId])
 }
 
 model Vehicle {
-  id           String   @id @default(uuid())
-  code         String   @unique
-  name         String
-  registration String?  @unique
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  routes       Route[]
+  id               String                   @id @default(uuid()) @db.Uuid
+  cityId           String                   @db.Uuid
+  code             String
+  name             String
+  registration     String?
+  isActive         Boolean                  @default(true)
+  createdAt        DateTime                 @default(now())
+  updatedAt        DateTime                 @updatedAt
+  city             City                     @relation(fields: [cityId], references: [id])
+  routes           Route[]
+  cycleStocks      VehicleCycleStock[]
+  cashSalePayments VehicleCashSalePayment[]
+
+  @@unique([cityId, code])
+  @@unique([cityId, registration])
 }
 
 model Product {
-  id               String                        @id @default(uuid())
-  code             String                        @unique
-  name             String
-  shortName        String?
-  unit             String
-  defaultRate      Decimal                       @db.Decimal(10, 2)
-  displayOrder     Int                           @default(0)
-  showInDailyEntry Boolean                       @default(true)
-  isActive         Boolean                       @default(true)
-  createdAt        DateTime                      @default(now())
-  updatedAt        DateTime                      @updatedAt
-  routeDefaults    RouteCustomerProductDefault[]
-  lineProducts     DailyRouteEntryLineProduct[]
-  billItems        MonthlyBillItem[]
+  id                      String                        @id @default(uuid()) @db.Uuid
+  cityId                  String                        @db.Uuid
+  code                    String
+  name                    String
+  shortName               String?
+  unit                    String
+  defaultRate             Decimal                       @db.Decimal(10, 2)
+  displayOrder            Int                           @default(0)
+  showInDailyEntry        Boolean                       @default(true)
+  // Reconciliation is a vehicle milk-movement check (given vs delivered vs
+  // returned vs cash sale), not every product applies — e.g. Paneer/Dahi
+  // aren't loaded onto a vehicle as loose stock the way Buffalo/Cow milk are.
+  includeInReconciliation Boolean                       @default(false)
+  isActive                Boolean                       @default(true)
+  createdAt               DateTime                      @default(now())
+  updatedAt               DateTime                      @updatedAt
+  city                    City                          @relation(fields: [cityId], references: [id])
+  routeDefaults           RouteCustomerProductDefault[]
+  lineProducts            DailyRouteEntryLineProduct[]
+  billItems               MonthlyBillItem[]
+  cycleStocks             VehicleCycleStock[]
 
-  @@index([isActive, showInDailyEntry, displayOrder])
+  @@unique([cityId, code])
+  @@index([cityId, isActive, showInDailyEntry, displayOrder])
 }
 
 model Route {
-  id               String                         @id @default(uuid())
-  code             String                         @unique
-  name             String
-  shift            RouteShift
-  vehicleId        String?
-  driverName       String?
-  driverPhone      String?
-  isActive         Boolean                        @default(true)
-  createdAt        DateTime                       @default(now())
-  updatedAt        DateTime                       @updatedAt
-  vehicle          Vehicle?                       @relation(fields: [vehicleId], references: [id])
-  assignments      RouteCustomerAssignment[]
-  monthlySequences MonthlyRouteCustomerSequence[]
-  entries          DailyRouteEntry[]
-  paymentBatches   PaymentBatch[]
-  payments         Payment[]
-  monthlyBills     MonthlyBill[]
+  id                 String                         @id @default(uuid()) @db.Uuid
+  cityId             String                         @db.Uuid
+  code               String
+  name               String
+  shift              RouteShift
+  vehicleId          String?                        @db.Uuid
+  driverName         String?
+  driverPhone        String?
+  isActive           Boolean                        @default(true)
+  createdAt          DateTime                       @default(now())
+  updatedAt          DateTime                       @updatedAt
+  city               City                           @relation(fields: [cityId], references: [id])
+  vehicle            Vehicle?                       @relation(fields: [vehicleId], references: [id])
+  assignments        RouteCustomerAssignment[]
+  monthlySequences   MonthlyRouteCustomerSequence[]
+  entries            DailyRouteEntry[]
+  paymentBatches     PaymentBatch[]
+  payments           Payment[]
+  monthlyBills       MonthlyBill[]
+  dailyEntryArchives DailyEntryArchive[]
+
+  @@unique([cityId, code])
 }
 
 model Customer {
-  id               String                         @id @default(uuid())
-  code             String                         @unique
+  id               String                         @id @default(uuid()) @db.Uuid
+  cityId           String                         @db.Uuid
+  code             String
   name             String
   mobile           String?
   addressLine1     String?
@@ -130,17 +196,20 @@ model Customer {
   isActive         Boolean                        @default(true)
   createdAt        DateTime                       @default(now())
   updatedAt        DateTime                       @updatedAt
+  city             City                           @relation(fields: [cityId], references: [id])
   assignments      RouteCustomerAssignment[]
   monthlySequences MonthlyRouteCustomerSequence[]
   entryLines       DailyRouteEntryLine[]
   payments         Payment[]
   monthlyBills     MonthlyBill[]
+
+  @@unique([cityId, code])
 }
 
 model RouteCustomerAssignment {
-  id         String                        @id @default(uuid())
-  routeId    String
-  customerId String
+  id         String                        @id @default(uuid()) @db.Uuid
+  routeId    String                        @db.Uuid
+  customerId String                        @db.Uuid
   sequenceNo Int
   status     RouteAssignmentStatus         @default(ACTIVE)
   createdAt  DateTime                      @default(now())
@@ -154,9 +223,9 @@ model RouteCustomerAssignment {
 }
 
 model RouteCustomerProductDefault {
-  id           String                  @id @default(uuid())
-  assignmentId String
-  productId    String
+  id           String                  @id @default(uuid()) @db.Uuid
+  assignmentId String                  @db.Uuid
+  productId    String                  @db.Uuid
   defaultQty   Decimal                 @default(0) @db.Decimal(10, 3)
   defaultRate  Decimal                 @db.Decimal(10, 2)
   createdAt    DateTime                @default(now())
@@ -168,9 +237,9 @@ model RouteCustomerProductDefault {
 }
 
 model MonthlyRouteCustomerSequence {
-  id            String                @id @default(uuid())
-  routeId       String
-  customerId    String
+  id            String                @id @default(uuid()) @db.Uuid
+  routeId       String                @db.Uuid
+  customerId    String                @db.Uuid
   sequenceMonth DateTime              @db.Date
   sequenceNo    Int
   status        RouteAssignmentStatus @default(ACTIVE)
@@ -184,10 +253,10 @@ model MonthlyRouteCustomerSequence {
 }
 
 model DailyRouteEntry {
-  id         String                @id @default(uuid())
-  routeId    String
+  id         String                @id @default(uuid()) @db.Uuid
+  routeId    String                @db.Uuid
   entryDate  DateTime              @db.Date
-  operatorId String?
+  operatorId String?               @db.Uuid
   syncStatus EntrySyncStatus       @default(DRAFT)
   notes      String?
   createdAt  DateTime              @default(now())
@@ -200,9 +269,9 @@ model DailyRouteEntry {
 }
 
 model DailyRouteEntryLine {
-  id             String                       @id @default(uuid())
-  entryId        String
-  customerId     String
+  id             String                       @id @default(uuid()) @db.Uuid
+  entryId        String                       @db.Uuid
+  customerId     String                       @db.Uuid
   sequenceNo     Int
   skipped        Boolean                      @default(false)
   remarks        String?
@@ -217,9 +286,9 @@ model DailyRouteEntryLine {
 }
 
 model DailyRouteEntryLineProduct {
-  id           String              @id @default(uuid())
-  lineId       String
-  productId    String
+  id           String              @id @default(uuid()) @db.Uuid
+  lineId       String              @db.Uuid
+  productId    String              @db.Uuid
   quantity     Decimal             @default(0) @db.Decimal(10, 3)
   rateSnapshot Decimal             @db.Decimal(10, 2)
   createdAt    DateTime            @default(now())
@@ -231,12 +300,47 @@ model DailyRouteEntryLineProduct {
   @@index([productId])
 }
 
+enum DailyEntryArchiveStatus {
+  EXPORTED // file written to R2 and round-trip verified; Postgres rows untouched
+  DELETED // rows removed from Postgres after a verified export
+  RESTORED // rows re-imported back into Postgres from the archive file
+}
+
+// One row per route+billing-month that's been archived — the authoritative
+// index of "what's been moved out of Postgres and where to get it back".
+// Deliberately a real tracking table, not just an AuditLog entry: restore
+// needs a reliable lookup by routeId+billingMonth, and the checksum here is
+// what a restore verifies the downloaded file against before touching the
+// database. A row only exists once export + verification both succeeded —
+// see src/lib/archive/*.
+model DailyEntryArchive {
+  id                String                  @id @default(uuid()) @db.Uuid
+  cityId            String                  @db.Uuid
+  routeId           String                  @db.Uuid
+  billingMonth      DateTime                @db.Date
+  storageKey        String
+  checksum          String
+  entryCount        Int
+  lineCount         Int
+  productEntryCount Int
+  sequenceCount     Int
+  status            DailyEntryArchiveStatus @default(EXPORTED)
+  exportedAt        DateTime                @default(now())
+  deletedAt         DateTime?
+  restoredAt        DateTime?
+  city              City                    @relation(fields: [cityId], references: [id])
+  route             Route                   @relation(fields: [routeId], references: [id])
+
+  @@unique([routeId, billingMonth])
+  @@index([cityId, billingMonth])
+}
+
 model Payment {
-  id            String        @id @default(uuid())
-  customerId    String
-  routeId       String?
-  batchId       String?
-  collectedById String?
+  id            String        @id @default(uuid()) @db.Uuid
+  customerId    String        @db.Uuid
+  routeId       String?       @db.Uuid
+  batchId       String?       @db.Uuid
+  collectedById String?       @db.Uuid
   amount        Decimal       @db.Decimal(12, 2)
   paymentDate   DateTime      @db.Date
   mode          PaymentMode
@@ -256,8 +360,8 @@ model Payment {
 }
 
 model PaymentBatch {
-  id            String        @id @default(uuid())
-  routeId       String
+  id            String        @id @default(uuid()) @db.Uuid
+  routeId       String        @db.Uuid
   billingMonth  DateTime      @db.Date
   paymentDate   DateTime      @db.Date
   mode          PaymentMode
@@ -275,9 +379,9 @@ model PaymentBatch {
 }
 
 model MonthlyBill {
-  id             String            @id @default(uuid())
-  customerId     String
-  routeId        String
+  id             String            @id @default(uuid()) @db.Uuid
+  customerId     String            @db.Uuid
+  routeId        String            @db.Uuid
   billingMonth   DateTime          @db.Date
   openingBalance Decimal           @db.Decimal(12, 2)
   deliveryAmount Decimal           @db.Decimal(12, 2)
@@ -295,9 +399,9 @@ model MonthlyBill {
 }
 
 model MonthlyBillItem {
-  id            String      @id @default(uuid())
-  monthlyBillId String
-  productId     String
+  id            String      @id @default(uuid()) @db.Uuid
+  monthlyBillId String      @db.Uuid
+  productId     String      @db.Uuid
   totalQty      Decimal     @db.Decimal(12, 3)
   averageRate   Decimal     @db.Decimal(10, 2)
   totalAmount   Decimal     @db.Decimal(12, 2)
@@ -309,10 +413,13 @@ model MonthlyBillItem {
   @@unique([monthlyBillId, productId])
 }
 
-// Singleton row (id is always "default") holding the printed-bill letterhead:
-// business identity, bank/UPI details, and the configurable reminder footer.
+// Printed-bill letterhead: business identity, bank/UPI details, and the
+// configurable reminder footer. One row per city.
 model BusinessProfile {
-  id                String   @id @default("default")
+  id                String   @id @default(uuid()) @db.Uuid
+  // One profile per city — each city's printed bills carry that city's own
+  // letterhead/bank/UPI/footer.
+  cityId            String   @unique @db.Uuid
   businessName      String
   contactPhone      String?
   addressLine1      String?
@@ -329,4 +436,78 @@ model BusinessProfile {
   footerNote        String?
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
+  city              City     @relation(fields: [cityId], references: [id])
+}
+
+// Milk physically given to / returned from a vehicle for one reconciliation
+// cycle (one evening route + the next morning route). Keyed by the cycle's
+// *close* date (the morning date) to match how every reconciliation view
+// dates the cycle — so an evening dispatch on 28 June is recorded here under
+// cycleDate = 29 June, alongside the returned quantity entered the next
+// morning. Both columns are filled independently as the cycle progresses,
+// and either can be back-filled later for missed days.
+model VehicleCycleStock {
+  id          String   @id @default(uuid()) @db.Uuid
+  vehicleId   String   @db.Uuid
+  productId   String   @db.Uuid
+  cycleDate   DateTime @db.Date
+  givenQty    Decimal  @default(0) @db.Decimal(10, 3)
+  returnedQty Decimal  @default(0) @db.Decimal(10, 3)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  vehicle     Vehicle  @relation(fields: [vehicleId], references: [id])
+  product     Product  @relation(fields: [productId], references: [id])
+
+  @@unique([vehicleId, productId, cycleDate])
+}
+
+// Payments received against a vehicle's computed cash-sale amount for one
+// reconciliation cycle. The cash-sale amount itself isn't stored — it's
+// derived live from VehicleCycleStock + delivered quantities — only actual
+// money received against it is persisted here, mirroring Payment's shape.
+model VehicleCashSalePayment {
+  id          String        @id @default(uuid()) @db.Uuid
+  vehicleId   String        @db.Uuid
+  cycleDate   DateTime      @db.Date
+  amount      Decimal       @db.Decimal(12, 2)
+  paymentDate DateTime      @db.Date
+  mode        PaymentMode
+  status      PaymentStatus @default(PENDING)
+  referenceNo String?
+  notes       String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  vehicle     Vehicle       @relation(fields: [vehicleId], references: [id])
+
+  @@index([vehicleId, cycleDate])
+}
+
+// One row per meaningful write against a money- or access-affecting entity —
+// who did what, when, and (where useful) the before/after snapshot. cityId
+// is nullable because some actions (creating a city itself, a superadmin
+// action with no single city) aren't scoped to one city. actorName/actorRole
+// are snapshotted at write time rather than only joined through actorId,
+// so the log stays readable even if the user is later deactivated or
+// deleted. before/after are intentionally untyped JSON — this table covers
+// many unrelated entity shapes and a bespoke column set per entity isn't
+// worth the schema churn for what's fundamentally a read-rarely audit trail.
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  cityId     String?  @db.Uuid
+  actorId    String?  @db.Uuid
+  actorName  String
+  actorRole  String
+  entityType String
+  entityId   String?  @db.Uuid
+  action     String
+  summary    String
+  before     Json?
+  after      Json?
+  createdAt  DateTime @default(now())
+  city       City?    @relation(fields: [cityId], references: [id])
+  actor      User?    @relation(fields: [actorId], references: [id])
+
+  @@index([cityId, createdAt])
+  @@index([entityType, entityId])
+  @@index([actorId])
 }

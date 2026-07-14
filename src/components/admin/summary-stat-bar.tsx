@@ -18,27 +18,27 @@ export function SummaryStatBar({
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 shadow-sm",
+        "flex flex-wrap items-center gap-x-6 gap-y-2 rounded-lg border border-surface-border bg-surface px-4 py-2.5 shadow-sm",
         className,
       )}
     >
       {stats.map((stat, index) => (
         <Fragment key={stat.key}>
           {index > 0 ? (
-            <span className="hidden h-4 w-px bg-slate-200 sm:block" aria-hidden="true" />
+            <span className="hidden h-4 w-px bg-surface-border sm:block" aria-hidden="true" />
           ) : null}
           <div className="flex items-baseline gap-2">
-            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-text-secondary">
               {stat.label}
             </span>
             <span
               className={cn(
                 "text-sm font-bold tabular-nums",
                 stat.tone === "success"
-                  ? "text-emerald-700"
+                  ? "text-status-success-text"
                   : stat.tone === "danger"
-                    ? "text-rose-700"
-                    : "text-slate-900",
+                    ? "text-status-danger-text"
+                    : "text-text-primary",
               )}
             >
               {stat.value}

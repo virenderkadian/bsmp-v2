@@ -12,11 +12,11 @@ export function StatusBadge({
     <span
       className={cn(
         "inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium",
-        tone === "success" && "bg-emerald-50 text-emerald-700",
-        tone === "warning" && "bg-amber-50 text-amber-700",
-        tone === "danger" && "bg-rose-50 text-rose-700",
-        tone === "info" && "bg-blue-50 text-blue-700",
-        tone === "neutral" && "bg-slate-100 text-slate-600",
+        tone === "success" && "bg-status-success-bg text-status-success-text",
+        tone === "warning" && "bg-status-warning-bg text-status-warning-text",
+        tone === "danger" && "bg-status-danger-bg text-status-danger-text",
+        tone === "info" && "bg-status-info-bg text-status-info-text",
+        tone === "neutral" && "bg-surface-muted text-text-secondary",
       )}
     >
       {children}

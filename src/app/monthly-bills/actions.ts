@@ -3,7 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { Prisma } from "@prisma/client";
 import { z } from "zod";
+import { getCurrentCityId } from "@/lib/current-city";
 import { prisma } from "@/lib/prisma";
+import { logAudit } from "@/lib/audit";
+import { buildBillPairs, computeClosingBalance } from "@/lib/monthly-bills-math";
 
 export type MonthlyBillActionState = {
   status: "idle" | "success" | "error";
@@ -73,9 +76,11 @@ export async function generateMonthlyBills(
 
   return runAction(async () => {
     const { start, end } = getMonthBounds(parsed.data.billingMonth);
+    const cityId = await getCurrentCityId();
 
     const entries = await prisma.dailyRouteEntry.findMany({
       where: {
+        route: { cityId },
         entryDate: {
           gte: start,
           lt: end,
@@ -102,6 +107,7 @@ export async function generateMonthlyBills(
       where: {
         status: "VERIFIED",
         routeId: { not: null },
+        route: { cityId },
         paymentDate: {
           gte: start,
           lt: end,
@@ -115,10 +121,23 @@ export async function generateMonthlyBills(
     });
 
     const customers = await prisma.customer.findMany({
+      where: { cityId },
       select: {
         id: true,
         openingBalance: true,
       },
+    });
+
+    // Who SHOULD have a bill this month, per the route's monthly customer
+    // sequence — the authoritative source, independent of whether they
+    // happen to have any daily entries right now.
+    const sequenceLines = await prisma.monthlyRouteCustomerSequence.findMany({
+      where: {
+        route: { cityId },
+        sequenceMonth: start,
+        status: "ACTIVE",
+      },
+      select: { customerId: true, routeId: true },
     });
 
     const openingBalanceMap = new Map(
@@ -188,10 +207,13 @@ export async function generateMonthlyBills(
     });
 
     let skippedLocked = 0;
+    let generatedCount = 0;
+
+    const billPairs = buildBillPairs(billMap, sequenceLines);
 
     await prisma.$transaction(
       async (tx) => {
-        for (const bill of billMap.values()) {
+        for (const bill of billPairs.values()) {
           const existing = await tx.monthlyBill.findUnique({
             where: {
               customerId_routeId_billingMonth: {
@@ -212,7 +234,7 @@ export async function generateMonthlyBills(
 
           const openingBalance = Number(openingBalanceMap.get(bill.customerId) ?? 0);
           const paymentAmount = paymentMap.get(`${bill.customerId}:${bill.routeId}`) ?? 0;
-          const closingBalance = openingBalance + bill.deliveryAmount - paymentAmount;
+          const closingBalance = computeClosingBalance(openingBalance, bill.deliveryAmount, paymentAmount);
 
           const savedBill = await tx.monthlyBill.upsert({
             where: {
@@ -261,7 +283,17 @@ export async function generateMonthlyBills(
               data: items,
             });
           }
+
+          generatedCount += 1;
         }
+
+        await logAudit(tx, {
+          cityId,
+          entityType: "MonthlyBillBatch",
+          action: "GENERATE",
+          summary: `Generated/refreshed ${generatedCount} monthly bill${generatedCount === 1 ? "" : "s"} for ${parsed.data.billingMonth}${skippedLocked > 0 ? `, ${skippedLocked} locked bill(s) skipped` : ""}.`,
+          after: { billingMonth: parsed.data.billingMonth, generatedCount, skippedLocked },
+        });
       },
       { timeout: 30_000, maxWait: 10_000 },
     );
@@ -290,11 +322,23 @@ export async function updateMonthlyBillStatus(
   }
 
   return runAction(async () => {
-    await prisma.monthlyBill.update({
+    const cityId = await getCurrentCityId();
+    const before = await prisma.monthlyBill.findUnique({ where: { id: parsed.data.id } });
+    const after = await prisma.monthlyBill.update({
       where: { id: parsed.data.id },
       data: {
         status: parsed.data.status,
       },
+    });
+
+    await logAudit(prisma, {
+      cityId,
+      entityType: "MonthlyBill",
+      entityId: after.id,
+      action: "STATUS_CHANGE",
+      summary: `Monthly bill status changed from ${before?.status ?? "UNKNOWN"} to ${after.status}.`,
+      before,
+      after,
     });
   }, "Monthly bill updated.", [`/monthly-bills/${parsed.data.id}`]);
 }

@@ -31,6 +31,7 @@ type ProductDraft = {
   defaultRate: string;
   displayOrder: string;
   showInDailyEntry: boolean;
+  includeInReconciliation: boolean;
 };
 
 const baseEmptyProductDraft: ProductDraft = {
@@ -41,6 +42,7 @@ const baseEmptyProductDraft: ProductDraft = {
   defaultRate: "",
   displayOrder: "0",
   showInDailyEntry: true,
+  includeInReconciliation: false,
 };
 
 function normalizeText(value: FormDataEntryValue | null) {
@@ -60,10 +62,10 @@ function formatRate(rate: string) {
   const amount = Number(rate);
 
   if (!Number.isFinite(amount)) {
-    return "Rs 0";
+    return "₹0";
   }
 
-  return `Rs ${amount.toLocaleString("en-IN", {
+  return `₹${amount.toLocaleString("en-IN", {
     maximumFractionDigits: 2,
     minimumFractionDigits: amount % 1 === 0 ? 0 : 2,
   })}`;
@@ -106,7 +108,8 @@ function ProductDialog({
       normalizeText(formData.get("unit")) !== draft.unit ||
       normalizeRate(formData.get("defaultRate")) !== Number(draft.defaultRate) ||
       normalizeRate(formData.get("displayOrder")) !== Number(draft.displayOrder) ||
-      normalizeBoolean(formData.get("showInDailyEntry")) !== draft.showInDailyEntry;
+      normalizeBoolean(formData.get("showInDailyEntry")) !== draft.showInDailyEntry ||
+      normalizeBoolean(formData.get("includeInReconciliation")) !== draft.includeInReconciliation;
 
     if (!hasChanges) {
       event.preventDefault();
@@ -160,13 +163,22 @@ function ProductDialog({
               { value: "false", label: "Hide from Daily Entry" },
             ]}
           />
+          <SelectInput
+            label="Reconciliation"
+            name="includeInReconciliation"
+            defaultValue={draft.includeInReconciliation ? "true" : "false"}
+            options={[
+              { value: "true", label: "Included in vehicle reconciliation" },
+              { value: "false", label: "Not part of reconciliation" },
+            ]}
+          />
         </div>
         {state.status !== "idle" && state.message ? (
           <p className={state.status === "success" ? "text-sm text-emerald-700" : "text-sm text-rose-700"}>
             {state.message}
           </p>
         ) : null}
-        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 pt-4">
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-surface-border pt-4">
           <StatusBadge tone={dbConnected ? "success" : "warning"}>
             {dbConnected ? "Live data" : "Offline fallback"}
           </StatusBadge>
@@ -206,6 +218,7 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
         defaultRate: selectedProduct.defaultRate,
         displayOrder: String(selectedProduct.displayOrder),
         showInDailyEntry: selectedProduct.showInDailyEntry,
+        includeInReconciliation: selectedProduct.includeInReconciliation,
       }
     : emptyProductDraft;
 
@@ -283,7 +296,7 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
             onChange={(event) => setUnit(event.target.value)}
             placeholder="All units"
             options={unitOptions}
-            className="h-10 rounded-md bg-white text-sm"
+            className="h-10 rounded-md bg-surface text-sm"
           />
           <SelectInput
             value={status}
@@ -293,7 +306,7 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
               { value: "ACTIVE", label: "Active" },
               { value: "INACTIVE", label: "Inactive" },
             ]}
-            className="h-10 rounded-md bg-white text-sm"
+            className="h-10 rounded-md bg-surface text-sm"
           />
           <SelectInput
             value={dailyEntryVisibility}
@@ -303,7 +316,7 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
               { value: "SHOWN", label: "Shown in Daily Entry" },
               { value: "HIDDEN", label: "Hidden from Daily Entry" },
             ]}
-            className="h-10 rounded-md bg-white text-sm"
+            className="h-10 rounded-md bg-surface text-sm"
           />
         </div>
         <div className="flex items-center gap-2">
@@ -318,8 +331,8 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
 
       <section className="space-y-4">
         <div>
-          <h2 className="text-base font-semibold text-slate-900">Product rate directory</h2>
-          <p className="mt-0.5 text-sm text-slate-500">
+          <h2 className="text-base font-semibold text-text-primary">Product rate directory</h2>
+          <p className="mt-0.5 text-sm text-text-secondary">
             Showing {filteredProducts.length} of {products.length} products
           </p>
         </div>
@@ -329,6 +342,7 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
             { key: "unit", label: "Unit" },
             { key: "order", label: "Order", className: "text-right", headerClassName: "text-right" },
             { key: "dailyEntry", label: "Daily Entry" },
+            { key: "reconciliation", label: "Reconciliation" },
             { key: "rate", label: "Default Rate", className: "text-right", headerClassName: "text-right" },
             { key: "status", label: "Status" },
             {
@@ -342,8 +356,8 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
             key: product.id,
             cells: [
               <div key="product" className="min-w-[220px]">
-                <p className="text-[15px] font-semibold leading-6 text-slate-900">{product.name}</p>
-                <p className="mt-0.5 text-sm text-slate-500">
+                <p className="text-[15px] font-semibold leading-6 text-text-primary">{product.name}</p>
+                <p className="mt-0.5 text-sm text-text-secondary">
                   {product.code}
                   {product.shortName ? ` · ${product.shortName}` : ""}
                 </p>
@@ -357,7 +371,10 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
               <StatusBadge key="dailyEntry" tone={product.showInDailyEntry ? "info" : "warning"}>
                 {product.showInDailyEntry ? "Shown" : "Hidden"}
               </StatusBadge>,
-              <span key="rate" className="block text-sm font-semibold text-slate-900">
+              <StatusBadge key="reconciliation" tone={product.includeInReconciliation ? "info" : "warning"}>
+                {product.includeInReconciliation ? "Included" : "Excluded"}
+              </StatusBadge>,
+              <span key="rate" className="block text-sm font-semibold text-text-primary">
                 {formatRate(product.defaultRate)}
               </span>,
               <ActiveStatusToggle
@@ -372,7 +389,7 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
                 <ActionButton
                   type="button"
                   icon={<EditIcon className="h-[18px] w-[18px]" />}
-                  className="h-8 w-8 rounded-md border-none bg-transparent px-0 text-slate-900 shadow-none hover:bg-slate-100"
+                  className="h-8 w-8 rounded-md border-none bg-transparent px-0 text-text-primary shadow-none hover:bg-surface-muted"
                   onClick={() => {
                     setSelectedProductId(product.id);
                     setDialogMode("edit");
@@ -386,11 +403,11 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
             ],
           }))}
           emptyMessage="No products match the selected filters"
-          minWidth="min-w-[980px]"
-          className="rounded-md border-slate-200 shadow-none"
-          headClassName="bg-slate-100/70"
+          minWidth="min-w-[1120px]"
+          className="rounded-md border-surface-border shadow-none"
+          headClassName="bg-surface-muted/70"
           headerCellClassName="px-5 py-3"
-          rowClassName="align-middle hover:bg-slate-50/60"
+          rowClassName="align-middle hover:bg-surface-muted/60"
           cellClassName="px-5 py-3.5"
         />
       </section>

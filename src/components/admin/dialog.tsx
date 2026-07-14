@@ -51,7 +51,7 @@ export function Dialog({
       <button
         type="button"
         aria-label="Close dialog"
-        className="absolute inset-0 bg-slate-950/40"
+        className="absolute inset-0 bg-slate-950/50"
         onClick={onClose}
       />
       <section
@@ -59,20 +59,20 @@ export function Dialog({
         aria-modal="true"
         aria-label={title}
         className={cn(
-          "relative z-10 flex max-h-[calc(100vh-4rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl",
+          "relative z-10 flex max-h-[calc(100vh-4rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-surface-border bg-surface shadow-2xl",
         )}
       >
-        <header className="border-b border-slate-200 px-6 py-5">
-          <h2 className="text-xl font-semibold text-slate-900">{title}</h2>
+        <header className="border-b border-surface-border px-6 py-5">
+          <h2 className="text-xl font-semibold text-text-primary">{title}</h2>
           {description ? (
-            <p className="mt-1 text-sm leading-6 text-slate-500">{description}</p>
+            <p className="mt-1 text-sm leading-6 text-text-secondary">{description}</p>
           ) : null}
         </header>
 
         <div className="overflow-y-auto px-6 py-5">{children}</div>
 
         {footer === null ? null : (
-          <footer className="flex items-center justify-end gap-3 border-t border-slate-200 px-6 py-4">
+          <footer className="flex items-center justify-end gap-3 border-t border-surface-border px-6 py-4">
             {footer ?? <SecondaryButton onClick={onClose}>Close</SecondaryButton>}
           </footer>
         )}

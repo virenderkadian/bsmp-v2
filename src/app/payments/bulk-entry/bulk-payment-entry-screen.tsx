@@ -39,7 +39,7 @@ type ToastState = {
 };
 
 function formatMoney(value: string | number) {
-  return `Rs ${Number(value).toLocaleString("en-IN", {
+  return `₹${Number(value).toLocaleString("en-IN", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -95,25 +95,25 @@ function CustomerSuggestionRow({
       type="button"
       className={cn(
         "flex w-full items-center justify-between gap-4 px-3 py-2.5 text-left transition",
-        active ? "bg-blue-50" : "bg-white hover:bg-slate-50",
+        active ? "bg-accent-soft" : "bg-surface hover:bg-surface-muted",
       )}
       onMouseDown={(event) => event.preventDefault()}
       onClick={() => onSelect(customer)}
     >
       <span>
-        <span className="block text-sm font-semibold text-slate-900">{customer.customerName}</span>
-        <span className="mt-0.5 block text-xs font-medium uppercase tracking-[0.12em] text-slate-500">
+        <span className="block text-sm font-semibold text-text-primary">{customer.customerName}</span>
+        <span className="mt-0.5 block text-xs font-medium uppercase tracking-[0.12em] text-text-secondary">
           {formatCustomerMeta(customer) || "-"}
         </span>
       </span>
       <span className="flex items-center gap-2">
-        <span className="text-xs font-semibold text-slate-500">
+        <span className="text-xs font-semibold text-text-secondary">
           Pending {formatMoney(customer.pendingAmount)}
         </span>
         <span
           className={cn(
             "rounded-full px-2.5 py-1 text-xs font-semibold",
-            inDraft ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-slate-600",
+            inDraft ? "bg-amber-50 text-amber-700" : "bg-surface-muted text-text-secondary",
           )}
         >
           {inDraft ? "In draft" : "Enter"}
@@ -153,7 +153,7 @@ function RouteMonthToolbar({
   onStatusChange: (value: string) => void;
 }) {
   return (
-    <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
+    <section className="rounded-md border border-surface-border bg-surface p-4 shadow-sm">
       <form
         action="/payments/bulk-entry"
         className="grid gap-3 lg:grid-cols-[minmax(260px,1.4fr)_170px_170px_150px_150px_auto] lg:items-end"
@@ -168,26 +168,26 @@ function RouteMonthToolbar({
             value: route.id,
             label: formatRouteOption(route),
           }))}
-          className="h-10 rounded-md bg-white text-sm"
+          className="h-10 rounded-md bg-surface text-sm"
         />
         <label className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-slate-500">Billing month</span>
+          <span className="text-xs font-medium text-text-secondary">Billing month</span>
           <input
             type="month"
             name="month"
             value={month}
             onChange={(event) => onMonthChange(event.target.value)}
-            className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-blue-600"
+            className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
           />
         </label>
         <label className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-slate-500">Payment date</span>
+          <span className="text-xs font-medium text-text-secondary">Payment date</span>
           <input
             type="date"
             name="paymentDate"
             value={paymentDate}
             onChange={(event) => onPaymentDateChange(event.target.value)}
-            className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-blue-600"
+            className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
           />
         </label>
         <SelectInput
@@ -195,14 +195,14 @@ function RouteMonthToolbar({
           value={mode}
           onChange={(event) => onModeChange(event.target.value)}
           options={payload.modes}
-          className="h-10 rounded-md bg-white text-sm"
+          className="h-10 rounded-md bg-surface text-sm"
         />
         <SelectInput
           label="Status"
           value={status}
           onChange={(event) => onStatusChange(event.target.value)}
           options={payload.statuses}
-          className="h-10 rounded-md bg-white text-sm"
+          className="h-10 rounded-md bg-surface text-sm"
         />
         <PrimaryButton type="submit" className="h-10 rounded-md px-5 text-sm font-semibold">
           Load
@@ -289,11 +289,11 @@ function AddCustomerBar({
   };
 
   return (
-    <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
+    <section className="rounded-md border border-surface-border bg-surface p-4 shadow-sm">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-base font-semibold text-slate-900">Add customer payment</h2>
-          <p className="mt-0.5 text-xs text-slate-500">
+          <h2 className="text-base font-semibold text-text-primary">Add customer payment</h2>
+          <p className="mt-0.5 text-xs text-text-secondary">
             Type, use arrows, press Enter to select, then Enter again in amount to add.
           </p>
         </div>
@@ -307,9 +307,9 @@ function AddCustomerBar({
       <div className="grid gap-3 xl:grid-cols-[minmax(320px,1fr)_160px_auto] xl:items-start">
         <div className="relative">
           <label className="block">
-            <span className="mb-1.5 block text-xs font-medium text-slate-500">Customer</span>
+            <span className="mb-1.5 block text-xs font-medium text-text-secondary">Customer</span>
             <span className="relative block">
-              <SearchIcon className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
+              <SearchIcon className="pointer-events-none absolute left-3.5 top-1/2 h-5 w-5 -translate-y-1/2 text-text-muted" />
               <input
                 ref={searchInputRef}
                 type="search"
@@ -327,13 +327,13 @@ function AddCustomerBar({
                 disabled={disabled}
                 placeholder={disabled ? "Load a route/month first" : "Search by name, code, area, or phone"}
                 autoComplete="off"
-                className="h-10 w-full rounded-md border border-slate-300 bg-white pl-11 pr-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-600 disabled:bg-slate-100 disabled:text-slate-400"
+                className="h-10 w-full rounded-md border border-surface-border-strong bg-surface pl-11 pr-3 text-sm text-text-primary outline-none transition placeholder:text-text-muted focus:border-accent disabled:bg-surface-muted disabled:text-text-muted"
               />
             </span>
           </label>
 
           {suggestionsOpen ? (
-            <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-20 max-h-80 overflow-y-auto rounded-md border border-slate-200 bg-white shadow-lg">
+            <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-20 max-h-80 overflow-y-auto rounded-md border border-surface-border bg-surface shadow-lg">
               {suggestions.length > 0 ? (
                 suggestions.map((customer, index) => (
                   <CustomerSuggestionRow
@@ -345,14 +345,14 @@ function AddCustomerBar({
                   />
                 ))
               ) : (
-                <div className="px-3 py-3 text-sm text-slate-500">No matching route customer found.</div>
+                <div className="px-3 py-3 text-sm text-text-secondary">No matching route customer found.</div>
               )}
             </div>
           ) : null}
         </div>
 
         <label className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-slate-500">Amount</span>
+          <span className="text-xs font-medium text-text-secondary">Amount</span>
           <input
             ref={amountInputRef}
             type="number"
@@ -373,7 +373,7 @@ function AddCustomerBar({
             }}
             disabled={disabled || !selectedCustomer}
             placeholder="0.00"
-            className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-600 disabled:bg-slate-100 disabled:text-slate-400"
+            className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition placeholder:text-text-muted focus:border-accent disabled:bg-surface-muted disabled:text-text-muted"
           />
         </label>
 
@@ -389,21 +389,21 @@ function AddCustomerBar({
       </div>
 
       {selectedCustomer ? (
-        <div className="mt-3 grid gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm md:grid-cols-4">
+        <div className="mt-3 grid gap-2 rounded-md border border-surface-border bg-surface-muted p-3 text-sm md:grid-cols-4">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Outstanding</p>
-            <p className="mt-1 font-semibold text-slate-900">{formatMoney(selectedCustomer.openingOutstanding)}</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-text-secondary">Outstanding</p>
+            <p className="mt-1 font-semibold text-text-primary">{formatMoney(selectedCustomer.openingOutstanding)}</p>
           </div>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Monthly bill</p>
-            <p className="mt-1 font-semibold text-slate-900">{formatMoney(selectedCustomer.monthlyBillAmount)}</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-text-secondary">Monthly bill</p>
+            <p className="mt-1 font-semibold text-text-primary">{formatMoney(selectedCustomer.monthlyBillAmount)}</p>
           </div>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Already paid</p>
-            <p className="mt-1 font-semibold text-slate-900">{formatMoney(selectedCustomer.alreadyPaid)}</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-text-secondary">Already paid</p>
+            <p className="mt-1 font-semibold text-text-primary">{formatMoney(selectedCustomer.alreadyPaid)}</p>
           </div>
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Pending</p>
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-text-secondary">Pending</p>
             <p className="mt-1 font-semibold text-blue-700">{formatMoney(selectedCustomer.pendingAmount)}</p>
           </div>
         </div>
@@ -656,7 +656,7 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
         actions={
           <Link
             href="/payments"
-            className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+            className="inline-flex h-10 items-center justify-center rounded-md border border-surface-border-strong bg-surface px-4 text-sm font-semibold text-text-secondary transition hover:bg-surface-muted"
           >
             Back to ledger
           </Link>
@@ -709,8 +709,8 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
         <section className="space-y-3">
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
-              <h2 className="text-base font-semibold text-slate-900">Payment entry sheet</h2>
-              <p className="mt-0.5 text-sm text-slate-500">
+              <h2 className="text-base font-semibold text-text-primary">Payment entry sheet</h2>
+              <p className="mt-0.5 text-sm text-text-secondary">
                 {draftRows.length} draft payments · Total {formatMoney(draftTotal)}
               </p>
             </div>
@@ -739,14 +739,14 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
                 key: customer.customerId,
                 className: highlightedCustomerId === customer.customerId ? "bg-amber-50" : undefined,
                 cells: [
-                  <span key="sr" className="font-semibold text-slate-500">
+                  <span key="sr" className="font-semibold text-text-secondary">
                     {index + 1}
                   </span>,
                   <div key="customer" id={`bulk-payment-row-${customer.customerId}`} className="min-w-[240px]">
-                    <p className="text-[15px] font-semibold uppercase leading-6 text-slate-900">
+                    <p className="text-[15px] font-semibold uppercase leading-6 text-text-primary">
                       {customer.customerName}
                     </p>
-                    <p className="mt-0.5 text-xs font-medium uppercase tracking-[0.12em] text-slate-500">
+                    <p className="mt-0.5 text-xs font-medium uppercase tracking-[0.12em] text-text-secondary">
                       {formatCustomerMeta(customer) || "-"}
                     </p>
                   </div>,
@@ -771,8 +771,8 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
                     onChange={(event) => updateDraftAmount(row.customerId, event.target.value)}
                     disabled={pending}
                     className={cn(
-                      "h-9 w-full rounded-md border bg-white px-3 text-right text-sm font-semibold text-slate-900 outline-none transition focus:border-blue-600 disabled:bg-slate-100",
-                      invalidAmount ? "border-rose-300" : "border-slate-300",
+                      "h-9 w-full rounded-md border bg-surface px-3 text-right text-sm font-semibold text-text-primary outline-none transition focus:border-accent disabled:bg-surface-muted",
+                      invalidAmount ? "border-rose-300" : "border-surface-border-strong",
                     )}
                     aria-label={`Payment amount for ${customer.customerName}`}
                   />,
@@ -793,10 +793,10 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
             })}
             emptyMessage="No payment rows added yet. Search a customer above and press Enter."
             minWidth="min-w-[1120px]"
-            className="rounded-md border-slate-200 shadow-none"
-            headClassName="bg-slate-100/70"
+            className="rounded-md border-surface-border shadow-none"
+            headClassName="bg-surface-muted/70"
             headerCellClassName="px-5 py-3"
-            rowClassName="align-middle hover:bg-slate-50/70"
+            rowClassName="align-middle hover:bg-surface-muted/70"
             cellClassName="px-5 py-3"
           />
         </section>
@@ -816,7 +816,7 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
       {draftRows.length > 0 ? (
         <StickyActionBar>
           <div className="mr-auto hidden items-center gap-3 md:flex">
-            <span className="text-sm font-semibold text-slate-900">
+            <span className="text-sm font-semibold text-text-primary">
               {draftRows.length} payments · {formatMoney(draftTotal)}
             </span>
             {hasInvalidRows ? <span className="text-sm font-medium text-rose-700">Fix invalid amounts</span> : null}
@@ -825,23 +825,23 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
             ) : null}
           </div>
           <label className="hidden min-w-56 flex-col gap-1 md:flex">
-            <span className="text-xs font-medium text-slate-500">Reference</span>
+            <span className="text-xs font-medium text-text-secondary">Reference</span>
             <input
               value={referenceNo}
               onChange={(event) => setReferenceNo(event.target.value)}
               disabled={pending}
               placeholder="Optional"
-              className="h-9 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-blue-600"
+              className="h-9 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
             />
           </label>
           <label className="hidden min-w-64 flex-col gap-1 lg:flex">
-            <span className="text-xs font-medium text-slate-500">Notes</span>
+            <span className="text-xs font-medium text-text-secondary">Notes</span>
             <input
               value={notes}
               onChange={(event) => setNotes(event.target.value)}
               disabled={pending}
               placeholder="Optional batch note"
-              className="h-9 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-blue-600"
+              className="h-9 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
             />
           </label>
           <PrimaryButton

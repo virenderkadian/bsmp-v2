@@ -14,7 +14,7 @@ export function IconButton({
     <button
       className={cn(
         "inline-flex h-8 w-8 items-center justify-center rounded-md transition disabled:cursor-not-allowed disabled:opacity-40",
-        tone === "neutral" && "text-slate-500 hover:bg-slate-100 hover:text-slate-800",
+        tone === "neutral" && "text-text-secondary hover:bg-surface-muted hover:text-text-primary",
         tone === "danger" && "text-rose-600 hover:bg-rose-50 hover:text-rose-700",
         className,
       )}

@@ -43,13 +43,13 @@ export default async function MonthlyBillDetailPage({
           actions={
             <Link
               href="/monthly-bills"
-              className="inline-flex h-10 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+              className="inline-flex h-10 items-center justify-center rounded-lg border border-surface-border-strong bg-surface px-4 text-sm font-medium text-text-secondary transition hover:bg-surface-muted"
             >
               Back to bills
             </Link>
           }
         />
-        <section className="rounded-xl border border-rose-200 bg-white p-5 text-sm text-rose-700 shadow-sm">
+        <section className="rounded-xl border border-rose-200 bg-surface p-5 text-sm text-rose-700 shadow-sm">
           {payload.error ?? "Monthly bill detail could not be loaded."}
         </section>
       </>
@@ -69,7 +69,7 @@ export default async function MonthlyBillDetailPage({
             <>
               <Link
                 href="/monthly-bills"
-                className="inline-flex h-10 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+                className="inline-flex h-10 items-center justify-center rounded-lg border border-surface-border-strong bg-surface px-4 text-sm font-medium text-text-secondary transition hover:bg-surface-muted"
               >
                 Back to bills
               </Link>
@@ -81,7 +81,7 @@ export default async function MonthlyBillDetailPage({
         <div className="mt-4 flex flex-wrap items-center gap-2">
           <StatusBadge tone={billStatusTone(bill.status)}>{bill.status}</StatusBadge>
           {bill.customerMobile ? (
-            <span className="text-sm text-slate-500">{bill.customerMobile}</span>
+            <span className="text-sm text-text-secondary">{bill.customerMobile}</span>
           ) : null}
         </div>
       </div>

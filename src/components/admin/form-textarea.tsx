@@ -8,11 +8,11 @@ type FormTextareaProps = TextareaHTMLAttributes<HTMLTextAreaElement> & {
 export function FormTextarea({ label, className, rows = 3, ...props }: FormTextareaProps) {
   return (
     <label className="flex flex-col gap-1.5">
-      <span className="text-xs font-medium text-slate-500">{label}</span>
+      <span className="text-xs font-medium text-text-secondary">{label}</span>
       <textarea
         rows={rows}
         className={cn(
-          "rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-900 outline-none transition placeholder:text-slate-400 focus:border-blue-600 focus:bg-white",
+          "rounded-lg border border-surface-border-strong bg-surface-muted px-3 py-2 text-sm text-text-primary outline-none transition placeholder:text-text-muted focus:border-accent focus:bg-surface",
           className,
         )}
         {...props}

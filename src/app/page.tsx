@@ -1,48 +1,151 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
+import { ComparisonChart, ProductContributionCharts, TrendChart } from "@/app/dashboard-charts";
 import { DataTable } from "@/components/admin/data-table";
 import { PageHeader } from "@/components/admin/page-header";
-import { PlusIcon } from "@/components/admin/icons";
+import {
+  BillIcon,
+  CheckIcon,
+  PlusIcon,
+  ProductIcon,
+  RouteIcon,
+  SyncIcon,
+  UsersIcon,
+  WalletIcon,
+} from "@/components/admin/icons";
 import { StatusBadge } from "@/components/admin/status-badge";
+import { SummaryStatBar } from "@/components/admin/summary-stat-bar";
 import { cn } from "@/lib/utils";
-import { getAssignmentsPayload } from "@/lib/assignments";
-import { getMastersPayload } from "@/lib/masters";
+import { getAnalyticsPayload } from "@/lib/dashboard-analytics";
+import { getDashboardPayload } from "@/lib/dashboard";
 
 function SummaryCard({
   label,
   value,
   note,
+  icon,
+  tone = "default",
 }: {
   label: string;
   value: string | number;
   note: string;
+  icon: ReactNode;
+  tone?: "default" | "success" | "warning" | "danger";
 }) {
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-      <p className="text-sm text-slate-500">{label}</p>
-      <p className="mt-2 text-3xl font-semibold text-slate-900">{value}</p>
-      <p className="mt-2 text-sm text-slate-500">{note}</p>
+    <section className="flex items-start gap-3 rounded-lg border border-surface-border bg-surface p-3.5 shadow-sm">
+      <span
+        className={cn(
+          "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
+          tone === "danger" && "bg-rose-50 text-rose-600",
+          tone === "warning" && "bg-amber-50 text-amber-600",
+          tone === "success" && "bg-emerald-50 text-emerald-700",
+          tone === "default" && "bg-accent-soft text-blue-600",
+        )}
+      >
+        {icon}
+      </span>
+      <div className="min-w-0">
+        <p className="truncate text-xs font-medium text-text-secondary">{label}</p>
+        <p
+          className={cn(
+            "mt-0.5 text-xl font-bold leading-tight",
+            tone === "danger" && "text-rose-600",
+            tone === "warning" && "text-amber-600",
+            tone === "success" && "text-emerald-700",
+            tone === "default" && "text-text-primary",
+          )}
+        >
+          {value}
+        </p>
+        <p className="mt-0.5 truncate text-xs text-text-secondary" title={note}>
+          {note}
+        </p>
+      </div>
     </section>
   );
 }
 
-export default async function Home() {
-  const [masters, assignments] = await Promise.all([
-    getMastersPayload(),
-    getAssignmentsPayload(),
+function formatMoney(value: string) {
+  return `₹${Number(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function formatQty(value: string | undefined) {
+  const qty = Number(value ?? 0);
+  return qty === 0 ? "-" : qty.toFixed(qty % 1 === 0 ? 0 : 1);
+}
+
+function BreakdownTable({
+  title,
+  subtitle,
+  products,
+  rows,
+  nameHeader,
+  emptyMessage,
+}: {
+  title: string;
+  subtitle: string;
+  products: Array<{ id: string; name: string; shortName: string | null; unit: string }>;
+  rows: Array<{ key: string; code: string; name: string; quantityByProduct: Record<string, string>; amount: string }>;
+  nameHeader: string;
+  emptyMessage: string;
+}) {
+  return (
+    <section className="rounded-lg border border-surface-border bg-surface p-4 shadow-sm">
+      <div>
+        <h2 className="text-base font-semibold text-text-primary">{title}</h2>
+        <p className="text-xs text-text-secondary">{subtitle}</p>
+      </div>
+      <div className="mt-3">
+        <DataTable
+          columns={[
+            nameHeader,
+            ...products.map((product) => `${product.shortName ?? product.name} (${product.unit})`),
+            "Amount",
+          ]}
+          rows={rows.map((row) => ({
+            key: row.key,
+            cells: [
+              <div key="name">
+                <div className="font-medium text-text-primary">{row.name}</div>
+                <div className="text-xs text-text-secondary">{row.code}</div>
+              </div>,
+              ...products.map((product) => formatQty(row.quantityByProduct[product.id])),
+              <span key="amount" className="font-semibold text-text-primary">
+                {formatMoney(row.amount)}
+              </span>,
+            ],
+          }))}
+          emptyMessage={emptyMessage}
+          headerCellClassName="px-3 py-2"
+          cellClassName="px-3 py-2 text-sm"
+        />
+      </div>
+    </section>
+  );
+}
+
+export default async function Home({
+  searchParams,
+}: {
+  searchParams?: Promise<{ from?: string; to?: string; vehicleId?: string; compareVehicleId?: string }>;
+}) {
+  const params = await searchParams;
+  const [dashboard, analytics] = await Promise.all([
+    getDashboardPayload(),
+    getAnalyticsPayload({
+      from: params?.from,
+      to: params?.to,
+      vehicleId: params?.vehicleId,
+      compareVehicleId: params?.compareVehicleId,
+    }),
   ]);
 
-  const activeRoutes = masters.routes.filter((route) => route.isActive).length;
-  const activeCustomers = masters.customers.filter((customer) => customer.isActive).length;
-  const activeProducts = masters.products.filter((product) => product.isActive).length;
-  const assignedCustomers = assignments.assignments.filter(
-    (assignment) => assignment.status === "ACTIVE",
-  ).length;
-
   return (
-    <>
+    <div className="space-y-4">
       <PageHeader
         title="Dashboard"
-        subtitle="Operational overview for dairy distribution, route setup, and billing readiness."
+        subtitle="Today's operations, collections, and this month's billing cycle at a glance."
         actions={
           <>
             <Link
@@ -56,7 +159,7 @@ export default async function Home() {
             </Link>
             <Link
               href="/daily-entry"
-              className="inline-flex h-10 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+              className="inline-flex h-10 items-center justify-center rounded-lg border border-surface-border-strong bg-surface px-4 text-sm font-medium text-text-secondary transition hover:bg-surface-muted"
             >
               Open daily entry
             </Link>
@@ -64,91 +167,234 @@ export default async function Home() {
         }
       />
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard
-          label="Active Routes"
-          value={activeRoutes}
-          note="Configured for morning and evening distribution."
-        />
-        <SummaryCard
-          label="Customers"
-          value={activeCustomers}
-          note="Ready for assignments, payments, and monthly bills."
-        />
-        <SummaryCard
-          label="Products"
-          value={activeProducts}
-          note="Rate cards loaded into the operational master setup."
-        />
-        <SummaryCard
-          label="Assigned Stops"
-          value={assignedCustomers}
-          note="Customers already linked to route sequence packets."
-        />
-      </section>
+      {dashboard.error ? <div className="text-sm text-rose-700">{dashboard.error}</div> : null}
 
-      <section className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-        <div className="space-y-6">
-          <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold text-slate-900">Route readiness</h2>
-                <p className="mt-1 text-sm text-slate-500">
-                  Routes and assignment packets available for daily dispatch.
-                </p>
-              </div>
-              <StatusBadge tone={assignments.dbConnected ? "success" : "warning"}>
-                {assignments.dbConnected ? "Live sync" : "Fallback mode"}
-              </StatusBadge>
-            </div>
-            <div className="mt-4">
-              <DataTable
-                columns={["Route", "Shift", "Vehicle", "Assignments"]}
-                rows={masters.routes.map((route) => ({
-                  key: route.id,
-                  cells: [
-                    <div key="route">
-                      <div className="font-medium text-slate-900">{route.name}</div>
-                      <div className="text-xs text-slate-500">{route.code}</div>
-                    </div>,
-                    route.shift === "MORNING" ? "Morning" : "Evening",
-                    route.vehicleName ?? "Unassigned",
-                    assignments.assignments.filter(
-                      (assignment) => assignment.routeId === route.id,
-                    ).length,
-                  ],
-                }))}
-              />
-            </div>
-          </section>
+      <SummaryStatBar
+        stats={[
+          { key: "routes", label: "Active Routes", value: String(dashboard.activeRoutes) },
+          { key: "customers", label: "Customers", value: String(dashboard.activeCustomers) },
+          { key: "vehicles", label: "Vehicles", value: String(dashboard.activeVehicles) },
+          { key: "products", label: "Products", value: String(dashboard.activeProducts) },
+        ]}
+      />
+
+      <section>
+        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">Today</h2>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-4">
+          <SummaryCard
+            icon={<CheckIcon className="h-4.5 w-4.5" />}
+            label="Daily Entry Today"
+            value={`${dashboard.routesEnteredToday} / ${dashboard.totalActiveRoutes}`}
+            note="Routes entered today"
+            tone={dashboard.routesEnteredToday === dashboard.totalActiveRoutes ? "success" : "warning"}
+          />
+          <SummaryCard
+            icon={<ProductIcon className="h-4.5 w-4.5" />}
+            label="Delivered Today"
+            value={`${dashboard.deliveredQuantityToday} units`}
+            note={`${formatMoney(dashboard.deliveredValueToday)} value`}
+          />
+          <SummaryCard
+            icon={<RouteIcon className="h-4.5 w-4.5" />}
+            label="Reconciliation Today"
+            value={`${dashboard.vehiclesReconciledToday} / ${dashboard.totalReconciliationVehicles}`}
+            note="Cycles fully reconciled"
+            tone={
+              dashboard.vehiclesReconciledToday === dashboard.totalReconciliationVehicles &&
+              dashboard.totalReconciliationVehicles > 0
+                ? "success"
+                : "warning"
+            }
+          />
+          <SummaryCard
+            icon={<WalletIcon className="h-4.5 w-4.5" />}
+            label="Cash Sale Today"
+            value={formatMoney(dashboard.cashSaleTotalToday)}
+            note={dashboard.hasNegativeDifferenceToday ? "Shortage on a vehicle" : "Across all vehicles"}
+            tone={dashboard.hasNegativeDifferenceToday ? "danger" : "default"}
+          />
+          <SummaryCard
+            icon={<WalletIcon className="h-4.5 w-4.5" />}
+            label="Collected Today"
+            value={formatMoney(dashboard.paymentsCollectedToday)}
+            note="Verified payments today"
+            tone="success"
+          />
+          <SummaryCard
+            icon={<SyncIcon className="h-4.5 w-4.5" />}
+            label="Pending Payments"
+            value={dashboard.pendingPaymentsCount}
+            note={`${formatMoney(dashboard.pendingPaymentsAmount)} unverified`}
+            tone={dashboard.pendingPaymentsCount > 0 ? "warning" : "default"}
+          />
+          <SummaryCard
+            icon={<UsersIcon className="h-4.5 w-4.5" />}
+            label="Customer Outstanding"
+            value={formatMoney(dashboard.customerOutstandingTotal)}
+            note="Latest bill balances"
+          />
+          <SummaryCard
+            icon={<WalletIcon className="h-4.5 w-4.5" />}
+            label="Vehicle Cash Balance"
+            value={formatMoney(dashboard.vehicleCashSaleBalanceToday)}
+            note="Uncollected today"
+          />
         </div>
-
-        <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-lg font-semibold text-slate-900">Build order</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            Keep the delivery workflow stable before deeper financial automation.
-          </p>
-          <div className="mt-5 space-y-3">
-            {[
-              "Finalize route and customer assignments",
-              "Prefill daily entry from assignment defaults",
-              "Capture payment collection against customers",
-              "Generate monthly bills from saved delivery snapshots",
-              "Close reconciliation with operational totals",
-            ].map((item, index) => (
-              <div
-                key={item}
-                className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3"
-              >
-                <span className="mt-0.5 inline-flex h-6 w-6 items-center justify-center rounded-full bg-blue-600 text-xs font-semibold text-white">
-                  {index + 1}
-                </span>
-                <p className="text-sm text-slate-600">{item}</p>
-              </div>
-            ))}
-          </div>
-        </section>
       </section>
-    </>
+
+      <section>
+        <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
+          This month&apos;s billing cycle
+        </h2>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <SummaryCard
+            icon={<BillIcon className="h-4.5 w-4.5" />}
+            label="Bills Generated"
+            value={`${dashboard.billsGeneratedThisMonth} / ${dashboard.totalCustomersDueThisMonth}`}
+            note="Customers billed so far"
+          />
+          <SummaryCard
+            icon={<BillIcon className="h-4.5 w-4.5" />}
+            label="Billed vs Collected"
+            value={formatMoney(dashboard.totalBilledThisMonth)}
+            note={`${formatMoney(dashboard.totalCollectedThisMonth)} collected`}
+          />
+          <SummaryCard
+            icon={<BillIcon className="h-4.5 w-4.5" />}
+            label="Bill Status"
+            value={`${dashboard.billsLockedCount} locked`}
+            note={`${dashboard.billsDraftCount} still in draft`}
+          />
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-surface-border bg-surface p-4 shadow-sm">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-text-primary">Today&apos;s route readiness</h2>
+            <p className="text-xs text-text-secondary">Which routes have a daily entry saved for {dashboard.today}.</p>
+          </div>
+          <StatusBadge tone={dashboard.dbConnected ? "success" : "warning"}>
+            {dashboard.dbConnected ? "Live sync" : "Fallback mode"}
+          </StatusBadge>
+        </div>
+        <div className="mt-3">
+          <DataTable
+            columns={["Route", "Shift", "Vehicle", "Today's Entry"]}
+            headerCellClassName="px-3 py-2"
+            cellClassName="px-3 py-2 text-sm"
+            rows={dashboard.routeReadiness.map((route) => ({
+              key: route.routeId,
+              cells: [
+                <div key="route">
+                  <div className="font-medium text-text-primary">{route.routeName}</div>
+                  <div className="text-xs text-text-secondary">{route.routeCode}</div>
+                </div>,
+                route.shift === "MORNING" ? "Morning" : "Evening",
+                route.vehicleName ?? "Unassigned",
+                <StatusBadge key="status" tone={route.hasEntryToday ? "success" : "warning"}>
+                  {route.hasEntryToday ? "Saved" : "Pending"}
+                </StatusBadge>,
+              ],
+            }))}
+            emptyMessage="No active routes yet"
+          />
+        </div>
+      </section>
+
+      <BreakdownTable
+        title="Route Summary"
+        subtitle={`Today's deliveries by route, ${dashboard.today}.`}
+        products={dashboard.dailyEntryProducts}
+        nameHeader="Route"
+        emptyMessage="No deliveries recorded yet today"
+        rows={dashboard.routeSummary.map((route) => ({
+          key: route.routeId,
+          code: `${route.routeCode} · ${route.shift === "MORNING" ? "Morning" : "Evening"}`,
+          name: route.routeName,
+          quantityByProduct: route.quantityByProduct,
+          amount: route.amount,
+        }))}
+      />
+
+      <BreakdownTable
+        title="Cash Sale by Vehicle"
+        subtitle={`Leftover milk sold for cash today, ${dashboard.today}.`}
+        products={dashboard.reconciliationProducts}
+        nameHeader="Vehicle"
+        emptyMessage="No cash sale recorded yet today"
+        rows={dashboard.vehicleCashSaleSummary.map((vehicle) => ({
+          key: vehicle.vehicleId,
+          code: vehicle.vehicleCode,
+          name: vehicle.vehicleName,
+          quantityByProduct: vehicle.quantityByProduct,
+          amount: vehicle.amount,
+        }))}
+      />
+
+      <section className="rounded-lg border border-surface-border bg-surface p-4 shadow-sm">
+        <h2 className="text-base font-semibold text-text-primary">Analytics range</h2>
+        <form action="/" className="mt-2.5 flex flex-wrap items-end gap-3">
+          <label className="flex flex-col gap-1.5 text-sm">
+            <span className="text-xs font-medium text-text-secondary">From</span>
+            <input
+              name="from"
+              type="date"
+              defaultValue={analytics.from}
+              className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5 text-sm">
+            <span className="text-xs font-medium text-text-secondary">To</span>
+            <input
+              name="to"
+              type="date"
+              defaultValue={analytics.to}
+              className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5 text-sm">
+            <span className="text-xs font-medium text-text-secondary">Vehicle</span>
+            <select
+              name="vehicleId"
+              defaultValue={analytics.selectedVehicleId}
+              className="h-10 min-w-48 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
+            >
+              {analytics.vehicles.map((vehicle) => (
+                <option key={vehicle.id} value={vehicle.id}>
+                  {vehicle.code} - {vehicle.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="flex flex-col gap-1.5 text-sm">
+            <span className="text-xs font-medium text-text-secondary">Compare with</span>
+            <select
+              name="compareVehicleId"
+              defaultValue={analytics.compareVehicleId}
+              className="h-10 min-w-48 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
+            >
+              {analytics.vehicles.map((vehicle) => (
+                <option key={vehicle.id} value={vehicle.id}>
+                  {vehicle.code} - {vehicle.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="submit"
+            className="h-10 rounded-md border border-surface-border-strong bg-surface px-4 text-sm font-semibold text-text-secondary transition hover:bg-surface-muted"
+          >
+            Apply
+          </button>
+        </form>
+      </section>
+
+      {analytics.error ? <div className="text-sm text-rose-700">{analytics.error}</div> : null}
+
+      <TrendChart trend={analytics.trend} />
+      <ComparisonChart trend={analytics.trend} comparison={analytics.comparison} />
+      <ProductContributionCharts productContribution={analytics.productContribution} />
+    </div>
   );
 }

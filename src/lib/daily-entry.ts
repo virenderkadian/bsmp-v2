@@ -1,4 +1,5 @@
 import type { EntrySyncStatus, RouteShift } from "@prisma/client";
+import { getCurrentCityId } from "@/lib/current-city";
 import { withDbTimeout } from "@/lib/db-timeout";
 import { prisma } from "@/lib/prisma";
 
@@ -84,8 +85,9 @@ export async function getDailyEntryPayload(input?: {
 
   try {
     const sequenceMonth = toMonthStartDate(selectedDate);
+    const cityId = await getCurrentCityId();
     const routes = await withDbTimeout(prisma.route.findMany({
-      where: { isActive: true },
+      where: { cityId, isActive: true },
       orderBy: [{ shift: "asc" }, { code: "asc" }],
       select: {
         id: true,
@@ -102,6 +104,7 @@ export async function getDailyEntryPayload(input?: {
 
     const products = await withDbTimeout(prisma.product.findMany({
       where: {
+        cityId,
         isActive: true,
         showInDailyEntry: true,
       },

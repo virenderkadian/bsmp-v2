@@ -7,32 +7,47 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
     "prisma:generate": "prisma generate",
     "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:studio": "prisma studio",
     "db:seed": "node prisma/seed.mjs",
     "db:clear": "node prisma/clear.mjs",
-    "db:clear-billing": "node prisma/clear-billing.mjs"
+    "db:clear-billing": "node prisma/clear-billing.mjs",
+    "prisma:prod:migrate": "dotenv -e .env.production -- prisma migrate deploy",
+    "prisma:prod:studio": "dotenv -e .env.production -- prisma studio",
+    "prisma:prod:generate": "dotenv -e .env.production -- prisma generate"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1086.0",
     "@hookform/resolvers": "^5.4.0",
     "@prisma/client": "^6.19.3",
+    "@supabase/ssr": "^0.12.0",
+    "@supabase/supabase-js": "^2.109.0",
     "next": "16.2.9",
     "qrcode": "^1.5.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-hook-form": "^7.80.0",
+    "recharts": "^3.9.2",
+    "server-only": "^0.0.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv-cli": "^11.0.0",
     "eslint": "^9",
     "eslint-config-next": "16.2.9",
     "prisma": "^6.19.3",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.10"
   }
 }

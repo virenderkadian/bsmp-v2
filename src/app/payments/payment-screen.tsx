@@ -66,7 +66,7 @@ function formatDate(value: Date) {
 }
 
 function formatMoney(value: string) {
-  return `Rs ${Number(value).toLocaleString("en-IN", {
+  return `₹${Number(value).toLocaleString("en-IN", {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -308,7 +308,7 @@ function PaymentDialog({
             {state.message}
           </p>
         ) : null}
-        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 pt-4">
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-surface-border pt-4">
           <StatusBadge tone={dbConnected ? "success" : "warning"}>
             {dbConnected ? "Live data" : "Offline fallback"}
           </StatusBadge>
@@ -381,8 +381,8 @@ function PaymentStatusButton({
           onChange={(event) => setNextStatus(event.target.value)}
           options={statuses}
         />
-        <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
-          <span className="font-semibold text-slate-900">{payment.customerName}</span> ·{" "}
+        <p className="rounded-lg bg-surface-muted px-3 py-2 text-sm text-text-secondary">
+          <span className="font-semibold text-text-primary">{payment.customerName}</span> ·{" "}
           {formatMoney(payment.amount)} · {formatDate(payment.paymentDate)}
         </p>
         {submitted && state.status === "error" && state.message ? (
@@ -480,7 +480,7 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
           <div className="flex flex-wrap items-center gap-2">
             <Link
               href="/payments/bulk-entry"
-              className="inline-flex h-10 items-center justify-center rounded-md border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-600 transition hover:bg-slate-50"
+              className="inline-flex h-10 items-center justify-center rounded-md border border-surface-border-strong bg-surface px-4 text-sm font-semibold text-text-secondary transition hover:bg-surface-muted"
             >
               Bulk route entry
             </Link>
@@ -522,32 +522,32 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
                 value: route.id,
                 label: `${route.code} - ${route.name}`,
               }))}
-              className="h-10 rounded-md bg-white text-sm"
+              className="h-10 rounded-md bg-surface text-sm"
             />
             <SelectInput
               value={mode}
               onChange={(event) => setMode(event.target.value)}
               placeholder="All modes"
               options={payload.modes}
-              className="h-10 rounded-md bg-white text-sm"
+              className="h-10 rounded-md bg-surface text-sm"
             />
             <SelectInput
               value={status}
               onChange={(event) => setStatus(event.target.value)}
               placeholder="All statuses"
               options={payload.statuses}
-              className="h-10 rounded-md bg-white text-sm"
+              className="h-10 rounded-md bg-surface text-sm"
             />
             <input
               type="date"
               value={date}
               onChange={(event) => setDate(event.target.value)}
-              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-blue-600"
+              className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
               aria-label="Filter by payment date"
             />
           </div>
           <div className="flex items-center gap-3">
-            <span className="whitespace-nowrap text-sm text-slate-500">
+            <span className="whitespace-nowrap text-sm text-text-secondary">
               {filteredPayments.length} of {payload.payments.length} payments
             </span>
             {payload.dbConnected ? null : <StatusBadge tone="warning">Offline fallback</StatusBadge>}
@@ -575,36 +575,36 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
               key: payment.id,
               cells: [
                 <div key="customer" className="min-w-[240px] truncate">
-                  <span className="text-[15px] font-semibold text-slate-900">{payment.customerName}</span>
-                  <span className="ml-1.5 text-sm text-slate-400">
+                  <span className="text-[15px] font-semibold text-text-primary">{payment.customerName}</span>
+                  <span className="ml-1.5 text-sm text-text-muted">
                     {payment.customerCode}
                     {payment.customerArea ? ` · ${payment.customerArea}` : ""}
                   </span>
                 </div>,
                 <div key="route" className="min-w-[200px] truncate">
-                  <span className="font-medium text-slate-900">
+                  <span className="font-medium text-text-primary">
                     {routeLabel(payment.routeCode, payment.routeName)}
                   </span>
                   {payment.routeShift ? (
-                    <span className="ml-1.5 text-sm text-slate-400">
+                    <span className="ml-1.5 text-sm text-text-muted">
                       {payment.routeShift === "MORNING" ? "Morning" : "Evening"}
                     </span>
                   ) : null}
                 </div>,
-                <span key="amount" className="block text-right font-semibold text-slate-900">
+                <span key="amount" className="block text-right font-semibold text-text-primary">
                   {formatMoney(payment.amount)}
                 </span>,
                 formatDate(payment.paymentDate),
                 modeLabel(payment.mode, payload.modes),
                 <PaymentStatusButton key="status" payment={payment} statuses={payload.statuses} />,
-                <span key="reference" className="text-sm text-slate-700">
+                <span key="reference" className="text-sm text-text-primary">
                   {payment.referenceNo || payment.notes || "-"}
                 </span>,
                 <div key="actions" className="flex justify-end">
                   <ActionButton
                     type="button"
                     icon={<EditIcon className="h-[18px] w-[18px]" />}
-                    className="h-8 w-8 rounded-md border-none bg-transparent px-0 text-slate-900 shadow-none hover:bg-slate-100"
+                    className="h-8 w-8 rounded-md border-none bg-transparent px-0 text-text-primary shadow-none hover:bg-surface-muted"
                     onClick={() => openEditDialog(payment.id)}
                     aria-label="Edit payment"
                     title="Edit payment"
@@ -616,10 +616,10 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
             }))}
             emptyMessage="No payments match the selected filters"
             minWidth="min-w-[1160px]"
-            className="rounded-md border-slate-200 shadow-none"
-            headClassName="bg-slate-100/70"
+            className="rounded-md border-surface-border shadow-none"
+            headClassName="bg-surface-muted/70"
             headerCellClassName="px-5 py-2.5"
-            rowClassName="align-middle hover:bg-slate-50/60"
+            rowClassName="align-middle hover:bg-surface-muted/60"
             cellClassName="px-5 py-2.5"
           />
         </section>

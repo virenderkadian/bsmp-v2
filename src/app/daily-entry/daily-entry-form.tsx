@@ -83,11 +83,11 @@ export function DailyEntryForm({ payload }: { payload: DailyEntryPayload }) {
       <input type="hidden" name="notes" value={payload.notes} readOnly />
 
       {payload.lines.length === 0 ? (
-        <div className="rounded-md border border-dashed border-slate-300 bg-white px-4 py-10 text-center">
-          <p className="text-sm font-medium text-slate-700">
+        <div className="rounded-md border border-dashed border-surface-border-strong bg-surface px-4 py-10 text-center">
+          <p className="text-sm font-medium text-text-primary">
             No monthly sequence found for the selected route and date.
           </p>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 text-sm text-text-secondary">
             Add customers in Route Sequence for this route/month, then reload Daily Entry.
           </p>
           <Link
@@ -98,29 +98,29 @@ export function DailyEntryForm({ payload }: { payload: DailyEntryPayload }) {
           </Link>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-md border border-slate-200 bg-white shadow-sm">
+        <div className="overflow-hidden rounded-md border border-surface-border bg-surface shadow-sm">
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-slate-200">
-              <thead className="bg-slate-100">
+            <table className="min-w-full divide-y divide-surface-border">
+              <thead className="bg-surface-muted">
                 <tr>
-                  <th className="w-16 px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  <th className="w-16 px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary">
                     SR
                   </th>
-                  <th className="min-w-[280px] px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  <th className="min-w-[280px] px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary">
                     Customer Name
                   </th>
                   {productColumns.map((product) => (
                     <th
                       key={product.productId}
                       title={product.productName}
-                      className="min-w-[180px] px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500"
+                      className="min-w-[180px] px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary"
                     >
                       {product.productShortName ?? product.productName}
                     </th>
                   ))}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-200 bg-white">
+              <tbody className="divide-y divide-surface-border bg-surface">
                 {payload.lines.map((line) => {
                   const productMap = new Map(
                     line.products.map((product) => [product.productId, product]),
@@ -128,14 +128,14 @@ export function DailyEntryForm({ payload }: { payload: DailyEntryPayload }) {
 
                   return (
                     <tr key={line.customerId}>
-                      <td className="px-5 py-3.5 text-[1.05rem] font-medium text-slate-500">
+                      <td className="px-5 py-3.5 text-[1.05rem] font-medium text-text-secondary">
                         {line.sequenceNo}
                       </td>
                       <td className="px-5 py-3.5">
-                        <div className="text-sm font-semibold uppercase text-slate-900">
+                        <div className="text-sm font-semibold uppercase text-text-primary">
                           {line.customerName}
                         </div>
-                        <div className="text-xs text-slate-500">{line.customerCode}</div>
+                        <div className="text-xs text-text-secondary">{line.customerCode}</div>
                         <input type="hidden" name="customerId" value={line.customerId} readOnly />
                         <input type="hidden" name="sequenceNo" value={line.sequenceNo} readOnly />
                         <input type="hidden" name="remarks" value={line.remarks} readOnly />
@@ -171,7 +171,7 @@ export function DailyEntryForm({ payload }: { payload: DailyEntryPayload }) {
                               defaultValue={product?.quantity ?? "0"}
                               data-daily-entry-quantity="true"
                               className={cn(
-                                "h-10 w-36 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-blue-600",
+                                "h-10 w-36 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent",
                               )}
                             />
                           </td>
@@ -187,7 +187,7 @@ export function DailyEntryForm({ payload }: { payload: DailyEntryPayload }) {
       )}
 
       <ActionMessage state={state} />
-      {pending ? <div className="text-sm text-slate-500">Saving...</div> : null}
+      {pending ? <div className="text-sm text-text-secondary">Saving...</div> : null}
     </form>
   );
 }

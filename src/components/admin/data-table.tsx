@@ -57,20 +57,20 @@ export function DataTable({
   return (
     <div
       className={cn(
-        "overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm",
+        "overflow-hidden rounded-xl border border-surface-border bg-surface shadow-sm",
         className,
       )}
     >
       <div className="overflow-x-auto">
-        <table className={cn(minWidth, "w-full divide-y divide-slate-200", tableClassName)}>
-          <thead className={cn("bg-slate-50", headClassName)}>
+        <table className={cn(minWidth, "w-full divide-y divide-surface-border", tableClassName)}>
+          <thead className={cn("bg-surface-muted", headClassName)}>
             <tr>
               {normalizedColumns.map((column) => (
                 <th
                   key={column.key}
                   style={column.className ? undefined : { width: autoColumnWidth }}
                   className={cn(
-                    "px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-slate-500",
+                    "px-4 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary",
                     headerCellClassName,
                     column.headerClassName,
                   )}
@@ -80,9 +80,9 @@ export function DataTable({
               ))}
             </tr>
           </thead>
-          <tbody className={cn("divide-y divide-slate-200 bg-white", bodyClassName)}>
+          <tbody className={cn("divide-y divide-surface-border bg-surface", bodyClassName)}>
             {rows.map((row) => (
-              <tr key={row.key} className={cn("text-sm text-slate-700", rowClassName, row.className)}>
+              <tr key={row.key} className={cn("text-sm text-text-primary", rowClassName, row.className)}>
                 {row.cells.map((cell, index) => (
                   <td
                     key={`${row.key}-${index}`}

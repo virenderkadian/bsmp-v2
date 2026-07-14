@@ -6,14 +6,14 @@ type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
 };
 
 const baseStyles =
-  "inline-flex h-10 items-center justify-center gap-2 rounded-lg border px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400";
+  "inline-flex h-10 items-center justify-center gap-2 rounded-lg border px-4 text-sm font-medium transition disabled:cursor-not-allowed disabled:border-surface-border disabled:bg-surface-muted disabled:text-text-muted";
 
 export function PrimaryButton({ className, icon, children, ...props }: ButtonProps) {
   return (
     <button
       className={cn(
         baseStyles,
-        "border-blue-600 bg-blue-600 text-white hover:bg-blue-700",
+        "border-accent bg-accent text-accent-contrast hover:bg-accent-hover",
         className,
       )}
       {...props}
@@ -29,7 +29,7 @@ export function SecondaryButton({ className, icon, children, ...props }: ButtonP
     <button
       className={cn(
         baseStyles,
-        "border-slate-300 bg-white text-slate-600 hover:bg-slate-50",
+        "border-surface-border-strong bg-surface text-text-secondary hover:bg-surface-muted",
         className,
       )}
       {...props}
@@ -44,7 +44,7 @@ export function ActionButton({ className, icon, children, ...props }: ButtonProp
   return (
     <button
       className={cn(
-        "inline-flex h-8 items-center justify-center gap-1 rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60",
+        "inline-flex h-8 items-center justify-center gap-1 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-secondary transition hover:bg-surface-muted disabled:cursor-not-allowed disabled:opacity-60",
         className,
       )}
       {...props}

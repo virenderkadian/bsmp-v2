@@ -18,7 +18,7 @@ export function MasterTabs<TValue extends string>({
   className?: string;
 }) {
   return (
-    <div className={cn("inline-flex rounded-md border border-slate-200 bg-[#0F172A] p-1 shadow-sm", className)}>
+    <div className={cn("inline-flex items-center gap-1 rounded-lg border border-surface-border bg-surface-muted p-1", className)}>
       {tabs.map((tab) => {
         const isActive = activeValue === tab.value;
 
@@ -28,16 +28,16 @@ export function MasterTabs<TValue extends string>({
             type="button"
             onClick={() => onChange(tab.value)}
             className={cn(
-              "inline-flex h-9 items-center gap-2 rounded px-4 text-sm font-semibold transition flex-1 justify-center",
-              isActive ? "bg-[#2a446e] text-blue-400" : "text-slate-300 hover:bg-[#2a446e]/80 hover:text-white",
+              "inline-flex h-8 items-center gap-2 rounded-md px-3.5 text-sm font-medium transition",
+              isActive ? "bg-surface text-accent-soft-text shadow-sm" : "text-text-secondary hover:text-text-primary",
             )}
           >
             {tab.label}
             {typeof tab.count === "number" ? (
               <span
                 className={cn(
-                  "rounded-full px-2 py-0.5 text-xs",
-                  isActive ? "bg-blue-100 text-blue-700" : "bg-slate-100 text-slate-500",
+                  "rounded-full px-1.5 py-0.5 text-[11px] font-semibold leading-none",
+                  isActive ? "bg-accent-soft text-accent-soft-text" : "bg-surface-border text-text-secondary",
                 )}
               >
                 {tab.count}

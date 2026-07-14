@@ -29,7 +29,7 @@ export default async function MonthlyBillsPrintAllPage({
           actions={
             <Link
               href="/monthly-bills"
-              className="inline-flex h-10 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+              className="inline-flex h-10 items-center justify-center rounded-lg border border-surface-border-strong bg-surface px-4 text-sm font-medium text-text-secondary transition hover:bg-surface-muted"
             >
               Back to bills
             </Link>
@@ -55,7 +55,7 @@ export default async function MonthlyBillsPrintAllPage({
             <>
               <Link
                 href="/monthly-bills"
-                className="inline-flex h-10 items-center justify-center rounded-lg border border-slate-300 bg-white px-4 text-sm font-medium text-slate-600 transition hover:bg-slate-50"
+                className="inline-flex h-10 items-center justify-center rounded-lg border border-surface-border-strong bg-surface px-4 text-sm font-medium text-text-secondary transition hover:bg-surface-muted"
               >
                 Back to bills
               </Link>
@@ -72,7 +72,7 @@ export default async function MonthlyBillsPrintAllPage({
       </div>
 
       {payload.bills.length === 0 && !payload.error ? (
-        <section className="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm print:hidden">
+        <section className="rounded-xl border border-surface-border bg-surface p-5 text-sm text-text-secondary shadow-sm print:hidden">
           No generated bills found for this route and month yet. Generate bills first from the Monthly
           Bills screen.
         </section>

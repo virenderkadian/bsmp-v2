@@ -1,4 +1,5 @@
 import type { Payment, PaymentMode, PaymentStatus, RouteShift } from "@prisma/client";
+import { getCurrentCityId } from "@/lib/current-city";
 import { withDbTimeout } from "@/lib/db-timeout";
 import { prisma } from "@/lib/prisma";
 
@@ -129,9 +130,10 @@ function fallbackPayload(error?: string): PaymentsPayload {
 
 export async function getPaymentsPayload(): Promise<PaymentsPayload> {
   try {
+    const cityId = await getCurrentCityId();
     const [customers, routes, customerRouteLinks, payments] = await withDbTimeout(Promise.all([
       prisma.customer.findMany({
-        where: { isActive: true },
+        where: { cityId, isActive: true },
         orderBy: { code: "asc" },
         select: {
           id: true,
@@ -142,7 +144,7 @@ export async function getPaymentsPayload(): Promise<PaymentsPayload> {
         },
       }),
       prisma.route.findMany({
-        where: { isActive: true },
+        where: { cityId, isActive: true },
         orderBy: [{ shift: "asc" }, { code: "asc" }],
         select: {
           id: true,
@@ -152,7 +154,7 @@ export async function getPaymentsPayload(): Promise<PaymentsPayload> {
         },
       }),
       prisma.monthlyRouteCustomerSequence.findMany({
-        where: { status: "ACTIVE" },
+        where: { status: "ACTIVE", route: { cityId } },
         orderBy: [{ sequenceMonth: "desc" }, { route: { code: "asc" } }],
         select: {
           customerId: true,
@@ -161,6 +163,7 @@ export async function getPaymentsPayload(): Promise<PaymentsPayload> {
         },
       }),
       prisma.payment.findMany({
+        where: { customer: { cityId } },
         orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
         select: {
           id: true,
@@ -238,8 +241,9 @@ export async function getBulkPaymentPayload(input?: {
   const { start, end } = getMonthBounds(billingMonth);
 
   try {
+    const cityId = await getCurrentCityId();
     const routes = await withDbTimeout(prisma.route.findMany({
-      where: { isActive: true },
+      where: { cityId, isActive: true },
       orderBy: [{ shift: "asc" }, { code: "asc" }],
       select: {
         id: true,

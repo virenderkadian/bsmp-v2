@@ -142,7 +142,7 @@ function RouteDialog({
             {state.message}
           </p>
         ) : null}
-        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 pt-4">
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-surface-border pt-4">
           <StatusBadge tone={dbConnected ? "success" : "warning"}>
             {dbConnected ? "Live data" : "Offline fallback"}
           </StatusBadge>
@@ -209,7 +209,7 @@ function VehicleDialog({
             {state.message}
           </p>
         ) : null}
-        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-slate-200 pt-4">
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-surface-border pt-4">
           <StatusBadge tone={dbConnected ? "success" : "warning"}>
             {dbConnected ? "Live data" : "Offline fallback"}
           </StatusBadge>
@@ -281,7 +281,7 @@ function RouteTab({
               { value: "MORNING", label: "Morning" },
               { value: "EVENING", label: "Evening" },
             ]}
-            className="h-10 rounded-md bg-white text-sm"
+            className="h-10 rounded-md bg-surface text-sm"
           />
           <SelectInput
             value={status}
@@ -291,7 +291,7 @@ function RouteTab({
               { value: "ACTIVE", label: "Active" },
               { value: "INACTIVE", label: "Inactive" },
             ]}
-            className="h-10 rounded-md bg-white text-sm"
+            className="h-10 rounded-md bg-surface text-sm"
           />
           <SelectInput
             value={vehicleId}
@@ -301,7 +301,7 @@ function RouteTab({
               value: vehicle.id,
               label: `${vehicle.code} - ${vehicle.name}`,
             }))}
-            className="h-10 rounded-md bg-white text-sm"
+            className="h-10 rounded-md bg-surface text-sm"
           />
         </div>
         <div className="flex items-center gap-2">
@@ -316,8 +316,8 @@ function RouteTab({
 
       <section className="space-y-4">
         <div>
-          <h2 className="text-base font-semibold text-slate-900">Route directory</h2>
-          <p className="mt-0.5 text-sm text-slate-500">
+          <h2 className="text-base font-semibold text-text-primary">Route directory</h2>
+          <p className="mt-0.5 text-sm text-text-secondary">
             Showing {filteredRoutes.length} of {routes.length} routes
           </p>
         </div>
@@ -338,8 +338,8 @@ function RouteTab({
             key: route.id,
             cells: [
               <div key="route" className="min-w-[220px]">
-                <p className="text-[15px] font-semibold leading-6 text-slate-900">{route.name}</p>
-                <p className="mt-0.5 text-sm text-slate-500">{route.code}</p>
+                <p className="text-[15px] font-semibold leading-6 text-text-primary">{route.name}</p>
+                <p className="mt-0.5 text-sm text-text-secondary">{route.code}</p>
               </div>,
               <span key="shift" className="text-sm text-slate-800">
                 {route.shift === "MORNING" ? "Morning" : "Evening"}
@@ -359,7 +359,7 @@ function RouteTab({
                 <ActionButton
                   type="button"
                   icon={<EditIcon className="h-[18px] w-[18px]" />}
-                  className="h-8 w-8 rounded-md border-none bg-transparent px-0 text-slate-900 shadow-none hover:bg-slate-100"
+                  className="h-8 w-8 rounded-md border-none bg-transparent px-0 text-text-primary shadow-none hover:bg-surface-muted"
                   onClick={() => onEditRoute(route.id)}
                   aria-label="Edit route"
                   title="Edit route"
@@ -371,10 +371,10 @@ function RouteTab({
           }))}
           emptyMessage="No routes match the selected filters"
           minWidth="min-w-[820px]"
-          className="rounded-md border-slate-200 shadow-none"
-          headClassName="bg-slate-100/70"
+          className="rounded-md border-surface-border shadow-none"
+          headClassName="bg-surface-muted/70"
           headerCellClassName="px-5 py-3"
-          rowClassName="align-middle hover:bg-slate-50/60"
+          rowClassName="align-middle hover:bg-surface-muted/60"
           cellClassName="px-5 py-3.5"
         />
       </section>
@@ -433,7 +433,7 @@ function VehicleTab({
               { value: "ACTIVE", label: "Active" },
               { value: "INACTIVE", label: "Inactive" },
             ]}
-            className="h-10 rounded-md bg-white text-sm"
+            className="h-10 rounded-md bg-surface text-sm"
           />
         </div>
         <div className="flex items-center gap-2">
@@ -448,8 +448,8 @@ function VehicleTab({
 
       <section className="space-y-4">
         <div>
-          <h2 className="text-base font-semibold text-slate-900">Vehicle directory</h2>
-          <p className="mt-0.5 text-sm text-slate-500">
+          <h2 className="text-base font-semibold text-text-primary">Vehicle directory</h2>
+          <p className="mt-0.5 text-sm text-text-secondary">
             Showing {filteredVehicles.length} of {vehicles.length} vehicles
           </p>
         </div>
@@ -469,8 +469,8 @@ function VehicleTab({
             key: vehicle.id,
             cells: [
               <div key="vehicle" className="min-w-[220px]">
-                <p className="text-[15px] font-semibold leading-6 text-slate-900">{vehicle.name}</p>
-                <p className="mt-0.5 text-sm text-slate-500">{vehicle.code}</p>
+                <p className="text-[15px] font-semibold leading-6 text-text-primary">{vehicle.name}</p>
+                <p className="mt-0.5 text-sm text-text-secondary">{vehicle.code}</p>
               </div>,
               <span key="registration" className="text-sm text-slate-800">
                 {vehicle.registration ?? "-"}
@@ -487,7 +487,7 @@ function VehicleTab({
                 <ActionButton
                   type="button"
                   icon={<EditIcon className="h-[18px] w-[18px]" />}
-                  className="h-8 w-8 rounded-md border-none bg-transparent px-0 text-slate-900 shadow-none hover:bg-slate-100"
+                  className="h-8 w-8 rounded-md border-none bg-transparent px-0 text-text-primary shadow-none hover:bg-surface-muted"
                   onClick={() => onEditVehicle(vehicle.id)}
                   aria-label="Edit vehicle"
                   title="Edit vehicle"
@@ -499,10 +499,10 @@ function VehicleTab({
           }))}
           emptyMessage="No vehicles match the selected filters"
           minWidth="min-w-[720px]"
-          className="rounded-md border-slate-200 shadow-none"
-          headClassName="bg-slate-100/70"
+          className="rounded-md border-surface-border shadow-none"
+          headClassName="bg-surface-muted/70"
           headerCellClassName="px-5 py-3"
-          rowClassName="align-middle hover:bg-slate-50/60"
+          rowClassName="align-middle hover:bg-surface-muted/60"
           cellClassName="px-5 py-3.5"
         />
       </section>

@@ -76,8 +76,8 @@ export function ActiveStatusToggle({
         {submitted && state.status === "error" && state.message ? (
           <p className="text-sm font-medium text-rose-700">{state.message}</p>
         ) : null}
-        <p className="rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-600">
-          {titleLabel}: <span className="font-semibold text-slate-900">{name}</span>
+        <p className="rounded-lg bg-surface-muted px-3 py-2 text-sm text-text-secondary">
+          {titleLabel}: <span className="font-semibold text-text-primary">{name}</span>
         </p>
       </ConfirmDialog>
     </>

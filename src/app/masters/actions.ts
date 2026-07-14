@@ -3,6 +3,7 @@
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { getCurrentCityId } from "@/lib/current-city";
 import { prisma } from "@/lib/prisma";
 
 export type ActionState = {
@@ -25,6 +26,7 @@ const productSchema = z.object({
   defaultRate: z.coerce.number().positive("Default rate must be greater than zero."),
   displayOrder: optionalDisplayOrderSchema,
   showInDailyEntry: z.boolean().optional(),
+  includeInReconciliation: z.boolean().optional(),
 });
 
 const vehicleSchema = z.object({
@@ -73,7 +75,6 @@ function asNullable(value: string) {
 async function runAction(action: () => Promise<void>, successMessage: string): Promise<ActionState> {
   try {
     await action();
-    revalidatePath("/masters");
     revalidatePath("/products");
     revalidatePath("/customers");
     revalidatePath("/routes");
@@ -117,6 +118,9 @@ export async function createProduct(_prevState: ActionState = idleState, formDat
     showInDailyEntry: formData.has("showInDailyEntry")
       ? getValue(formData, "showInDailyEntry") === "true"
       : undefined,
+    includeInReconciliation: formData.has("includeInReconciliation")
+      ? getValue(formData, "includeInReconciliation") === "true"
+      : undefined,
   });
 
   if (!parsed.success) {
@@ -124,9 +128,11 @@ export async function createProduct(_prevState: ActionState = idleState, formDat
   }
 
   return runAction(async () => {
+    const cityId = await getCurrentCityId();
     const nextDisplayOrder =
       parsed.data.displayOrder ??
       ((await prisma.product.aggregate({
+        where: { cityId },
         _max: {
           displayOrder: true,
         },
@@ -134,6 +140,7 @@ export async function createProduct(_prevState: ActionState = idleState, formDat
 
     await prisma.product.create({
       data: {
+        cityId,
         code: parsed.data.code,
         name: parsed.data.name,
         shortName: asNullable(parsed.data.shortName ?? ""),
@@ -141,6 +148,7 @@ export async function createProduct(_prevState: ActionState = idleState, formDat
         defaultRate: parsed.data.defaultRate,
         displayOrder: nextDisplayOrder,
         showInDailyEntry: parsed.data.showInDailyEntry ?? true,
+        includeInReconciliation: parsed.data.includeInReconciliation ?? false,
       },
     });
   }, "Product created.");
@@ -158,6 +166,9 @@ export async function updateProduct(_prevState: ActionState = idleState, formDat
     displayOrder: formData.has("displayOrder") ? getValue(formData, "displayOrder") : undefined,
     showInDailyEntry: formData.has("showInDailyEntry")
       ? getValue(formData, "showInDailyEntry") === "true"
+      : undefined,
+    includeInReconciliation: formData.has("includeInReconciliation")
+      ? getValue(formData, "includeInReconciliation") === "true"
       : undefined,
   });
 
@@ -185,6 +196,10 @@ export async function updateProduct(_prevState: ActionState = idleState, formDat
       updateData.showInDailyEntry = parsed.data.showInDailyEntry;
     }
 
+    if (parsed.data.includeInReconciliation !== undefined) {
+      updateData.includeInReconciliation = parsed.data.includeInReconciliation;
+    }
+
     await prisma.product.update({
       where: { id: parsed.data.id },
       data: updateData,
@@ -207,6 +222,7 @@ export async function createVehicle(_prevState: ActionState = idleState, formDat
   return runAction(async () => {
     await prisma.vehicle.create({
       data: {
+        cityId: await getCurrentCityId(),
         code: parsed.data.code,
         name: parsed.data.name,
         registration: asOptional(parsed.data.registration ?? ""),
@@ -258,6 +274,7 @@ export async function createRoute(_prevState: ActionState = idleState, formData:
   return runAction(async () => {
     await prisma.route.create({
       data: {
+        cityId: await getCurrentCityId(),
         code: parsed.data.code,
         name: parsed.data.name,
         shift: parsed.data.shift,
@@ -317,6 +334,7 @@ export async function createCustomer(_prevState: ActionState = idleState, formDa
   return runAction(async () => {
     await prisma.customer.create({
       data: {
+        cityId: await getCurrentCityId(),
         code: parsed.data.code,
         name: parsed.data.name,
         area: asOptional(parsed.data.area ?? ""),
