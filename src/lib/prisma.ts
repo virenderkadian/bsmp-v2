@@ -77,9 +77,7 @@ const baseClient =
     log: process.env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
   });
 
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = baseClient;
-}
+globalForPrisma.prisma = baseClient;
 
 export const prisma = baseClient.$extends({
   name: "city-scope-guard",
