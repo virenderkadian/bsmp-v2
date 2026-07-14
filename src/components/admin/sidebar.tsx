@@ -115,38 +115,50 @@ export function Sidebar({
       </nav>
 
       <div className="border-t border-sidebar-border pt-4">
-        {user ? (
-          collapsed ? (
-            <div
-              className="mx-auto mb-3 flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-accent to-accent-hover text-xs font-semibold text-accent-contrast shadow-sm"
-              title={`${user.fullName} · ${roleLabel(user.role)}`}
-            >
-              {initials(user.fullName)}
-            </div>
-          ) : (
-            <div className="mb-3 flex items-center gap-3 rounded-lg border border-sidebar-border bg-surface/70 p-3 text-sm">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-accent to-accent-hover text-xs font-semibold text-accent-contrast shadow-sm">
+        {collapsed ? (
+          <div className="flex flex-col items-center gap-2">
+            {user ? (
+              <div
+                className="flex h-9 w-9 items-center justify-center rounded-full bg-gradient-to-br from-accent to-accent-hover text-xs font-semibold text-accent-contrast shadow-sm"
+                title={`${user.fullName} · ${roleLabel(user.role)}`}
+              >
                 {initials(user.fullName)}
               </div>
-              <div className="min-w-0">
-                <p className="truncate font-medium text-text-primary">{user.fullName}</p>
-                <p className="mt-0.5 text-xs text-sidebar-text-muted">{roleLabel(user.role)}</p>
-              </div>
-            </div>
-          )
-        ) : null}
-        <button
-          type="button"
-          onClick={() => signOut()}
-          title={collapsed ? "Logout" : undefined}
-          className={cn(
-            "flex w-full items-center gap-2 rounded-lg border border-sidebar-border bg-surface/60 px-3 py-2 text-sm font-medium text-sidebar-text transition-all duration-150 hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600",
-            collapsed && "justify-center px-0",
-          )}
-        >
-          <LogoutIcon className="h-4 w-4 shrink-0" />
-          {collapsed ? null : "Logout"}
-        </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => signOut()}
+              title="Logout"
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-sidebar-text-muted transition hover:bg-rose-50 hover:text-rose-600"
+            >
+              <LogoutIcon className="h-4 w-4" />
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 rounded-lg border border-sidebar-border bg-surface/70 p-3 text-sm">
+            {user ? (
+              <>
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-accent to-accent-hover text-xs font-semibold text-accent-contrast shadow-sm">
+                  {initials(user.fullName)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-medium text-text-primary">{user.fullName}</p>
+                  <p className="mt-0.5 text-xs text-sidebar-text-muted">{roleLabel(user.role)}</p>
+                </div>
+              </>
+            ) : (
+              <div className="min-w-0 flex-1 text-sidebar-text-muted">Signed in</div>
+            )}
+            <button
+              type="button"
+              onClick={() => signOut()}
+              title="Logout"
+              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sidebar-text-muted transition hover:bg-rose-50 hover:text-rose-600"
+            >
+              <LogoutIcon className="h-4 w-4" />
+            </button>
+          </div>
+        )}
       </div>
     </aside>
   );

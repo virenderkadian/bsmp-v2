@@ -18,7 +18,7 @@ export function MasterTabs<TValue extends string>({
   className?: string;
 }) {
   return (
-    <div className={cn("inline-flex items-center gap-1 rounded-lg border border-surface-border bg-surface-muted p-1", className)}>
+    <div className={cn("inline-flex w-fit items-center gap-1 self-start rounded-lg border border-surface-border bg-surface-muted p-1", className)}>
       {tabs.map((tab) => {
         const isActive = activeValue === tab.value;
 
