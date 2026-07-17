@@ -1,5 +1,6 @@
-import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
+import { PrimaryButton } from "@/components/admin/buttons";
 import { DailyEntryForm } from "@/app/daily-entry/daily-entry-form";
+import { DailyEntryToolbar } from "@/app/daily-entry/daily-entry-toolbar";
 import { PageHeader } from "@/components/admin/page-header";
 import { getDailyEntryPayload } from "@/lib/daily-entry";
 
@@ -20,31 +21,12 @@ export default async function DailyEntryPage({
         title="Daily Entry"
         subtitle="Record daily deliveries using the selected route/month customer sequence."
         actions={
-          <form action="/daily-entry" className="flex flex-wrap items-center gap-3">
-            <input
-              name="entryDate"
-              type="date"
-              defaultValue={payload.selectedDate}
-              className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
+          <div className="flex flex-wrap items-center gap-3">
+            <DailyEntryToolbar
+              selectedDate={payload.selectedDate}
+              selectedRouteId={payload.selectedRouteId}
+              routes={payload.routes}
             />
-            <select
-              name="routeId"
-              defaultValue={payload.selectedRouteId}
-              className="h-10 min-w-72 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
-            >
-              {payload.routes.length === 0 ? (
-                <option value="">Select route</option>
-              ) : (
-                payload.routes.map((route) => (
-                  <option key={route.id} value={route.id}>
-                    {route.name}
-                  </option>
-                ))
-              )}
-            </select>
-            <SecondaryButton type="submit" className="h-10 rounded-md px-4 text-sm font-semibold">
-              Reload
-            </SecondaryButton>
             <PrimaryButton
               type="submit"
               form="daily-entry-form"
@@ -53,7 +35,7 @@ export default async function DailyEntryPage({
             >
               Save All
             </PrimaryButton>
-          </form>
+          </div>
         }
       />
 

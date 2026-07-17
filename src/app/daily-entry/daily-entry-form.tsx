@@ -1,15 +1,21 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import type { DailyEntryPayload } from "@/lib/daily-entry";
 import {
   saveDailyEntry,
   type DailyEntryActionState,
 } from "@/app/daily-entry/actions";
+import { Toast, type ToastTone } from "@/components/admin/toast";
 import { cn } from "@/lib/utils";
 
 const initialState: DailyEntryActionState = { status: "idle" };
+
+type ToastState = {
+  tone: ToastTone;
+  message: string;
+};
 
 function ActionMessage({ state }: { state: DailyEntryActionState }) {
   if (state.status === "idle" || !state.message) {
@@ -29,6 +35,38 @@ function ActionMessage({ state }: { state: DailyEntryActionState }) {
 
 export function DailyEntryForm({ payload }: { payload: DailyEntryPayload }) {
   const [state, formAction, pending] = useActionState(saveDailyEntry, initialState);
+
+  // Save All lives in the page header, well above this (often long) table —
+  // a plain inline message at the bottom of the form is easy to miss
+  // entirely after clicking it. A toast is fixed-position, so it's visible
+  // regardless of scroll position or how many customers are on this route.
+  const [toast, setToast] = useState<ToastState | null>(null);
+  const lastMessageRef = useRef("");
+
+  useEffect(() => {
+    if (state.status === "idle" || !state.message) {
+      return;
+    }
+
+    const key = `${state.status}:${state.message}`;
+
+    if (lastMessageRef.current === key) {
+      return;
+    }
+
+    lastMessageRef.current = key;
+    setToast({ tone: state.status === "success" ? "success" : "error", message: state.message });
+  }, [state.message, state.status]);
+
+  useEffect(() => {
+    if (!toast) {
+      return undefined;
+    }
+
+    const timeout = window.setTimeout(() => setToast(null), 2600);
+
+    return () => window.clearTimeout(timeout);
+  }, [toast]);
   const productColumns = Array.from(
     new Map(
       payload.lines.flatMap((line) =>
@@ -188,6 +226,7 @@ export function DailyEntryForm({ payload }: { payload: DailyEntryPayload }) {
 
       <ActionMessage state={state} />
       {pending ? <div className="text-sm text-text-secondary">Saving...</div> : null}
+      {toast ? <Toast tone={toast.tone}>{toast.message}</Toast> : null}
     </form>
   );
 }

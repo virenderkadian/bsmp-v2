@@ -652,7 +652,13 @@ export function MonthlyRouteSequenceScreen({ payload }: { payload: MonthlyRouteS
     setSuggestionsOpen(false);
     setHighlightedIndex(0);
     formRef.current?.requestSubmit();
-    window.setTimeout(() => searchInputRef.current?.focus(), 0);
+    // Called synchronously, in the same tick as the triggering click/Enter
+    // keypress, rather than deferred via setTimeout — some mobile browsers
+    // only reopen the on-screen keyboard for a focus() call that's still
+    // within the original user-gesture stack; a deferred call can leave the
+    // input focused (caret visible) without the keyboard, which reads as
+    // "nothing happened" and prompts another manual tap.
+    searchInputRef.current?.focus();
   };
 
   return (
