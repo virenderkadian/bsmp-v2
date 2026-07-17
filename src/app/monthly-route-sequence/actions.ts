@@ -3,6 +3,7 @@
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { nextCustomerCode } from "@/lib/customer-code";
 import { monthInputToDate } from "@/lib/monthly-route-sequence";
 import { prisma } from "@/lib/prisma";
 
@@ -28,7 +29,6 @@ const addSequenceLineSchema = z.object({
 const quickCreateCustomerSequenceSchema = addSequenceLineSchema
   .omit({ customerId: true })
   .extend({
-    code: z.string().trim().min(2, "Code is required."),
     name: z.string().trim().min(2, "Customer name is required."),
     area: z.string().trim().optional(),
     mobile: z.string().trim().optional(),
@@ -203,7 +203,6 @@ export async function createCustomerAndAddToMonthlyRouteSequence(
   const parsed = quickCreateCustomerSequenceSchema.safeParse({
     routeId: getValue(formData, "routeId"),
     sequenceMonth: getValue(formData, "sequenceMonth"),
-    code: getValue(formData, "code"),
     name: getValue(formData, "name"),
     area: getValue(formData, "area"),
     mobile: getValue(formData, "mobile"),
@@ -225,20 +224,42 @@ export async function createCustomerAndAddToMonthlyRouteSequence(
         select: { cityId: true },
       });
 
-      const createdCustomer = await tx.customer.create({
-        data: {
-          cityId: route.cityId,
-          code: parsed.data.code,
-          name: parsed.data.name,
-          area: asOptional(parsed.data.area),
-          mobile: asOptional(parsed.data.mobile),
-          openingBalance: parsed.data.openingBalance,
-          isActive: true,
-        },
-        select: {
-          id: true,
-        },
-      });
+      // See createCustomer in src/app/masters/actions.ts for why this
+      // retries on a code conflict instead of surfacing it: two customers
+      // created at nearly the same moment could compute the same "next"
+      // code before either commits, and the user never typed a code here.
+      let createdCustomer: { id: string } | undefined;
+
+      for (let attempt = 0; !createdCustomer; attempt += 1) {
+        const code = await nextCustomerCode(tx, route.cityId);
+
+        try {
+          createdCustomer = await tx.customer.create({
+            data: {
+              cityId: route.cityId,
+              code,
+              name: parsed.data.name,
+              area: asOptional(parsed.data.area),
+              mobile: asOptional(parsed.data.mobile),
+              openingBalance: parsed.data.openingBalance,
+              isActive: true,
+            },
+            select: {
+              id: true,
+            },
+          });
+        } catch (error) {
+          const isCodeConflict =
+            error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === "P2002" &&
+            Array.isArray(error.meta?.target) &&
+            error.meta.target.includes("code");
+
+          if (!isCodeConflict || attempt >= 4) {
+            throw error;
+          }
+        }
+      }
 
       const maxSequence = await tx.monthlyRouteCustomerSequence.aggregate({
         where: {

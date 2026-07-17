@@ -62,11 +62,13 @@ function getDraftFromForm(formData: FormData): CustomerDraft {
   };
 }
 
-function CustomerFormFields({ draft }: { draft: CustomerDraft }) {
+function CustomerFormFields({ draft, mode }: { draft: CustomerDraft; mode: CustomerDialogMode }) {
   return (
     <div className="grid gap-4 md:grid-cols-2">
-      <FormInput label="Code" name="code" placeholder="CUS-104" defaultValue={draft.code} autoFocus />
-      <FormInput label="Name" name="name" placeholder="Deepak Meena" defaultValue={draft.name} />
+      {mode === "edit" ? (
+        <FormInput label="Code" name="code" placeholder="CUS-104" defaultValue={draft.code} />
+      ) : null}
+      <FormInput label="Name" name="name" placeholder="Deepak Meena" defaultValue={draft.name} autoFocus={mode === "create"} />
       <FormInput label="Area" name="area" placeholder="Mansarovar" defaultValue={draft.area} />
       <FormInput label="Mobile" name="mobile" placeholder="98290 11224" defaultValue={draft.mobile} />
       <div className="md:col-span-2">
@@ -157,7 +159,7 @@ function CustomerDialog({
         }}
       >
         {mode === "edit" && draft.id ? <input type="hidden" name="id" value={draft.id} /> : null}
-        <CustomerFormFields draft={draft} />
+        <CustomerFormFields draft={draft} mode={mode} />
         {state.status !== "idle" && state.message ? (
           <p className={`text-sm ${state.status === "success" ? "text-emerald-700" : "text-rose-700"}`}>
             {state.message}

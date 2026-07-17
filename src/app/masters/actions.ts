@@ -4,6 +4,7 @@ import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getCurrentCityId } from "@/lib/current-city";
+import { nextCustomerCode } from "@/lib/customer-code";
 import { prisma } from "@/lib/prisma";
 
 export type ActionState = {
@@ -51,6 +52,11 @@ const customerSchema = z.object({
   mobile: z.string().trim().optional(),
   openingBalance: z.coerce.number().min(0, "Opening balance cannot be negative."),
 });
+
+// Code is auto-generated on create (see nextCustomerCode) — this schema
+// deliberately excludes it. customerSchema above still carries a required
+// code for updateCustomer, where it stays manually editable.
+const customerCreateSchema = customerSchema.omit({ code: true });
 
 const idSchema = z.string().trim().min(1, "Record id is required.");
 
@@ -319,8 +325,7 @@ export async function updateRoute(_prevState: ActionState = idleState, formData:
 
 export async function createCustomer(_prevState: ActionState = idleState, formData: FormData): Promise<ActionState> {
   void _prevState;
-  const parsed = customerSchema.safeParse({
-    code: getValue(formData, "code"),
+  const parsed = customerCreateSchema.safeParse({
     name: getValue(formData, "name"),
     area: getValue(formData, "area"),
     mobile: getValue(formData, "mobile"),
@@ -332,16 +337,39 @@ export async function createCustomer(_prevState: ActionState = idleState, formDa
   }
 
   return runAction(async () => {
-    await prisma.customer.create({
-      data: {
-        cityId: await getCurrentCityId(),
-        code: parsed.data.code,
-        name: parsed.data.name,
-        area: asOptional(parsed.data.area ?? ""),
-        mobile: asOptional(parsed.data.mobile ?? ""),
-        openingBalance: parsed.data.openingBalance,
-      },
-    });
+    const cityId = await getCurrentCityId();
+
+    // Two customers created at nearly the same moment could compute the
+    // same "next" code before either commits — retry with a freshly
+    // recomputed code on that specific conflict rather than surfacing it
+    // as an error, since the user never typed a code to begin with.
+    for (let attempt = 0; ; attempt += 1) {
+      const code = await nextCustomerCode(prisma, cityId);
+
+      try {
+        await prisma.customer.create({
+          data: {
+            cityId,
+            code,
+            name: parsed.data.name,
+            area: asOptional(parsed.data.area ?? ""),
+            mobile: asOptional(parsed.data.mobile ?? ""),
+            openingBalance: parsed.data.openingBalance,
+          },
+        });
+        return;
+      } catch (error) {
+        const isCodeConflict =
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2002" &&
+          Array.isArray(error.meta?.target) &&
+          error.meta.target.includes("code");
+
+        if (!isCodeConflict || attempt >= 4) {
+          throw error;
+        }
+      }
+    }
   }, "Customer created.");
 }
 

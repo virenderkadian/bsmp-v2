@@ -66,8 +66,7 @@ export function CustomerQuickCreateDialog({
         ))}
 
         <div className="grid gap-4 md:grid-cols-2">
-          <FormInput label="Code" name="code" placeholder="CUS-104" autoFocus />
-          <FormInput label="Name" name="name" placeholder="Customer name" defaultValue={defaultName} />
+          <FormInput label="Name" name="name" placeholder="Customer name" defaultValue={defaultName} autoFocus />
           <FormInput label="Area" name="area" placeholder="Area / sector" />
           <FormInput label="Mobile" name="mobile" placeholder="Mobile number" />
           <div className="md:col-span-2">
