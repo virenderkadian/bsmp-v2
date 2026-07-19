@@ -7,9 +7,11 @@ import { ActionButton, PrimaryButton, SecondaryButton } from "@/components/admin
 import { DataTable } from "@/components/admin/data-table";
 import { Dialog } from "@/components/admin/dialog";
 import { FormInput } from "@/components/admin/form-input";
-import { EditIcon, PlusIcon } from "@/components/admin/icons";
+import { PencilSquareIcon, PlusIcon } from "@/components/admin/icons";
 import { KeyboardForm } from "@/components/admin/keyboard-form";
-import { PageHeader } from "@/components/admin/page-header";
+import { usePageMetric } from "@/components/admin/page-metric";
+import { Pagination } from "@/components/admin/pagination";
+import { usePagination } from "@/lib/use-pagination";
 import { SearchInput } from "@/components/admin/search-input";
 import { SelectInput } from "@/components/admin/select-input";
 import { StatusBadge } from "@/components/admin/status-badge";
@@ -251,6 +253,12 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
 
   const hasActiveFilters = search.trim() !== "" || unit !== "" || status !== "" || dailyEntryVisibility !== "";
 
+  usePageMetric({ label: "Products", value: String(products.length) });
+
+  const pagination = usePagination(filteredProducts, {
+    resetKey: `${search}|${unit}|${status}|${dailyEntryVisibility}`,
+  });
+
   const resetFilters = () => {
     setSearch("");
     setUnit("");
@@ -265,26 +273,8 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
 
   return (
     <>
-      <PageHeader
-        actions={
-          <PrimaryButton
-            type="button"
-            icon={<PlusIcon className="h-4 w-4" />}
-            className="h-10 rounded-md px-5 text-sm font-semibold"
-            onClick={() => {
-              setSelectedProductId(null);
-              setDialogMode("create");
-            }}
-          >
-            Add product
-          </PrimaryButton>
-        }
-        title="Products & Rates"
-        subtitle="Manage product catalog, units, and default billing rates."
-      />
-
-      <section className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-        <div className="grid w-full gap-3 md:grid-cols-[minmax(260px,1fr)_150px_190px_160px] xl:max-w-5xl">
+      <section className="sticky top-[65px] z-10 -mx-4 flex flex-col gap-3 border-b border-surface-border bg-app-bg/95 px-4 py-3 backdrop-blur transition-colors duration-200 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 xl:flex-row xl:items-center xl:justify-between">
+        <div className="grid w-full gap-3 md:grid-cols-[minmax(200px,1fr)_130px_160px_150px] xl:max-w-4xl">
           <SearchInput
             name="search"
             placeholder="Search product"
@@ -326,6 +316,17 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
               Clear
             </SecondaryButton>
           ) : null}
+          <PrimaryButton
+            type="button"
+            icon={<PlusIcon className="h-4 w-4" />}
+            className="h-10 shrink-0 rounded-md px-4 text-sm font-semibold"
+            onClick={() => {
+              setSelectedProductId(null);
+              setDialogMode("create");
+            }}
+          >
+            Add product
+          </PrimaryButton>
         </div>
       </section>
 
@@ -352,20 +353,20 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
               headerClassName: "text-right",
             },
           ]}
-          rows={filteredProducts.map((product) => ({
+          rows={pagination.pageItems.map((product) => ({
             key: product.id,
             cells: [
-              <div key="product" className="min-w-[220px]">
+              <div key="product" className="min-w-[150px]">
                 <p className="text-[15px] font-semibold leading-6 text-text-primary">{product.name}</p>
                 <p className="mt-0.5 text-sm text-text-secondary">
                   {product.code}
                   {product.shortName ? ` · ${product.shortName}` : ""}
                 </p>
               </div>,
-              <span key="unit" className="text-sm text-slate-800">
+              <span key="unit" className="text-sm text-text-primary">
                 {product.unit}
               </span>,
-              <span key="order" className="block text-sm font-semibold text-slate-800">
+              <span key="order" className="block text-sm font-semibold text-text-primary">
                 {product.displayOrder}
               </span>,
               <StatusBadge key="dailyEntry" tone={product.showInDailyEntry ? "info" : "warning"}>
@@ -388,8 +389,8 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
               <div key="actions" className="flex justify-end">
                 <ActionButton
                   type="button"
-                  icon={<EditIcon className="h-[18px] w-[18px]" />}
-                  className="h-8 w-8 rounded-md border-none bg-transparent px-0 text-text-primary shadow-none hover:bg-surface-muted"
+                  icon={<PencilSquareIcon className="h-[18px] w-[18px]" />}
+                  className="h-9 w-9 justify-center rounded-md border-surface-border-strong bg-surface px-0 text-text-secondary hover:border-accent hover:bg-accent-soft hover:text-accent-soft-text"
                   onClick={() => {
                     setSelectedProductId(product.id);
                     setDialogMode("edit");
@@ -403,12 +404,22 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
             ],
           }))}
           emptyMessage="No products match the selected filters"
-          minWidth="min-w-[1120px]"
+          minWidth="min-w-[940px]"
           className="rounded-md border-surface-border shadow-none"
           headClassName="bg-surface-muted/70"
           headerCellClassName="px-5 py-3"
           rowClassName="align-middle hover:bg-surface-muted/60"
           cellClassName="px-5 py-3.5"
+        />
+
+        <Pagination
+          page={pagination.page}
+          totalPages={pagination.totalPages}
+          total={pagination.total}
+          startIndex={pagination.startIndex}
+          endIndex={pagination.endIndex}
+          onPageChange={pagination.setPage}
+          itemLabel="products"
         />
       </section>
 

@@ -1,12 +1,9 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
 import { ComparisonChart, ProductContributionCharts, TrendChart } from "@/app/dashboard-charts";
 import { DataTable } from "@/components/admin/data-table";
-import { PageHeader } from "@/components/admin/page-header";
 import {
   BillIcon,
   CheckIcon,
-  PlusIcon,
   ProductIcon,
   RouteIcon,
   SyncIcon,
@@ -143,30 +140,6 @@ export default async function Home({
 
   return (
     <div className="space-y-4">
-      <PageHeader
-        title="Dashboard"
-        subtitle="Today's operations, collections, and this month's billing cycle at a glance."
-        actions={
-          <>
-            <Link
-              href="/routes"
-              className={cn(
-                "inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-blue-600 bg-blue-600 px-4 text-sm font-medium text-white transition hover:bg-blue-700",
-              )}
-            >
-              <PlusIcon className="h-4 w-4" />
-              Manage routes
-            </Link>
-            <Link
-              href="/daily-entry"
-              className="inline-flex h-10 items-center justify-center rounded-lg border border-surface-border-strong bg-surface px-4 text-sm font-medium text-text-secondary transition hover:bg-surface-muted"
-            >
-              Open daily entry
-            </Link>
-          </>
-        }
-      />
-
       {dashboard.error ? <div className="text-sm text-rose-700">{dashboard.error}</div> : null}
 
       <SummaryStatBar

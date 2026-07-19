@@ -194,3 +194,31 @@ export function SidebarPanelIcon(props: IconProps) {
     </BaseIcon>
   );
 }
+
+export function InfoIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5" />
+      <path d="M12 8h.01" />
+    </BaseIcon>
+  );
+}
+
+export function ArrowLeftIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M19 12H5" />
+      <path d="m12 19-7-7 7-7" />
+    </BaseIcon>
+  );
+}
+
+export function PencilSquareIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M11 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-6" />
+      <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4Z" />
+    </BaseIcon>
+  );
+}

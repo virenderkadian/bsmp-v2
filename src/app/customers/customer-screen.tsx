@@ -2,15 +2,17 @@
 
 import { useActionState, useEffect, useMemo, useState } from "react";
 import type { CustomerRecord } from "@/lib/masters";
+import { usePagination } from "@/lib/use-pagination";
 import { createCustomer, setCustomerActiveState, type ActionState, updateCustomer } from "@/app/masters/actions";
 import { PrimaryButton, SecondaryButton, ActionButton } from "@/components/admin/buttons";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { DataTable } from "@/components/admin/data-table";
 import { Dialog } from "@/components/admin/dialog";
 import { FormInput } from "@/components/admin/form-input";
-import { EditIcon, PlusIcon } from "@/components/admin/icons";
+import { PencilSquareIcon, PlusIcon } from "@/components/admin/icons";
 import { KeyboardForm } from "@/components/admin/keyboard-form";
-import { PageHeader } from "@/components/admin/page-header";
+import { usePageMetric } from "@/components/admin/page-metric";
+import { Pagination } from "@/components/admin/pagination";
 import { PillToggle } from "@/components/admin/pill-toggle";
 import { SearchInput } from "@/components/admin/search-input";
 import { SelectInput } from "@/components/admin/select-input";
@@ -186,9 +188,9 @@ function CustomerRowActions({ onEdit }: { onEdit: () => void }) {
     <div className="flex items-center justify-end">
       <ActionButton
         type="button"
-        icon={<EditIcon className="h-[18px] w-[18px]" />}
+        icon={<PencilSquareIcon className="h-[18px] w-[18px]" />}
         onClick={onEdit}
-        className="h-8 w-8 rounded-md border-none bg-transparent px-0 text-text-primary shadow-none hover:bg-surface-muted"
+        className="h-9 w-9 justify-center rounded-md border-surface-border-strong bg-surface px-0 text-text-secondary hover:border-accent hover:bg-accent-soft hover:text-accent-soft-text"
         aria-label="Edit customer"
         title="Edit customer"
       >
@@ -303,6 +305,12 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
 
   const hasActiveFilters = search.trim() !== "" || routeId !== "" || status !== "";
 
+  usePageMetric({ label: "Customers", value: String(customers.length) });
+
+  const pagination = usePagination(filteredCustomers, {
+    resetKey: `${search}|${routeId}|${status}`,
+  });
+
   const resetFilters = () => {
     setSearch("");
     setRouteId("");
@@ -326,24 +334,9 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
 
   return (
     <>
-      <PageHeader
-        title="Customer Master"
-        subtitle="Manage customers"
-        actions={
-          <button
-            type="button"
-            onClick={openCreateDialog}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-blue-600 bg-blue-600 px-5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            <PlusIcon className="h-4 w-4" />
-            Add Customer
-          </button>
-        }
-      />
-
       <section className="space-y-4">
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-          <div className="grid w-full gap-3 md:grid-cols-[minmax(280px,1fr)_220px_180px] xl:max-w-[960px]">
+        <div className="sticky top-[65px] z-10 -mx-4 flex flex-col gap-3 border-b border-surface-border bg-app-bg/95 px-4 py-3 backdrop-blur transition-colors duration-200 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 xl:flex-row xl:items-center xl:justify-between">
+          <div className="grid w-full gap-3 md:grid-cols-[minmax(240px,1fr)_200px_160px] xl:max-w-[820px]">
             <SearchInput
               name="search"
               placeholder="Search by name or area"
@@ -377,6 +370,14 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
                 Clear
               </SecondaryButton>
             ) : null}
+            <PrimaryButton
+              type="button"
+              onClick={openCreateDialog}
+              icon={<PlusIcon className="h-4 w-4" />}
+              className="h-10 shrink-0 rounded-md px-4 text-sm font-semibold"
+            >
+              Add Customer
+            </PrimaryButton>
           </div>
         </div>
 
@@ -392,14 +393,14 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
               headerClassName: "text-right",
             },
           ]}
-          rows={filteredCustomers.map((customer) => ({
+          rows={pagination.pageItems.map((customer) => ({
             key: customer.id,
             cells: [
               <div key="name" className="min-w-[260px]">
                 <p className="text-[15px] font-semibold leading-6 text-text-primary">{customer.name}</p>
                 {customer.area ? <p className="mt-0.5 text-sm text-text-secondary">{customer.area}</p> : null}
               </div>,
-              <span key="phone" className="text-sm text-slate-800">
+              <span key="phone" className="text-sm text-text-primary">
                 {customer.mobile || "-"}
               </span>,
               <CustomerStatusToggle key="status" customer={customer} />,
@@ -418,6 +419,16 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
           headerCellClassName="px-5 py-3"
           rowClassName="align-middle hover:bg-surface-muted/60"
           cellClassName="px-5 py-3.5"
+        />
+
+        <Pagination
+          page={pagination.page}
+          totalPages={pagination.totalPages}
+          total={pagination.total}
+          startIndex={pagination.startIndex}
+          endIndex={pagination.endIndex}
+          onPageChange={pagination.setPage}
+          itemLabel="customers"
         />
       </section>
 

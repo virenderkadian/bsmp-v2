@@ -132,10 +132,11 @@ export async function getMonthlyRouteSequencePayload(input?: {
       vehicleName: route.vehicle?.name ?? null,
     }));
 
+    // No auto-selected route: the screen starts blank and loads nothing until
+    // the user explicitly picks a route, so an operator never edits the wrong
+    // route's sequence by landing on a default they didn't choose.
     const selectedRouteId =
-      input?.routeId && routes.some((route) => route.id === input.routeId)
-        ? input.routeId
-        : routes[0]?.id ?? "";
+      input?.routeId && routes.some((route) => route.id === input.routeId) ? input.routeId : "";
     const selectedRoute = routes.find((route) => route.id === selectedRouteId);
 
     if (!selectedRouteId) {

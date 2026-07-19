@@ -14,7 +14,7 @@ import { CustomerQuickCreateDialog } from "@/components/admin/customer-quick-cre
 import { EmptyState } from "@/components/admin/empty-state";
 import { IconButton } from "@/components/admin/icon-button";
 import { GripIcon, PlusIcon, XIcon } from "@/components/admin/icons";
-import { PageHeader } from "@/components/admin/page-header";
+import { usePageMetric } from "@/components/admin/page-metric";
 import { SearchInput } from "@/components/admin/search-input";
 import { SelectInput } from "@/components/admin/select-input";
 import { StatusChip } from "@/components/admin/status-chip";
@@ -112,50 +112,38 @@ function CustomerSuggestionRow({
 }
 
 function RouteMonthToolbar({ payload }: { payload: MonthlyRouteSequencePayload }) {
+  const formRef = useRef<HTMLFormElement>(null);
+
   return (
-    <section className="rounded-md border border-surface-border bg-surface p-4 shadow-sm">
-      <PageHeader
-        title="Monthly Route Customer Sequence"
-        subtitle="Build and manage route-wise customer delivery order."
-      />
-      <div className="grid gap-3 mt-2 lg:grid-cols-[minmax(260px,360px)_180px_auto_1fr] lg:items-end">
-        <form action="/monthly-route-sequence" className="contents">
-          <SelectInput
-            label="Route"
-            name="routeId"
-            defaultValue={payload.selectedRouteId}
-            placeholder="Select route"
-            options={payload.routes.map((route) => ({
-              value: route.id,
-              label: `${route.code} - ${route.name}`,
-            }))}
-            className="h-10 rounded-md bg-surface text-sm"
-          />
-          <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium text-text-secondary">Month</span>
-            <input
-              type="month"
-              name="month"
-              defaultValue={payload.selectedMonth}
-              className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
-            />
-          </label>
-          <PrimaryButton type="submit" className="h-10 rounded-md px-5 text-sm font-semibold">
-            Load
-          </PrimaryButton>
-        </form>
+    <div className="space-y-2">
+      {/* Auto-submits on route/month change (GET navigation) — no Load button
+          — mirroring the Daily Entry toolbar so the loaded data can never
+          drift from the selectors. Labels dropped; placeholders carry the
+          meaning. Live/offline status now lives in the top bar. */}
+      <form ref={formRef} action="/monthly-route-sequence" className="flex flex-wrap items-center gap-3">
+        <SelectInput
+          name="routeId"
+          defaultValue={payload.selectedRouteId}
+          placeholder="Select route"
+          options={payload.routes.map((route) => ({
+            value: route.id,
+            label: `${route.code} - ${route.name}`,
+          }))}
+          className="h-10 w-full min-w-[240px] rounded-md bg-surface text-sm sm:w-[320px]"
+          onChange={() => formRef.current?.requestSubmit()}
+        />
+        <input
+          type="month"
+          name="month"
+          defaultValue={payload.selectedMonth}
+          onChange={() => formRef.current?.requestSubmit()}
+          className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
+        />
+        {payload.error ? <StatusChip tone="warning">Setup warning</StatusChip> : null}
+      </form>
 
-        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-          <StatusChip tone={payload.dbConnected ? "success" : "warning"}>
-            {payload.dbConnected ? "Live data" : "Offline fallback"}
-          </StatusChip>
-          {payload.error ? <StatusChip tone="warning">Setup warning</StatusChip> : null}
-          <StatusChip tone="info">Next sequence: {payload.lines.length + 1}</StatusChip>
-        </div>
-      </div>
-
-      {payload.error ? <p className="mt-3 text-sm font-medium text-rose-700">{payload.error}</p> : null}
-    </section>
+      {payload.error ? <p className="text-sm font-medium text-rose-700">{payload.error}</p> : null}
+    </div>
   );
 }
 
@@ -192,14 +180,7 @@ function AddCustomerBar({
   const selectedCustomer = suggestions[activeSuggestionIndex] ?? suggestions[0];
 
   return (
-    <section className="rounded-md border border-surface-border bg-surface p-4 shadow-sm">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <div>
-          <h2 className="text-base font-semibold text-text-primary">Add customer</h2>
-          <p className="mt-0.5 text-xs text-text-secondary">Type and press Enter. Use arrows to pick from matches.</p>
-        </div>
-      </div>
-
+    <section className="sticky top-[65px] z-20 -mx-4 border-b border-surface-border bg-app-bg/95 px-4 py-3 backdrop-blur transition-colors duration-200 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
       <div className="flex flex-col gap-3 lg:flex-row lg:items-start">
         <div className="relative flex-1">
           <SearchInput
@@ -253,7 +234,7 @@ function AddCustomerBar({
           />
 
           {suggestionsOpen ? (
-            <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-20 overflow-hidden rounded-md border border-surface-border bg-surface shadow-lg">
+            <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-30 overflow-hidden rounded-md border border-surface-border bg-surface shadow-lg">
               {suggestions.length > 0 ? (
                 suggestions.map((customer, index) => (
                   <CustomerSuggestionRow
@@ -384,10 +365,11 @@ function SequenceTable({
   return (
     <>
       <section className="space-y-3">
-        <div className="flex items-end justify-between gap-3">
-          <div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <h2 className="text-base font-semibold text-text-primary">Sequence Sheet</h2>
-            <p className="mt-0.5 text-sm text-text-secondary">{lines.length} customers</p>
+            <span className="text-sm text-text-secondary">{lines.length} customers</span>
+            <StatusChip tone="info">Next sequence: {lines.length + 1}</StatusChip>
           </div>
           <p className="text-xs font-medium text-text-secondary">Drag handle or use Arrow Up/Down from handle.</p>
         </div>
@@ -481,7 +463,9 @@ function SequenceTable({
                             <GripIcon className="h-5 w-5" />
                           </IconButton>
                         </td>
-                        <td className="px-4 py-2.5 align-middle text-sm font-semibold text-text-secondary">{index + 1}</td>
+                        <td className="px-4 py-2.5 align-middle text-sm font-semibold text-text-secondary">
+                          {index + 1}
+                        </td>
                         <td className="px-4 py-2.5 align-middle">
                           <p className="text-[15px] font-semibold uppercase leading-5 text-text-primary">
                             {line.customerName}
@@ -576,15 +560,19 @@ export function MonthlyRouteSequenceScreen({ payload }: { payload: MonthlyRouteS
     }
 
     if (!cleanQuery) {
-      return payload.customers
-        .filter((customer) => !existingLineByCustomerId.has(customer.id))
-        .slice(0, 8);
+      return payload.customers.filter((customer) => !existingLineByCustomerId.has(customer.id)).slice(0, 8);
     }
 
     return payload.customers.filter((customer) => matchesCustomer(customer, cleanQuery)).slice(0, 8);
   }, [existingLineByCustomerId, payload.customers, payload.selectedRouteId, query]);
 
   const canAdd = payload.dbConnected && Boolean(payload.selectedRouteId) && !payload.error && !pending;
+
+  usePageMetric(
+    payload.selectedRouteId
+      ? { label: "In sequence", value: String(payload.lines.length) }
+      : null,
+  );
 
   useEffect(() => {
     if (!toast) {
@@ -665,39 +653,45 @@ export function MonthlyRouteSequenceScreen({ payload }: { payload: MonthlyRouteS
     <>
       <RouteMonthToolbar payload={payload} />
 
-      <form ref={formRef} action={formAction} className="hidden">
-        <input type="hidden" name="routeId" value={payload.selectedRouteId} readOnly />
-        <input type="hidden" name="sequenceMonth" value={payload.selectedMonth} readOnly />
-        <input ref={customerIdRef} type="hidden" name="customerId" />
-      </form>
+      {payload.selectedRouteId ? (
+        <>
+          <form ref={formRef} action={formAction} className="hidden">
+            <input type="hidden" name="routeId" value={payload.selectedRouteId} readOnly />
+            <input type="hidden" name="sequenceMonth" value={payload.selectedMonth} readOnly />
+            <input ref={customerIdRef} type="hidden" name="customerId" />
+          </form>
 
-      <AddCustomerBar
-        query={query}
-        suggestionsOpen={suggestionsOpen && canAdd}
-        highlightedIndex={highlightedIndex}
-        suggestions={suggestions}
-        existingLineByCustomerId={existingLineByCustomerId}
-        disabled={!canAdd}
-        pending={pending}
-        inputRef={searchInputRef}
-        onQueryChange={setQuery}
-        onSuggestionsOpenChange={setSuggestionsOpen}
-        onHighlightedIndexChange={setHighlightedIndex}
-        onAddCustomer={addCustomer}
-        onOpenQuickCreate={() => setQuickCreateOpen(true)}
-      />
+          <AddCustomerBar
+            query={query}
+            suggestionsOpen={suggestionsOpen && canAdd}
+            highlightedIndex={highlightedIndex}
+            suggestions={suggestions}
+            existingLineByCustomerId={existingLineByCustomerId}
+            disabled={!canAdd}
+            pending={pending}
+            inputRef={searchInputRef}
+            onQueryChange={setQuery}
+            onSuggestionsOpenChange={setSuggestionsOpen}
+            onHighlightedIndexChange={setHighlightedIndex}
+            onAddCustomer={addCustomer}
+            onOpenQuickCreate={() => setQuickCreateOpen(true)}
+          />
 
-      <SequenceTable
-        key={`${payload.selectedRouteId}-${payload.selectedMonth}-${payload.lines
-          .map((line) => `${line.id}:${line.sequenceNo}`)
-          .join("|")}`}
-        routeId={payload.selectedRouteId}
-        sequenceMonth={payload.selectedMonth}
-        initialLines={payload.lines}
-        highlightedLineId={highlightedLineId}
-        disabled={!payload.dbConnected || Boolean(payload.error)}
-        onToast={showToast}
-      />
+          <SequenceTable
+            key={`${payload.selectedRouteId}-${payload.selectedMonth}-${payload.lines
+              .map((line) => `${line.id}:${line.sequenceNo}`)
+              .join("|")}`}
+            routeId={payload.selectedRouteId}
+            sequenceMonth={payload.selectedMonth}
+            initialLines={payload.lines}
+            highlightedLineId={highlightedLineId}
+            disabled={!payload.dbConnected || Boolean(payload.error)}
+            onToast={showToast}
+          />
+        </>
+      ) : (
+        <EmptyState message="Select a route to view or build its monthly customer sequence." />
+      )}
 
       {toast ? <Toast tone={toast.tone}>{toast.message}</Toast> : null}
 

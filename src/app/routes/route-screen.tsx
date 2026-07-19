@@ -15,14 +15,16 @@ import { ActionButton, PrimaryButton, SecondaryButton } from "@/components/admin
 import { DataTable } from "@/components/admin/data-table";
 import { Dialog } from "@/components/admin/dialog";
 import { FormInput } from "@/components/admin/form-input";
-import { EditIcon, PlusIcon } from "@/components/admin/icons";
+import { PencilSquareIcon, PlusIcon } from "@/components/admin/icons";
 import { KeyboardForm } from "@/components/admin/keyboard-form";
 import { MasterTabs } from "@/components/admin/master-tabs";
-import { PageHeader } from "@/components/admin/page-header";
+import { usePageMetric } from "@/components/admin/page-metric";
+import { Pagination } from "@/components/admin/pagination";
 import { SearchInput } from "@/components/admin/search-input";
 import { SelectInput } from "@/components/admin/select-input";
 import { StatusBadge } from "@/components/admin/status-badge";
 import type { RouteRecord, VehicleRecord } from "@/lib/masters";
+import { usePagination } from "@/lib/use-pagination";
 
 const initialState: ActionState = { status: "idle" };
 
@@ -263,6 +265,10 @@ function RouteTab({
     setVehicleId("");
   };
 
+  const pagination = usePagination(filteredRoutes, {
+    resetKey: `${search}|${shift}|${status}|${vehicleId}`,
+  });
+
   return (
     <>
       <section className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -334,17 +340,17 @@ function RouteTab({
               headerClassName: "text-right",
             },
           ]}
-          rows={filteredRoutes.map((route) => ({
+          rows={pagination.pageItems.map((route) => ({
             key: route.id,
             cells: [
               <div key="route" className="min-w-[220px]">
                 <p className="text-[15px] font-semibold leading-6 text-text-primary">{route.name}</p>
                 <p className="mt-0.5 text-sm text-text-secondary">{route.code}</p>
               </div>,
-              <span key="shift" className="text-sm text-slate-800">
+              <span key="shift" className="text-sm text-text-primary">
                 {route.shift === "MORNING" ? "Morning" : "Evening"}
               </span>,
-              <span key="vehicle" className="text-sm text-slate-800">
+              <span key="vehicle" className="text-sm text-text-primary">
                 {route.vehicleName ?? "-"}
               </span>,
               <ActiveStatusToggle
@@ -358,8 +364,8 @@ function RouteTab({
               <div key="actions" className="flex justify-end">
                 <ActionButton
                   type="button"
-                  icon={<EditIcon className="h-[18px] w-[18px]" />}
-                  className="h-8 w-8 rounded-md border-none bg-transparent px-0 text-text-primary shadow-none hover:bg-surface-muted"
+                  icon={<PencilSquareIcon className="h-[18px] w-[18px]" />}
+                  className="h-9 w-9 justify-center rounded-md border-surface-border-strong bg-surface px-0 text-text-secondary hover:border-accent hover:bg-accent-soft hover:text-accent-soft-text"
                   onClick={() => onEditRoute(route.id)}
                   aria-label="Edit route"
                   title="Edit route"
@@ -376,6 +382,16 @@ function RouteTab({
           headerCellClassName="px-5 py-3"
           rowClassName="align-middle hover:bg-surface-muted/60"
           cellClassName="px-5 py-3.5"
+        />
+
+        <Pagination
+          page={pagination.page}
+          totalPages={pagination.totalPages}
+          total={pagination.total}
+          startIndex={pagination.startIndex}
+          endIndex={pagination.endIndex}
+          onPageChange={pagination.setPage}
+          itemLabel="routes"
         />
       </section>
     </>
@@ -414,6 +430,10 @@ function VehicleTab({
     setSearch("");
     setStatus("");
   };
+
+  const pagination = usePagination(filteredVehicles, {
+    resetKey: `${search}|${status}`,
+  });
 
   return (
     <>
@@ -465,14 +485,14 @@ function VehicleTab({
               headerClassName: "text-right",
             },
           ]}
-          rows={filteredVehicles.map((vehicle) => ({
+          rows={pagination.pageItems.map((vehicle) => ({
             key: vehicle.id,
             cells: [
               <div key="vehicle" className="min-w-[220px]">
                 <p className="text-[15px] font-semibold leading-6 text-text-primary">{vehicle.name}</p>
                 <p className="mt-0.5 text-sm text-text-secondary">{vehicle.code}</p>
               </div>,
-              <span key="registration" className="text-sm text-slate-800">
+              <span key="registration" className="text-sm text-text-primary">
                 {vehicle.registration ?? "-"}
               </span>,
               <ActiveStatusToggle
@@ -486,8 +506,8 @@ function VehicleTab({
               <div key="actions" className="flex justify-end">
                 <ActionButton
                   type="button"
-                  icon={<EditIcon className="h-[18px] w-[18px]" />}
-                  className="h-8 w-8 rounded-md border-none bg-transparent px-0 text-text-primary shadow-none hover:bg-surface-muted"
+                  icon={<PencilSquareIcon className="h-[18px] w-[18px]" />}
+                  className="h-9 w-9 justify-center rounded-md border-surface-border-strong bg-surface px-0 text-text-secondary hover:border-accent hover:bg-accent-soft hover:text-accent-soft-text"
                   onClick={() => onEditVehicle(vehicle.id)}
                   aria-label="Edit vehicle"
                   title="Edit vehicle"
@@ -505,6 +525,16 @@ function VehicleTab({
           rowClassName="align-middle hover:bg-surface-muted/60"
           cellClassName="px-5 py-3.5"
         />
+
+        <Pagination
+          page={pagination.page}
+          totalPages={pagination.totalPages}
+          total={pagination.total}
+          startIndex={pagination.startIndex}
+          endIndex={pagination.endIndex}
+          onPageChange={pagination.setPage}
+          itemLabel="vehicles"
+        />
       </section>
     </>
   );
@@ -516,6 +546,12 @@ export function RouteScreen({ dbConnected, routes, vehicles }: RouteScreenProps)
   const [vehicleDialogMode, setVehicleDialogMode] = useState<"create" | "edit" | null>(null);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [selectedVehicleId, setSelectedVehicleId] = useState<string | null>(null);
+
+  usePageMetric(
+    activeTab === "routes"
+      ? { label: "Routes", value: String(routes.length) }
+      : { label: "Vehicles", value: String(vehicles.length) },
+  );
 
   const selectedRoute = routes.find((route) => route.id === selectedRouteId);
   const selectedVehicle = vehicles.find((vehicle) => vehicle.id === selectedVehicleId);
@@ -561,29 +597,24 @@ export function RouteScreen({ dbConnected, routes, vehicles }: RouteScreenProps)
   };
   return (
     <>
-      <MasterTabs
-        className="-mt-6"
-        activeValue={activeTab}
-        tabs={[
-          { value: "routes", label: "Routes", count: routes.length },
-          { value: "vehicles", label: "Vehicles", count: vehicles.length },
-        ]}
-        onChange={setActiveTab}
-      />
-      <PageHeader
-        actions={
-          <PrimaryButton
-            type="button"
-            icon={<PlusIcon className="h-4 w-4" />}
-            className="h-10 rounded-md px-5 text-sm font-semibold"
-            onClick={activeTab === "routes" ? onAddRoute : onAddVehicle}
-          >
-            {activeTab === "routes" ? "Add route" : "Add vehicle"}
-          </PrimaryButton>
-        }
-        title="Routes"
-        subtitle="Manage route and vehicle masters used across delivery operations."
-      />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <MasterTabs
+          activeValue={activeTab}
+          tabs={[
+            { value: "routes", label: "Routes", count: routes.length },
+            { value: "vehicles", label: "Vehicles", count: vehicles.length },
+          ]}
+          onChange={setActiveTab}
+        />
+        <PrimaryButton
+          type="button"
+          icon={<PlusIcon className="h-4 w-4" />}
+          className="h-10 rounded-md px-5 text-sm font-semibold"
+          onClick={activeTab === "routes" ? onAddRoute : onAddVehicle}
+        >
+          {activeTab === "routes" ? "Add route" : "Add vehicle"}
+        </PrimaryButton>
+      </div>
 
       {activeTab === "routes" ? (
         <RouteTab

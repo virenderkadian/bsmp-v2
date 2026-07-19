@@ -2,6 +2,7 @@
 
 import {
   useActionState,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -9,7 +10,6 @@ import {
   type KeyboardEvent,
   type RefObject,
 } from "react";
-import Link from "next/link";
 import { createBulkRoutePayments, type PaymentActionState } from "@/app/payments/actions";
 import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { DataTable } from "@/components/admin/data-table";
@@ -17,7 +17,7 @@ import { EmptyState } from "@/components/admin/empty-state";
 import { IconButton } from "@/components/admin/icon-button";
 import { PlusIcon, SearchIcon, XIcon } from "@/components/admin/icons";
 import { LoadingSpinner } from "@/components/admin/loading-spinner";
-import { PageHeader } from "@/components/admin/page-header";
+import { usePageMetric } from "@/components/admin/page-metric";
 import { SelectInput } from "@/components/admin/select-input";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { StatusChip } from "@/components/admin/status-chip";
@@ -131,7 +131,6 @@ function RouteMonthToolbar({
   mode,
   status,
   dirty,
-  nextRow,
   onRouteIdChange,
   onMonthChange,
   onPaymentDateChange,
@@ -145,7 +144,6 @@ function RouteMonthToolbar({
   mode: string;
   status: string;
   dirty: boolean;
-  nextRow: number;
   onRouteIdChange: (value: string) => void;
   onMonthChange: (value: string) => void;
   onPaymentDateChange: (value: string) => void;
@@ -153,7 +151,7 @@ function RouteMonthToolbar({
   onStatusChange: (value: string) => void;
 }) {
   return (
-    <section className="rounded-md border border-surface-border bg-surface p-4 shadow-sm">
+    <div className="space-y-2">
       <form
         action="/payments/bulk-entry"
         className="grid gap-3 lg:grid-cols-[minmax(260px,1.4fr)_170px_170px_150px_150px_auto] lg:items-end"
@@ -209,16 +207,13 @@ function RouteMonthToolbar({
         </PrimaryButton>
       </form>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <StatusChip tone={payload.dbConnected ? "success" : "warning"}>
-          {payload.dbConnected ? "Live data" : "Offline fallback"}
-        </StatusChip>
-        {dirty ? <StatusChip tone="warning">Load changed route/month</StatusChip> : null}
-        <StatusChip tone="neutral">{payload.customers.length} route customers</StatusChip>
-        <StatusChip tone="info">Next row: {payload.customers.length > 0 ? nextRow : 0}</StatusChip>
-      </div>
-      {payload.error ? <p className="mt-3 text-sm font-medium text-rose-700">{payload.error}</p> : null}
-    </section>
+      {dirty ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <StatusChip tone="warning">Load changed route/month</StatusChip>
+        </div>
+      ) : null}
+      {payload.error ? <p className="text-sm font-medium text-rose-700">{payload.error}</p> : null}
+    </div>
   );
 }
 
@@ -239,6 +234,10 @@ function AddCustomerBar({
   onHighlightedIndexChange,
   onSelectCustomer,
   onAddSelected,
+  onClearDraft,
+  canClearDraft,
+  routeCustomerCount,
+  nextRow,
 }: {
   query: string;
   amount: string;
@@ -256,6 +255,10 @@ function AddCustomerBar({
   onHighlightedIndexChange: (index: number | ((index: number) => number)) => void;
   onSelectCustomer: (customer: BulkPaymentCustomerRow) => void;
   onAddSelected: () => void;
+  onClearDraft: () => void;
+  canClearDraft: boolean;
+  routeCustomerCount: number;
+  nextRow: number;
 }) {
   const activeIndex = suggestions.length === 0 ? -1 : Math.min(highlightedIndex, suggestions.length - 1);
   const activeSuggestion = suggestions[activeIndex] ?? suggestions[0];
@@ -289,14 +292,11 @@ function AddCustomerBar({
   };
 
   return (
-    <section className="rounded-md border border-surface-border bg-surface p-4 shadow-sm">
-      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h2 className="text-base font-semibold text-text-primary">Add customer payment</h2>
-          <p className="mt-0.5 text-xs text-text-secondary">
-            Type, use arrows, press Enter to select, then Enter again in amount to add.
-          </p>
-        </div>
+    <div className="sticky top-[65px] z-20 -mx-4 space-y-2 border-b border-surface-border bg-app-bg/95 px-4 py-3 backdrop-blur transition-colors duration-200 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+      <div className="flex flex-wrap items-center gap-3">
+        <h2 className="text-base font-semibold text-text-primary">Payment entry sheet</h2>
+        <StatusChip tone="neutral">{routeCustomerCount} route customers</StatusChip>
+        <StatusChip tone="info">Next row: {routeCustomerCount > 0 ? nextRow : 0}</StatusChip>
         {selectedCustomer ? (
           <StatusBadge tone={selectedCustomer.source === "BILL" ? "success" : "warning"}>
             {selectedCustomer.source === "BILL" ? "Bill backed" : "Estimate"}
@@ -333,7 +333,7 @@ function AddCustomerBar({
           </label>
 
           {suggestionsOpen ? (
-            <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-20 max-h-80 overflow-y-auto rounded-md border border-surface-border bg-surface shadow-lg">
+            <div className="absolute left-0 right-0 top-[calc(100%+0.35rem)] z-30 max-h-80 overflow-y-auto rounded-md border border-surface-border bg-surface shadow-lg">
               {suggestions.length > 0 ? (
                 suggestions.map((customer, index) => (
                   <CustomerSuggestionRow
@@ -377,15 +377,26 @@ function AddCustomerBar({
           />
         </label>
 
-        <PrimaryButton
-          type="button"
-          disabled={disabled}
-          icon={<PlusIcon className="h-4 w-4" />}
-          className="h-10 rounded-md px-5 text-sm font-semibold xl:mt-6"
-          onClick={onAddSelected}
-        >
-          Add row
-        </PrimaryButton>
+        <div className="flex items-center gap-2 xl:mt-6">
+          <PrimaryButton
+            type="button"
+            disabled={disabled}
+            icon={<PlusIcon className="h-4 w-4" />}
+            className="h-10 rounded-md px-5 text-sm font-semibold"
+            onClick={onAddSelected}
+          >
+            Add row
+          </PrimaryButton>
+          {canClearDraft ? (
+            <SecondaryButton
+              type="button"
+              onClick={onClearDraft}
+              className="h-10 rounded-md text-sm"
+            >
+              Clear draft
+            </SecondaryButton>
+          ) : null}
+        </div>
       </div>
 
       {selectedCustomer ? (
@@ -404,11 +415,11 @@ function AddCustomerBar({
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-text-secondary">Pending</p>
-            <p className="mt-1 font-semibold text-blue-700">{formatMoney(selectedCustomer.pendingAmount)}</p>
+            <p className="mt-1 font-semibold text-text-primary">{formatMoney(selectedCustomer.pendingAmount)}</p>
           </div>
         </div>
       ) : null}
-    </section>
+    </div>
   );
 }
 
@@ -428,7 +439,6 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
   const [referenceNo, setReferenceNo] = useState("");
   const [notes, setNotes] = useState("");
   const [toast, setToast] = useState<ToastState | null>(null);
-  const lastActionMessageRef = useRef("");
   const searchInputRef = useRef<HTMLInputElement>(null);
   const amountInputRef = useRef<HTMLInputElement>(null);
   const [state, formAction, pending] = useActionState(createBulkRoutePayments, initialState);
@@ -478,7 +488,23 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
   const canUseEntry = payload.dbConnected && !payload.error && !selectionDirty && payload.selectedRouteId !== "";
   const canSave = canUseEntry && draftRows.length > 0 && !hasInvalidRows && !pending;
 
-  useEffect(() => {
+  usePageMetric(
+    draftRows.length > 0
+      ? { label: "Draft", value: String(draftRows.length), tone: "warning" }
+      : payload.selectedRouteId
+        ? { label: "Route customers", value: String(payload.customers.length) }
+        : null,
+  );
+
+  const showToast = useCallback((next: ToastState) => setToast(next), []);
+
+  // Sync local editing state to a freshly (re)loaded route/month/date payload,
+  // during render (React's "adjust state while rendering" pattern), keyed on
+  // the loaded selection so it only runs when the server payload changes.
+  const loadedSelectionKey = `${payload.selectedRouteId}|${payload.selectedMonth}|${payload.selectedPaymentDate}`;
+  const [lastLoadedSelectionKey, setLastLoadedSelectionKey] = useState(loadedSelectionKey);
+  if (loadedSelectionKey !== lastLoadedSelectionKey) {
+    setLastLoadedSelectionKey(loadedSelectionKey);
     setRouteId(payload.selectedRouteId);
     setMonth(payload.selectedMonth);
     setPaymentDate(payload.selectedPaymentDate);
@@ -486,7 +512,35 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
     setAmount("");
     setSelectedCustomerId(null);
     setDraftRows([]);
-  }, [payload.selectedMonth, payload.selectedPaymentDate, payload.selectedRouteId]);
+  }
+
+  // Handle each completed save/action result once — toast it, and on success
+  // clear the tally. Keyed on the message so it fires once per result.
+  // Refocusing the search box is a DOM side effect handled in the effect below
+  // (no setState there), keeping this render-time block setState-only.
+  const actionResultKey = state.status !== "idle" && state.message ? `${state.status}:${state.message}` : null;
+  const [processedActionKey, setProcessedActionKey] = useState<string | null>(null);
+  if (actionResultKey && state.message && actionResultKey !== processedActionKey) {
+    setProcessedActionKey(actionResultKey);
+    setToast({
+      tone: state.status === "success" ? "success" : "error",
+      message: state.message,
+    });
+    if (state.status === "success") {
+      setDraftRows([]);
+      setQuery("");
+      setAmount("");
+      setSelectedCustomerId(null);
+    }
+  }
+
+  // Refocus the search box after a successful save (DOM side effect only —
+  // keyed on the processed result so it fires once per success).
+  useEffect(() => {
+    if (processedActionKey?.startsWith("success:")) {
+      searchInputRef.current?.focus();
+    }
+  }, [processedActionKey]);
 
   useEffect(() => {
     if (!toast) {
@@ -497,35 +551,6 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
 
     return () => window.clearTimeout(timeout);
   }, [toast]);
-
-  useEffect(() => {
-    if (state.status === "idle" || !state.message) {
-      return;
-    }
-
-    const key = `${state.status}:${state.message}`;
-    if (lastActionMessageRef.current === key) {
-      return;
-    }
-
-    lastActionMessageRef.current = key;
-    setToast({
-      tone: state.status === "success" ? "success" : "error",
-      message: state.message,
-    });
-
-    if (state.status === "success") {
-      setDraftRows([]);
-      setQuery("");
-      setAmount("");
-      setSelectedCustomerId(null);
-      searchInputRef.current?.focus();
-    }
-  }, [state.message, state.status]);
-
-  const showToast = (nextToast: ToastState) => {
-    setToast(nextToast);
-  };
 
   const highlightDraftRow = (customerId: string) => {
     setHighlightedCustomerId(customerId);
@@ -650,19 +675,6 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
 
   return (
     <>
-      <PageHeader
-        title="Bulk Route Payments"
-        subtitle="Enter route-wise customer collections in a fast tally-style workflow."
-        actions={
-          <Link
-            href="/payments"
-            className="inline-flex h-10 items-center justify-center rounded-md border border-surface-border-strong bg-surface px-4 text-sm font-semibold text-text-secondary transition hover:bg-surface-muted"
-          >
-            Back to ledger
-          </Link>
-        }
-      />
-
       <section className="space-y-4 pb-20">
         <RouteMonthToolbar
           payload={payload}
@@ -672,7 +684,6 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
           mode={mode}
           status={status}
           dirty={selectionDirty}
-          nextRow={draftRows.length + 1}
           onRouteIdChange={setRouteId}
           onMonthChange={setMonth}
           onPaymentDateChange={setPaymentDate}
@@ -700,6 +711,10 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
           onHighlightedIndexChange={setHighlightedIndex}
           onSelectCustomer={selectCustomer}
           onAddSelected={addSelectedCustomer}
+          onClearDraft={clearDraftRows}
+          canClearDraft={draftRows.length > 0 && !pending}
+          routeCustomerCount={payload.customers.length}
+          nextRow={draftRows.length + 1}
         />
 
         {canUseEntry && payload.customers.length === 0 ? (
@@ -707,59 +722,35 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
         ) : null}
 
         <section className="space-y-3">
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <h2 className="text-base font-semibold text-text-primary">Payment entry sheet</h2>
-              <p className="mt-0.5 text-sm text-text-secondary">
-                {draftRows.length} draft payments · Total {formatMoney(draftTotal)}
-              </p>
-            </div>
-            {draftRows.length > 0 ? (
-              <SecondaryButton type="button" onClick={clearDraftRows} disabled={pending} className="h-9 rounded-md text-sm">
-                Clear draft
-              </SecondaryButton>
-            ) : null}
-          </div>
-
           <DataTable
             columns={[
-              { key: "sr", label: "Sr", className: "w-16" },
+              { key: "sr", label: "Sr", className: "w-12" },
               { key: "customer", label: "Customer" },
-              { key: "opening", label: "Opening", className: "w-32 text-right", headerClassName: "text-right" },
-              { key: "bill", label: "Monthly bill", className: "w-36 text-right", headerClassName: "text-right" },
-              { key: "paid", label: "Paid", className: "w-32 text-right", headerClassName: "text-right" },
-              { key: "pending", label: "Pending", className: "w-32 text-right", headerClassName: "text-right" },
-              { key: "amount", label: "Amount", className: "w-40" },
-              { key: "action", label: "Action", className: "w-20 text-right", headerClassName: "text-right" },
+              { key: "pending", label: "Pending", className: "w-28 text-right", headerClassName: "text-right" },
+              { key: "amount", label: "Amount", className: "w-36 text-right", headerClassName: "text-right" },
+              { key: "balance", label: "Balance", className: "w-28 text-right", headerClassName: "text-right" },
+              { key: "action", label: "", className: "w-12 text-right", headerClassName: "text-right" },
             ]}
             rows={tableRows.map(({ row, customer }, index) => {
               const invalidAmount = getPositiveAmount(row.amount) <= 0;
+              const balanceAfter = Number(customer.pendingAmount) - getPositiveAmount(row.amount);
 
               return {
                 key: customer.customerId,
-                className: highlightedCustomerId === customer.customerId ? "bg-amber-50" : undefined,
+                className: highlightedCustomerId === customer.customerId ? "bg-accent-soft" : undefined,
                 cells: [
                   <span key="sr" className="font-semibold text-text-secondary">
                     {index + 1}
                   </span>,
-                  <div key="customer" id={`bulk-payment-row-${customer.customerId}`} className="min-w-[240px]">
-                    <p className="text-[15px] font-semibold uppercase leading-6 text-text-primary">
+                  <div key="customer" id={`bulk-payment-row-${customer.customerId}`} className="min-w-[160px]">
+                    <p className="text-sm font-semibold uppercase leading-5 text-text-primary">
                       {customer.customerName}
                     </p>
-                    <p className="mt-0.5 text-xs font-medium uppercase tracking-[0.12em] text-text-secondary">
+                    <p className="mt-0.5 text-xs font-medium uppercase tracking-[0.1em] text-text-secondary">
                       {formatCustomerMeta(customer) || "-"}
                     </p>
                   </div>,
-                  <span key="opening" className="block text-right font-medium text-slate-800">
-                    {formatMoney(customer.openingOutstanding)}
-                  </span>,
-                  <span key="bill" className="block text-right font-medium text-slate-800">
-                    {formatMoney(customer.monthlyBillAmount)}
-                  </span>,
-                  <span key="paid" className="block text-right font-medium text-slate-800">
-                    {formatMoney(customer.alreadyPaid)}
-                  </span>,
-                  <span key="pending" className="block text-right font-semibold text-blue-700">
+                  <span key="pending" className="block text-right font-semibold text-text-primary">
                     {formatMoney(customer.pendingAmount)}
                   </span>,
                   <input
@@ -776,6 +767,16 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
                     )}
                     aria-label={`Payment amount for ${customer.customerName}`}
                   />,
+                  <span
+                    key="balance"
+                    className={cn(
+                      "block text-right font-semibold tabular-nums",
+                      balanceAfter <= 0 ? "text-status-success-text" : "text-text-primary",
+                    )}
+                    title="Balance after this payment"
+                  >
+                    {formatMoney(balanceAfter)}
+                  </span>,
                   <div key="action" className="flex justify-end">
                     <IconButton
                       type="button"
@@ -792,7 +793,7 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
               };
             })}
             emptyMessage="No payment rows added yet. Search a customer above and press Enter."
-            minWidth="min-w-[1120px]"
+            minWidth="min-w-[620px]"
             className="rounded-md border-surface-border shadow-none"
             headClassName="bg-surface-muted/70"
             headerCellClassName="px-5 py-3"

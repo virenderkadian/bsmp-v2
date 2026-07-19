@@ -1,4 +1,3 @@
-import { PageHeader } from "@/components/admin/page-header";
 import { BasicSettingsTabs } from "@/app/settings/basic-settings-tabs";
 import { SettingsTabs } from "@/app/settings/settings-tabs";
 import { getCurrentCityId } from "@/lib/current-city";
@@ -40,11 +39,6 @@ export default async function SettingsPage() {
 
   return (
     <>
-      <PageHeader
-        title="Settings"
-        subtitle="Workspace notes, configuration references, and rollout guidance."
-      />
-
       {isSuperadmin && currentUser ? (
         <SettingsTabs
           profile={profile}

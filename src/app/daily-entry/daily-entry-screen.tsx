@@ -3,11 +3,9 @@
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { DailyEntryPayload } from "@/lib/daily-entry";
-import {
-  saveDailyEntry,
-  type DailyEntryActionState,
-} from "@/app/daily-entry/actions";
+import { saveDailyEntry, type DailyEntryActionState } from "@/app/daily-entry/actions";
 import { PrimaryButton } from "@/components/admin/buttons";
+import { usePageMetric } from "@/components/admin/page-metric";
 import { Toast, type ToastTone } from "@/components/admin/toast";
 import { cn } from "@/lib/utils";
 
@@ -29,13 +27,7 @@ function ActionMessage({ state }: { state: DailyEntryActionState }) {
   }
 
   return (
-    <p
-      className={`text-sm ${
-        state.status === "success" ? "text-emerald-700" : "text-rose-700"
-      }`}
-    >
-      {state.message}
-    </p>
+    <p className={`text-sm ${state.status === "success" ? "text-emerald-700" : "text-rose-700"}`}>{state.message}</p>
   );
 }
 
@@ -48,6 +40,12 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
 
   const toolbarFormRef = useRef<HTMLFormElement>(null);
   const entryFormRef = useRef<HTMLFormElement>(null);
+
+  usePageMetric(
+    payload.lines.length > 0
+      ? { label: "Customers", value: String(payload.lines.length) }
+      : null,
+  );
 
   const productColumns = useMemo(
     () =>
@@ -102,9 +100,7 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
   // input listener over the DOM avoids re-rendering every cell on every
   // keystroke, which a fully controlled table of inputs would require.
   const recompute = () => {
-    const inputs = entryFormRef.current?.querySelectorAll<HTMLInputElement>(
-      "[data-daily-entry-quantity='true']",
-    );
+    const inputs = entryFormRef.current?.querySelectorAll<HTMLInputElement>("[data-daily-entry-quantity='true']");
 
     if (!inputs) {
       return;
@@ -153,9 +149,7 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
       // Whatever is on screen right now is what was just saved — reset the
       // dirty baseline to it instead of waiting on a full page reload, so
       // Save immediately disables again until the next real change.
-      const inputs = entryFormRef.current?.querySelectorAll<HTMLInputElement>(
-        "[data-daily-entry-quantity='true']",
-      );
+      const inputs = entryFormRef.current?.querySelectorAll<HTMLInputElement>("[data-daily-entry-quantity='true']");
       inputs?.forEach((input) => {
         input.dataset.originalValue = input.value;
       });
@@ -177,7 +171,7 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
 
   return (
     <div className="space-y-4">
-      <div className="sticky top-[73px] z-10 -mx-4 border-b border-surface-border bg-app-bg/95 px-4 py-3 backdrop-blur transition-colors duration-200 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+      <div className="sticky top-[65px] z-10 -mx-4 border-surface-border bg-app-bg/95 px-4 backdrop-blur transition-colors duration-200 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
         <div className="flex flex-wrap items-center gap-3">
           <form ref={toolbarFormRef} action="/daily-entry" className="flex flex-wrap items-center gap-3">
             <input
@@ -274,21 +268,21 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
           </div>
         ) : (
           <div className="overflow-hidden rounded-md border border-surface-border bg-surface shadow-sm">
-            <div className="overflow-x-auto">
+            <div className="max-h-[calc(100vh-13rem)] overflow-auto">
               <table className="min-w-full divide-y divide-surface-border">
-                <thead className="bg-surface-muted">
+                <thead className="sticky top-0 z-10 bg-surface-muted">
                   <tr>
-                    <th className="w-16 px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary">
+                    <th className="w-16 bg-surface-muted px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary">
                       SR
                     </th>
-                    <th className="min-w-[220px] px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary">
+                    <th className="min-w-[220px] bg-surface-muted px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary">
                       Customer Name
                     </th>
                     {productColumns.map((product) => (
                       <th
                         key={product.productId}
                         title={product.productName}
-                        className="min-w-[110px] px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary"
+                        className="min-w-[110px] bg-surface-muted px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary"
                       >
                         {product.productShortName ?? product.productName}
                       </th>
@@ -297,9 +291,7 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
                 </thead>
                 <tbody className="divide-y divide-surface-border bg-surface">
                   {payload.lines.map((line) => {
-                    const productMap = new Map(
-                      line.products.map((product) => [product.productId, product]),
-                    );
+                    const productMap = new Map(line.products.map((product) => [product.productId, product]));
 
                     return (
                       <tr key={line.customerId}>
@@ -307,9 +299,7 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
                           {line.sequenceNo}
                         </td>
                         <td className="px-5 py-3.5">
-                          <div className="text-sm font-semibold uppercase text-text-primary">
-                            {line.customerName}
-                          </div>
+                          <div className="text-sm font-semibold uppercase text-text-primary">{line.customerName}</div>
                           <div className="text-xs text-text-secondary">{line.customerCode}</div>
                           <input type="hidden" name="customerId" value={line.customerId} readOnly />
                           <input type="hidden" name="sequenceNo" value={line.sequenceNo} readOnly />
@@ -320,24 +310,9 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
 
                           return (
                             <td key={`${line.customerId}-${column.productId}`} className="px-5 py-3.5">
-                              <input
-                                type="hidden"
-                                name="productId"
-                                value={column.productId}
-                                readOnly
-                              />
-                              <input
-                                type="hidden"
-                                name="productCustomerId"
-                                value={line.customerId}
-                                readOnly
-                              />
-                              <input
-                                type="hidden"
-                                name="rateSnapshot"
-                                value={product?.defaultRate ?? "0"}
-                                readOnly
-                              />
+                              <input type="hidden" name="productId" value={column.productId} readOnly />
+                              <input type="hidden" name="productCustomerId" value={line.customerId} readOnly />
+                              <input type="hidden" name="rateSnapshot" value={product?.defaultRate ?? "0"} readOnly />
                               <input
                                 name="quantity"
                                 type="number"
@@ -359,25 +334,31 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
                     );
                   })}
                 </tbody>
-                <tfoot className="border-t-2 border-surface-border-strong bg-surface-muted">
-                  <tr>
-                    <td className="px-5 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary" colSpan={2}>
+                <tfoot className="sticky bottom-0 z-10">
+                  <tr className="border-t-2 border-surface-border-strong">
+                    <td
+                      className="bg-surface-muted px-5 py-3 text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary"
+                      colSpan={2}
+                    >
                       Total
                     </td>
                     {productColumns.map((column) => (
-                      <td key={column.productId} className="px-5 py-3 text-sm font-semibold text-text-primary">
+                      <td
+                        key={column.productId}
+                        className="bg-surface-muted px-5 py-3 text-sm font-semibold text-text-primary"
+                      >
                         {formatQty(totals.perProduct.get(column.productId) ?? 0)}
                       </td>
                     ))}
                   </tr>
+                  <tr className="border-t border-surface-border">
+                    <td className="bg-surface-muted px-5 py-2.5 text-right text-sm" colSpan={productColumns.length + 2}>
+                      <span className="text-text-secondary">Total amount</span>{" "}
+                      <span className="ml-1 font-semibold text-text-primary">₹{totals.grandAmount.toFixed(2)}</span>
+                    </td>
+                  </tr>
                 </tfoot>
               </table>
-            </div>
-            <div className="flex items-center justify-end gap-2 border-t border-surface-border bg-surface-muted px-5 py-3 text-sm">
-              <span className="text-text-secondary">Total amount</span>
-              <span className="font-semibold text-text-primary">
-                ₹{totals.grandAmount.toFixed(2)}
-              </span>
             </div>
           </div>
         )}

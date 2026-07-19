@@ -13,9 +13,11 @@ import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { DataTable } from "@/components/admin/data-table";
 import { Dialog } from "@/components/admin/dialog";
 import { FormInput } from "@/components/admin/form-input";
-import { EditIcon, PlusIcon } from "@/components/admin/icons";
+import { PencilSquareIcon, PlusIcon } from "@/components/admin/icons";
 import { KeyboardForm } from "@/components/admin/keyboard-form";
-import { PageHeader } from "@/components/admin/page-header";
+import { usePageMetric } from "@/components/admin/page-metric";
+import { Pagination } from "@/components/admin/pagination";
+import { usePagination } from "@/lib/use-pagination";
 import { SearchInput } from "@/components/admin/search-input";
 import { SelectInput } from "@/components/admin/select-input";
 import { StatusBadge } from "@/components/admin/status-badge";
@@ -162,13 +164,9 @@ function PaymentDialog({
   const state = mode === "create" ? createState : updateState;
   const pending = mode === "create" ? createPending : updatePending;
 
-  useEffect(() => {
-    if (open) {
-      setCustomerId(draft.customerId);
-      setRouteId(draft.routeId);
-      setPaymentDate(draft.paymentDate);
-    }
-  }, [draft.customerId, draft.paymentDate, draft.routeId, open]);
+  // The dialog is mounted fresh each time it opens (the parent renders it
+  // conditionally), so the useState initializers above already seed the
+  // fields from `draft` — no reset effect needed.
 
   useEffect(() => {
     if (open && state.status === "success") {
@@ -188,20 +186,24 @@ function PaymentDialog({
     return linkedRoutes.length > 0 ? linkedRoutes : payload.routes;
   }, [customerId, paymentDate, payload.customerRouteLinks, payload.routes]);
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-
+  // Auto-select the only linked route, or clear a route that no longer applies
+  // to the picked customer/month. Done during render (React's "adjust state
+  // while rendering" pattern), keyed on the option set so it only re-runs when
+  // the available routes actually change — no effect, no cascading render.
+  const routeOptionKey = routeOptions.map((route) => route.id).join(",");
+  const [lastRouteOptionKey, setLastRouteOptionKey] = useState(routeOptionKey);
+  if (routeOptionKey !== lastRouteOptionKey) {
+    setLastRouteOptionKey(routeOptionKey);
     if (routeOptions.length === 1 && routeId !== routeOptions[0].id) {
       setRouteId(routeOptions[0].id);
-      return;
-    }
-
-    if (routeOptions.length > 1 && routeId && !routeOptions.some((route) => route.id === routeId)) {
+    } else if (
+      routeOptions.length > 1 &&
+      routeId &&
+      !routeOptions.some((route) => route.id === routeId)
+    ) {
       setRouteId("");
     }
-  }, [open, routeId, routeOptions]);
+  }
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     if (mode !== "edit") {
@@ -448,6 +450,20 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
 
   const hasActiveFilters = search.trim() !== "" || routeId !== "" || mode !== "" || status !== "" || date !== "";
 
+  const pagination = usePagination(filteredPayments, {
+    resetKey: `${search}|${routeId}|${mode}|${status}|${date}`,
+  });
+
+  const pendingCount = useMemo(
+    () => payload.payments.filter((payment) => payment.status === "PENDING").length,
+    [payload.payments],
+  );
+  usePageMetric(
+    pendingCount > 0
+      ? { label: "Pending", value: String(pendingCount), tone: "warning" }
+      : { label: "Payments", value: String(payload.payments.length) },
+  );
+
   const resetFilters = () => {
     setSearch("");
     setRouteId("");
@@ -473,38 +489,34 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
 
   return (
     <>
-      <PageHeader
-        title="Payments"
-        subtitle="Track customer collections and verification status."
-        actions={
-          <div className="flex flex-wrap items-center gap-2">
+      <section className="space-y-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+          <SummaryStatBar
+            className="flex-1"
+            stats={[
+              { key: "total", label: "Filtered total", value: formatMoney(String(totals.total)) },
+              { key: "verified", label: "Verified", value: formatMoney(String(totals.verified)), tone: "success" },
+              { key: "pending", label: "Pending", value: formatMoney(String(totals.pending)) },
+              { key: "cancelled", label: "Cancelled", value: formatMoney(String(totals.cancelled)), tone: "danger" },
+            ]}
+          />
+          <div className="flex items-center gap-2 lg:shrink-0">
             <Link
               href="/payments/bulk-entry"
               className="inline-flex h-10 items-center justify-center rounded-md border border-surface-border-strong bg-surface px-4 text-sm font-semibold text-text-secondary transition hover:bg-surface-muted"
             >
               Bulk route entry
             </Link>
-            <button
+            <PrimaryButton
               type="button"
               onClick={openCreateDialog}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-blue-600 bg-blue-600 px-5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
+              icon={<PlusIcon className="h-4 w-4" />}
+              className="h-10 shrink-0 rounded-md px-4 text-sm font-semibold"
             >
-              <PlusIcon className="h-4 w-4" />
               Add payment
-            </button>
+            </PrimaryButton>
           </div>
-        }
-      />
-
-      <section className="space-y-3">
-        <SummaryStatBar
-          stats={[
-            { key: "total", label: "Filtered total", value: formatMoney(String(totals.total)) },
-            { key: "verified", label: "Verified", value: formatMoney(String(totals.verified)), tone: "success" },
-            { key: "pending", label: "Pending", value: formatMoney(String(totals.pending)) },
-            { key: "cancelled", label: "Cancelled", value: formatMoney(String(totals.cancelled)), tone: "danger" },
-          ]}
-        />
+        </div>
 
         <div className="flex flex-col gap-3 xl:flex-row xl:flex-wrap xl:items-center xl:justify-between">
           <div className="grid w-full gap-3 md:grid-cols-[minmax(280px,1fr)_180px_170px] xl:max-w-6xl xl:grid-cols-[minmax(300px,1fr)_220px_160px_170px_180px]">
@@ -571,7 +583,7 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
               { key: "reference", label: "Reference", className: "w-52" },
               { key: "actions", label: "Actions", className: "w-24 text-right", headerClassName: "text-right" },
             ]}
-            rows={filteredPayments.map((payment) => ({
+            rows={pagination.pageItems.map((payment) => ({
               key: payment.id,
               cells: [
                 <div key="customer" className="min-w-[240px] truncate">
@@ -603,8 +615,8 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
                 <div key="actions" className="flex justify-end">
                   <ActionButton
                     type="button"
-                    icon={<EditIcon className="h-[18px] w-[18px]" />}
-                    className="h-8 w-8 rounded-md border-none bg-transparent px-0 text-text-primary shadow-none hover:bg-surface-muted"
+                    icon={<PencilSquareIcon className="h-[18px] w-[18px]" />}
+                    className="h-9 w-9 justify-center rounded-md border-surface-border-strong bg-surface px-0 text-text-secondary hover:border-accent hover:bg-accent-soft hover:text-accent-soft-text"
                     onClick={() => openEditDialog(payment.id)}
                     aria-label="Edit payment"
                     title="Edit payment"
@@ -621,6 +633,16 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
             headerCellClassName="px-5 py-2.5"
             rowClassName="align-middle hover:bg-surface-muted/60"
             cellClassName="px-5 py-2.5"
+          />
+
+          <Pagination
+            page={pagination.page}
+            totalPages={pagination.totalPages}
+            total={pagination.total}
+            startIndex={pagination.startIndex}
+            endIndex={pagination.endIndex}
+            onPageChange={pagination.setPage}
+            itemLabel="payments"
           />
         </section>
       </section>

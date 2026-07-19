@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
+import { PageMetricProvider } from "@/components/admin/page-metric";
 import { Sidebar } from "@/components/admin/sidebar";
 import { TopBar } from "@/components/admin/top-bar";
 import type { AccessibleCity } from "@/app/layout";
@@ -65,12 +66,14 @@ export function AppLayout({
     <div className="min-h-screen bg-app-bg text-text-primary transition-colors duration-200 print:bg-white print:text-slate-900">
       <Sidebar user={user} collapsed={collapsed} onToggleCollapsed={toggleCollapsed} />
       <div className={cn("transition-[padding] duration-200 print:pl-0", collapsed ? "lg:pl-20" : "lg:pl-72")}>
-        <TopBar cities={cities} activeCityId={activeCityId} />
-        <main className="px-4 py-6 sm:px-6 lg:px-8 print:p-0">
-          <div className="mx-auto flex max-w-7xl flex-col gap-6 print:max-w-none print:gap-0">
-            {children}
-          </div>
-        </main>
+        <PageMetricProvider>
+          <TopBar cities={cities} activeCityId={activeCityId} />
+          <main className="px-4 py-6 sm:px-6 lg:px-8 print:p-0">
+            <div className="mx-auto flex max-w-7xl flex-col gap-6 print:max-w-none print:gap-0">
+              {children}
+            </div>
+          </main>
+        </PageMetricProvider>
       </div>
     </div>
   );

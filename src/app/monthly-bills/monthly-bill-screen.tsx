@@ -18,7 +18,7 @@ import { FormInput } from "@/components/admin/form-input";
 import { BillIcon, ViewIcon } from "@/components/admin/icons";
 import { KeyboardForm } from "@/components/admin/keyboard-form";
 import { MasterTabs } from "@/components/admin/master-tabs";
-import { PageHeader } from "@/components/admin/page-header";
+import { PageActions } from "@/components/admin/page-actions";
 import { SearchInput } from "@/components/admin/search-input";
 import { SelectInput } from "@/components/admin/select-input";
 import { StatusBadge } from "@/components/admin/status-badge";
@@ -493,29 +493,23 @@ export function MonthlyBillScreen({
 
   return (
     <>
-      <PageHeader
-        title="Monthly Bills"
-        subtitle="Generate, review, and print customer bills."
-        actions={
-          <>
-            <SecondaryButton
-              type="button"
-              onClick={() => setPrintSummaryOpen(true)}
-              icon={<BillIcon className="h-4 w-4" />}
-            >
-              Print summary
-            </SecondaryButton>
-            <button
-              type="button"
-              onClick={() => setGenerateOpen(true)}
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-blue-600 bg-blue-600 px-5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
-            >
-              <BillIcon className="h-4 w-4" />
-              Generate bills
-            </button>
-          </>
-        }
-      />
+      <PageActions>
+        <SecondaryButton
+          type="button"
+          onClick={() => setPrintSummaryOpen(true)}
+          icon={<BillIcon className="h-4 w-4" />}
+        >
+          Print summary
+        </SecondaryButton>
+        <button
+          type="button"
+          onClick={() => setGenerateOpen(true)}
+          className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-blue-600 bg-blue-600 px-5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-70"
+        >
+          <BillIcon className="h-4 w-4" />
+          Generate bills
+        </button>
+      </PageActions>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <MasterTabs
