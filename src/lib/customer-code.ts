@@ -27,10 +27,20 @@ type CustomerCodeClient = {
 // client or a $transaction callback's tx client, so callers that need the
 // customer created atomically with something else (e.g. a route sequence
 // line) can generate the code inside that same transaction.
-export async function nextCustomerCode(
+export async function nextCustomerCode(client: CustomerCodeClient, cityId: string): Promise<string> {
+  const [code] = await nextCustomerCodes(client, cityId, 1);
+  return code;
+}
+
+// Returns `count` sequential codes starting just after the current highest —
+// e.g. ["BHCID0006", "BHCID0007", ...]. Used for bulk creation so a whole
+// batch gets contiguous codes from a single max-scan (compute once inside the
+// caller's transaction, then createMany).
+export async function nextCustomerCodes(
   client: CustomerCodeClient,
   cityId: string,
-): Promise<string> {
+  count: number,
+): Promise<string[]> {
   const city = await client.city.findUniqueOrThrow({ where: { id: cityId }, select: { code: true } });
   const prefix = `${city.code}CID`;
 
@@ -47,5 +57,5 @@ export async function nextCustomerCode(
     }
   }
 
-  return `${prefix}${String(maxNumber + 1).padStart(4, "0")}`;
+  return Array.from({ length: count }, (_, index) => `${prefix}${String(maxNumber + 1 + index).padStart(4, "0")}`);
 }

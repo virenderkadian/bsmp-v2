@@ -9,16 +9,53 @@ import { ArrowLeftIcon, InfoIcon } from "@/components/admin/icons";
 import { useTopBarMetric } from "@/components/admin/page-metric";
 import { appNavigation } from "@/lib/navigation";
 
-// Titles/subtitles for sub-routes that aren't in the sidebar nav, so the
-// top bar still shows a real title instead of the "Dashboard" fallback.
-// `backHref` renders a back arrow before the title (for drill-in screens).
-const EXTRA_PAGES: Record<string, { title: string; subtitle: string; backHref?: string }> = {
-  "/payments/bulk-entry": {
+// Titles/subtitles for sub-routes that aren't in the sidebar nav, so the top
+// bar still shows a real title instead of the "Dashboard" fallback. `backHref`
+// renders a back arrow before the title (for drill-in screens). Matched by
+// exact path, or by prefix when `prefix: true` (so dynamic routes like
+// /monthly-bills/<id> resolve). Order matters — list specific paths before a
+// broader prefix that would also match them.
+type ExtraPage = { path: string; prefix?: boolean; title: string; subtitle: string; backHref?: string };
+
+const EXTRA_PAGES: ExtraPage[] = [
+  {
+    path: "/payments/bulk-entry",
     title: "Bulk Route Payments",
     subtitle: "Enter route-wise customer collections in a fast tally-style workflow.",
     backHref: "/payments",
   },
-};
+  {
+    path: "/customers/bulk-add",
+    title: "Bulk Add Customers",
+    subtitle: "Add many customers at once — codes are generated automatically on save.",
+    backHref: "/customers",
+  },
+  {
+    path: "/monthly-bills/summary",
+    title: "Customer Summary",
+    subtitle: "Month-wise customer delivery and payment summary, printable per route.",
+    backHref: "/monthly-bills",
+  },
+  {
+    path: "/monthly-bills/print-all",
+    title: "Print All Bills",
+    subtitle: "Printable sheet of every bill for the selected route and month.",
+    backHref: "/monthly-bills",
+  },
+  {
+    path: "/monthly-bills/",
+    prefix: true,
+    title: "Bill Detail",
+    subtitle: "A single customer's monthly bill.",
+    backHref: "/monthly-bills",
+  },
+];
+
+function resolveExtraPage(pathname: string): ExtraPage | undefined {
+  return EXTRA_PAGES.find((page) =>
+    page.prefix ? pathname.startsWith(page.path) : pathname === page.path,
+  );
+}
 
 const METRIC_TONE_CLASSES: Record<string, string> = {
   info: "border-status-info-text/25 bg-status-info-bg text-status-info-text",
@@ -101,7 +138,7 @@ export function TopBar({
   }, []);
 
   const currentPage = useMemo(
-    () => appNavigation.find((item) => item.href === pathname) ?? EXTRA_PAGES[pathname],
+    () => appNavigation.find((item) => item.href === pathname) ?? resolveExtraPage(pathname),
     [pathname],
   );
 

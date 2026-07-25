@@ -78,7 +78,14 @@ export function Sidebar({
       <nav className="sidebar-nav-scroll mt-8 min-h-0 flex-1 overflow-y-auto pr-1">
         <div className="flex flex-col gap-1">
           {appNavigation.map((item) => {
-            const active = pathname === item.href;
+            // Keep the parent nav item highlighted on its sub-routes too
+            // (e.g. Payments stays active on /payments/bulk-entry, Monthly
+            // Bills on /monthly-bills/<id>). Dashboard "/" only matches
+            // exactly, or it would light up on every route.
+            const active =
+              item.href === "/"
+                ? pathname === "/"
+                : pathname === item.href || pathname.startsWith(`${item.href}/`);
             const Icon = item.icon;
 
             return (

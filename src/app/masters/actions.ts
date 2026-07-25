@@ -4,7 +4,7 @@ import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getCurrentCityId } from "@/lib/current-city";
-import { nextCustomerCode } from "@/lib/customer-code";
+import { nextCustomerCode, nextCustomerCodes } from "@/lib/customer-code";
 import { prisma } from "@/lib/prisma";
 
 export type ActionState = {
@@ -371,6 +371,55 @@ export async function createCustomer(_prevState: ActionState = idleState, formDa
       }
     }
   }, "Customer created.");
+}
+
+const bulkCustomerRowSchema = z.object({
+  name: z.string().trim().min(2, "Each customer needs a name (min 2 characters)."),
+  mobile: z.string().trim().optional(),
+  area: z.string().trim().optional(),
+  openingBalance: z.coerce.number().min(0, "Opening balance cannot be negative."),
+});
+
+export async function createCustomersBulk(
+  _prevState: ActionState = idleState,
+  formData: FormData,
+): Promise<ActionState> {
+  void _prevState;
+
+  let rawRows: unknown;
+  try {
+    rawRows = JSON.parse(getValue(formData, "customersJson") || "[]");
+  } catch {
+    return { status: "error", message: "Could not read the customer rows." };
+  }
+
+  const parsed = z.array(bulkCustomerRowSchema).min(1, "Add at least one customer.").safeParse(rawRows);
+
+  if (!parsed.success) {
+    return { status: "error", message: parsed.error.issues[0]?.message };
+  }
+
+  const rows = parsed.data;
+
+  return runAction(async () => {
+    const cityId = await getCurrentCityId();
+
+    await prisma.$transaction(async (tx) => {
+      // Compute the whole run of codes from one max-scan so the batch gets
+      // contiguous codes, then createMany in a single insert.
+      const codes = await nextCustomerCodes(tx, cityId, rows.length);
+      await tx.customer.createMany({
+        data: rows.map((row, index) => ({
+          cityId,
+          code: codes[index],
+          name: row.name,
+          area: asOptional(row.area ?? ""),
+          mobile: asOptional(row.mobile ?? ""),
+          openingBalance: row.openingBalance,
+        })),
+      });
+    });
+  }, `Added ${rows.length} customer${rows.length === 1 ? "" : "s"}.`);
 }
 
 export async function updateCustomer(_prevState: ActionState = idleState, formData: FormData): Promise<ActionState> {

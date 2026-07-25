@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import type { CustomerRecord } from "@/lib/masters";
 import { usePagination } from "@/lib/use-pagination";
 import { createCustomer, setCustomerActiveState, type ActionState, updateCustomer } from "@/app/masters/actions";
@@ -370,6 +371,12 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
                 Clear
               </SecondaryButton>
             ) : null}
+            <Link
+              href="/customers/bulk-add"
+              className="inline-flex h-10 shrink-0 items-center justify-center rounded-md border border-surface-border-strong bg-surface px-4 text-sm font-semibold text-text-secondary transition hover:bg-surface-muted"
+            >
+              Bulk add
+            </Link>
             <PrimaryButton
               type="button"
               onClick={openCreateDialog}
