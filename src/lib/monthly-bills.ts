@@ -1,5 +1,6 @@
 import type { BillingStatus, MonthlyBill, PaymentMode } from "@prisma/client";
 import { getCurrentCityId } from "@/lib/current-city";
+import { getCityCustomerLedger, receivedAgainstOpenBill } from "@/lib/bill-ledger";
 import { withDbTimeout } from "@/lib/db-timeout";
 import { prisma } from "@/lib/prisma";
 
@@ -481,7 +482,7 @@ export async function getMonthlyBillSummary(input?: {
       };
     }
 
-    const [sequenceLines, bills, dailyEntries, verifiedPayments] = await withDbTimeout(Promise.all([
+    const [sequenceLines, bills, dailyEntries, priorBills, customerLedger] = await withDbTimeout(Promise.all([
       prisma.monthlyRouteCustomerSequence.findMany({
         where: {
           routeId: { in: routeIds },
@@ -550,21 +551,21 @@ export async function getMonthlyBillSummary(input?: {
           },
         },
       }),
-      prisma.payment.findMany({
+      // Prior statements' closing balances, so an ungenerated preview carries
+      // forward the same opening a real Generate would (newest bill per
+      // customer wins — ordered below).
+      prisma.monthlyBill.findMany({
         where: {
-          status: "VERIFIED",
-          routeId: { in: routeIds },
-          paymentDate: {
-            gte: start,
-            lt: end,
-          },
+          route: { cityId },
+          billingMonth: { lt: start },
         },
-        select: {
-          customerId: true,
-          routeId: true,
-          amount: true,
-        },
+        orderBy: { billingMonth: "desc" },
+        select: { customerId: true, closingBalance: true },
       }),
+      // Collection ledger (verified total minus what's frozen into locked
+      // bills), so the preview's Received/Pending matches what Generate would
+      // write — attributed to the open bill, not by payment date.
+      getCityCustomerLedger(prisma, cityId),
     ]), "Monthly bill summary request", 8000);
 
     const routeIndex = new Map(routeIds.map((routeId, index) => [routeId, index]));
@@ -574,7 +575,14 @@ export async function getMonthlyBillSummary(input?: {
       return routeSort === 0 ? left.sequenceNo - right.sequenceNo : routeSort;
     });
     const billMap = new Map(bills.map((bill) => [`${bill.routeId}:${bill.customerId}`, bill]));
-    const paymentMap = new Map<string, number>();
+    const priorClosingMap = new Map<string, number>();
+    for (const priorBill of priorBills) {
+      // Ordered newest-first, so the first entry seen per customer is the
+      // latest prior bill's closing balance.
+      if (!priorClosingMap.has(priorBill.customerId)) {
+        priorClosingMap.set(priorBill.customerId, Number(priorBill.closingBalance));
+      }
+    }
     const dailyMap = new Map<
       string,
       {
@@ -582,19 +590,6 @@ export async function getMonthlyBillSummary(input?: {
         productQuantities: Map<string, number>;
       }
     >();
-
-    verifiedPayments.forEach((payment) => {
-      if (!payment.routeId) {
-        return;
-      }
-
-      const key = `${payment.routeId}:${payment.customerId}`;
-
-      paymentMap.set(
-        key,
-        (paymentMap.get(key) ?? 0) + Number(payment.amount),
-      );
-    });
 
     dailyEntries.forEach((entry) => {
       entry.lines.forEach((line) => {
@@ -637,15 +632,20 @@ export async function getMonthlyBillSummary(input?: {
           return [product.id, toQuantity(quantity)];
         }),
       );
+      // When a bill exists, its stored numbers are authoritative. Otherwise the
+      // preview mirrors what Generate would write: carry-forward opening (prior
+      // closing), live delivery, and collections from the ledger.
       const openingBalance = bill
         ? Number(bill.openingBalance)
-        : Number(line.customer.openingBalance);
+        : priorClosingMap.has(line.customerId)
+          ? (priorClosingMap.get(line.customerId) ?? 0)
+          : Number(line.customer.openingBalance);
       const deliveryAmount = bill
         ? Number(bill.deliveryAmount)
         : (daily?.deliveryAmount ?? 0);
       const paymentAmount = bill
         ? Number(bill.paymentAmount)
-        : (paymentMap.get(key) ?? 0);
+        : receivedAgainstOpenBill(customerLedger.get(line.customerId));
       const pendingAmount = bill
         ? Number(bill.closingBalance)
         : openingBalance + deliveryAmount - paymentAmount;
