@@ -3,8 +3,12 @@
 import { useActionState, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { DailyEntryPayload } from "@/lib/daily-entry";
-import { saveDailyEntry, type DailyEntryActionState } from "@/app/daily-entry/actions";
-import { PrimaryButton } from "@/components/admin/buttons";
+import {
+  revertMonthBillsToDraft,
+  saveDailyEntry,
+  type DailyEntryActionState,
+} from "@/app/daily-entry/actions";
+import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { usePageMetric } from "@/components/admin/page-metric";
 import { Toast, type ToastTone } from "@/components/admin/toast";
 import { cn } from "@/lib/utils";
@@ -37,6 +41,7 @@ function formatQty(value: number) {
 
 export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
   const [state, formAction, pending] = useActionState(saveDailyEntry, initialState);
+  const [revertState, revertAction, revertPending] = useActionState(revertMonthBillsToDraft, initialState);
 
   const toolbarFormRef = useRef<HTMLFormElement>(null);
   const entryFormRef = useRef<HTMLFormElement>(null);
@@ -157,6 +162,24 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
     }
   }, [state.message, state.status]);
 
+  const lastRevertMessageRef = useRef("");
+  useEffect(() => {
+    if (revertState.status === "idle" || !revertState.message) {
+      return;
+    }
+
+    const key = `${revertState.status}:${revertState.message}`;
+    if (lastRevertMessageRef.current === key) {
+      return;
+    }
+
+    lastRevertMessageRef.current = key;
+    setToast({
+      tone: revertState.status === "success" ? "success" : "error",
+      message: revertState.message,
+    });
+  }, [revertState.message, revertState.status]);
+
   useEffect(() => {
     if (!toast) {
       return undefined;
@@ -166,6 +189,10 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
 
     return () => window.clearTimeout(timeout);
   }, [toast]);
+
+  // The save guard blocked us because this route+month has Generated/Locked
+  // bills; offer the one-click revert until it's actually cleared.
+  const showRevertBanner = state.blockedByBill === true && revertState.status !== "success";
 
   const canSave = payload.lines.length > 0 && isDirty && !pending;
 
@@ -208,6 +235,19 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
           </PrimaryButton>
         </div>
       </div>
+
+      {showRevertBanner ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <span className="flex-1">{state.message}</span>
+          <form action={revertAction}>
+            <input type="hidden" name="routeId" value={payload.selectedRouteId} readOnly />
+            <input type="hidden" name="entryDate" value={payload.selectedDate} readOnly />
+            <SecondaryButton type="submit" disabled={revertPending} className="h-9 px-4 text-sm font-medium">
+              {revertPending ? "Reverting..." : "Revert bills to Draft"}
+            </SecondaryButton>
+          </form>
+        </div>
+      ) : null}
 
       <form
         id="daily-entry-form"

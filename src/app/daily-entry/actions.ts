@@ -6,13 +6,23 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentCityId } from "@/lib/current-city";
 import { logAudit } from "@/lib/audit";
+import { ABSENT_SIGNATURE, deliverySignature } from "@/lib/daily-entry-diff";
 
 export type DailyEntryActionState = {
   status: "idle" | "success" | "error";
   message?: string;
+  // Set when the save was refused purely because this route+month already has
+  // Generated/Locked bills. The screen uses it to offer a one-click revert of
+  // those bills to Draft (revertMonthBillsToDraft) instead of a dead end.
+  blockedByBill?: boolean;
 };
 
 const idleState: DailyEntryActionState = { status: "idle" };
+
+const revertSchema = z.object({
+  routeId: z.string().trim().min(1, "Route is required."),
+  entryDate: z.string().trim().min(1, "Date is required."),
+});
 
 const productLineSchema = z.object({
   productId: z.string().trim().min(1),
@@ -98,40 +108,100 @@ export async function saveDailyEntry(
 
     // Daily entry is destructive on save (deletes and rebuilds every line for
     // this route+date), but a bill generated from this month's entries is a
-    // frozen snapshot with no link back to the source rows — if we let a
-    // resave go through after generation, the bill's own totals stay correct
-    // while the "what was delivered" trail silently disappears underneath
-    // it. Block the save instead; the user can set the bill back to Draft,
-    // correct the entry, then regenerate.
+    // frozen snapshot with no link back to the source rows — if a resave
+    // changed what was delivered, the bill's totals would stay while the trail
+    // beneath them silently shifted. So we guard, but per-customer: block only
+    // when a customer whose bill is already Generated/Locked would ACTUALLY
+    // have their delivery change. Untouched frozen customers get rewritten to
+    // identical values (a no-op for their bill) and pass straight through, so
+    // correcting one customer no longer forces reverting the whole route.
     const entryDateValue = new Date(parsed.data.entryDate);
     const billingMonthStart = new Date(
       Date.UTC(entryDateValue.getUTCFullYear(), entryDateValue.getUTCMonth(), 1),
     );
-    const blockingBill = await prisma.monthlyBill.findFirst({
+    const frozenBills = await prisma.monthlyBill.findMany({
       where: {
         routeId: parsed.data.routeId,
         billingMonth: billingMonthStart,
         status: { in: ["GENERATED", "LOCKED"] },
       },
-      select: { status: true },
+      select: { customerId: true, status: true },
     });
 
-    if (blockingBill) {
-      const cityId = await getCurrentCityId();
-      await logAudit(prisma, {
-        cityId,
-        entityType: "DailyRouteEntry",
-        action: "BLOCKED",
-        summary: `Blocked daily entry save for route ${parsed.data.routeId} on ${parsed.data.entryDate}: bill already ${blockingBill.status}.`,
-        after: { routeId: parsed.data.routeId, entryDate: parsed.data.entryDate, billStatus: blockingBill.status },
+    // Short-circuit: with nothing frozen on this route+month, the diff is
+    // pointless — take the exact same fast path as a route with no bills.
+    if (frozenBills.length > 0) {
+      const stored = await prisma.dailyRouteEntry.findUnique({
+        where: {
+          routeId_entryDate: {
+            routeId: parsed.data.routeId,
+            entryDate: entryDateValue,
+          },
+        },
+        select: {
+          lines: {
+            select: {
+              customerId: true,
+              skipped: true,
+              productEntries: {
+                select: { productId: true, quantity: true, rateSnapshot: true },
+              },
+            },
+          },
+        },
       });
 
-      return {
-        status: "error",
-        message: `Bills for this route and month are already ${
-          blockingBill.status === "LOCKED" ? "Locked" : "Generated"
-        }. Set the bill status back to Draft on the Monthly Bills page before editing this date, then regenerate.`,
-      };
+      const storedSignature = new Map<string, string>();
+      stored?.lines.forEach((line) => {
+        storedSignature.set(
+          line.customerId,
+          deliverySignature(
+            line.skipped,
+            line.productEntries.map((productEntry) => ({
+              productId: productEntry.productId,
+              quantity: Number(productEntry.quantity),
+              rateSnapshot: Number(productEntry.rateSnapshot),
+            })),
+          ),
+        );
+      });
+
+      const submittedSignature = new Map<string, string>();
+      parsed.data.lines.forEach((line) => {
+        submittedSignature.set(line.customerId, deliverySignature(line.skipped, line.products));
+      });
+
+      // A frozen customer only blocks the save if their bill-affecting delivery
+      // actually differs between what's stored and what's being submitted.
+      const changedFrozen = frozenBills.filter((bill) => {
+        const before = storedSignature.get(bill.customerId) ?? ABSENT_SIGNATURE;
+        const after = submittedSignature.get(bill.customerId) ?? ABSENT_SIGNATURE;
+        return before !== after;
+      });
+
+      if (changedFrozen.length > 0) {
+        const anyLocked = changedFrozen.some((bill) => bill.status === "LOCKED");
+        const cityId = await getCurrentCityId();
+        await logAudit(prisma, {
+          cityId,
+          entityType: "DailyRouteEntry",
+          action: "BLOCKED",
+          summary: `Blocked daily entry save for route ${parsed.data.routeId} on ${parsed.data.entryDate}: ${changedFrozen.length} customer(s) with ${anyLocked ? "Locked" : "Generated"} bills would change.`,
+          after: {
+            routeId: parsed.data.routeId,
+            entryDate: parsed.data.entryDate,
+            changedCustomerIds: changedFrozen.map((bill) => bill.customerId),
+          },
+        });
+
+        return {
+          status: "error",
+          blockedByBill: true,
+          message: `${changedFrozen.length} customer${changedFrozen.length === 1 ? "" : "s"} on this route already ${
+            anyLocked ? "have Locked" : "have Generated"
+          } bills this month and your changes would alter them. Revert those customers' bills to Draft on the Monthly Bills page — or revert this whole route+month below — then edit and regenerate.`,
+        };
+      }
     }
 
     const cityId = await getCurrentCityId();
@@ -256,6 +326,70 @@ export async function saveDailyEntry(
 
     revalidatePath("/daily-entry");
     return { status: "success", message: "Daily entry saved." };
+  } catch (error) {
+    return { status: "error", message: getKnownErrorMessage(error) };
+  }
+}
+
+// Re-open a whole route+month's bills for editing in one click — the escape
+// hatch offered from the Daily Entry block banner. The save guard itself is
+// per-customer (it only blocks when a frozen customer's delivery actually
+// changes), so per-customer reverts on the Monthly Bills page are the precise
+// tool; this is the bulk convenience for "just reopen the month". Reverting to
+// Draft returns each bill's collections to the open balance; regenerating (or
+// re-locking) rebuilds them.
+export async function revertMonthBillsToDraft(
+  _prevState: DailyEntryActionState = idleState,
+  formData: FormData,
+): Promise<DailyEntryActionState> {
+  void _prevState;
+
+  const parsed = revertSchema.safeParse({
+    routeId: String(formData.get("routeId") ?? ""),
+    entryDate: String(formData.get("entryDate") ?? ""),
+  });
+
+  if (!parsed.success) {
+    return { status: "error", message: parsed.error.issues[0]?.message };
+  }
+
+  try {
+    const entryDateValue = new Date(parsed.data.entryDate);
+    const billingMonthStart = new Date(
+      Date.UTC(entryDateValue.getUTCFullYear(), entryDateValue.getUTCMonth(), 1),
+    );
+
+    const cityId = await getCurrentCityId();
+    const result = await prisma.monthlyBill.updateMany({
+      where: {
+        routeId: parsed.data.routeId,
+        billingMonth: billingMonthStart,
+        status: { in: ["GENERATED", "LOCKED"] },
+      },
+      data: { status: "DRAFT" },
+    });
+
+    if (result.count === 0) {
+      return {
+        status: "success",
+        message: "No generated bills to revert — this date is already editable.",
+      };
+    }
+
+    await logAudit(prisma, {
+      cityId,
+      entityType: "MonthlyBill",
+      action: "STATUS_CHANGE",
+      summary: `Reverted ${result.count} bill${result.count === 1 ? "" : "s"} to Draft to edit daily entry for route ${parsed.data.routeId} (${parsed.data.entryDate}).`,
+      after: { routeId: parsed.data.routeId, entryDate: parsed.data.entryDate, revertedCount: result.count },
+    });
+
+    revalidatePath("/daily-entry");
+    revalidatePath("/monthly-bills");
+    return {
+      status: "success",
+      message: `${result.count} bill${result.count === 1 ? "" : "s"} reverted to Draft. You can edit and save now.`,
+    };
   } catch (error) {
     return { status: "error", message: getKnownErrorMessage(error) };
   }

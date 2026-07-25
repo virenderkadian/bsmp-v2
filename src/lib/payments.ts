@@ -2,6 +2,7 @@ import type { Payment, PaymentMode, PaymentStatus, RouteShift } from "@prisma/cl
 import { getCurrentCityId } from "@/lib/current-city";
 import { withDbTimeout } from "@/lib/db-timeout";
 import { prisma } from "@/lib/prisma";
+import { getCityCustomerLedger, receivedAgainstOpenBill } from "@/lib/bill-ledger";
 
 export type PaymentRecord = Pick<
   Payment,
@@ -93,9 +94,15 @@ function toMoney(value: unknown) {
 }
 
 function getMonthInputValue(monthValue?: string) {
-  return monthValue && /^\d{4}-\d{2}$/.test(monthValue)
-    ? monthValue
-    : new Date().toISOString().slice(0, 7);
+  if (monthValue && /^\d{4}-\d{2}$/.test(monthValue)) {
+    return monthValue;
+  }
+
+  // Default to the previous month — the one whose bills are out for collection —
+  // matching the Monthly Bills page.
+  const now = new Date();
+  const previous = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  return previous.toISOString().slice(0, 7);
 }
 
 function monthInputToDate(monthValue?: string) {
@@ -273,7 +280,7 @@ export async function getBulkPaymentPayload(input?: {
       };
     }
 
-    const [sequenceLines, bills, dailyEntries, verifiedPayments] = await withDbTimeout(Promise.all([
+    const [sequenceLines, bills, dailyEntries, customerLedger] = await withDbTimeout(Promise.all([
       prisma.monthlyRouteCustomerSequence.findMany({
         where: {
           routeId: selectedRouteId,
@@ -328,25 +335,15 @@ export async function getBulkPaymentPayload(input?: {
           },
         },
       }),
-      prisma.payment.findMany({
-        where: {
-          routeId: selectedRouteId,
-          status: "VERIFIED",
-          paymentDate: {
-            gte: start,
-            lt: end,
-          },
-        },
-        select: {
-          customerId: true,
-          amount: true,
-        },
-      }),
+      // Collections attribute to the customer's open bill via the shared ledger
+      // (verified total minus what's frozen into locked bills) — NOT by payment
+      // date — so a payment entered this month against last month's bill still
+      // reduces its pending here, matching what the bill itself shows.
+      getCityCustomerLedger(prisma, cityId),
     ]), "Bulk payment detail request", 8000);
 
     const billMap = new Map(bills.map((bill) => [bill.customerId, bill]));
     const dailyAmountMap = new Map<string, number>();
-    const paidMap = new Map<string, number>();
 
     dailyEntries.forEach((entry) => {
       entry.lines.forEach((line) => {
@@ -358,13 +355,6 @@ export async function getBulkPaymentPayload(input?: {
 
         dailyAmountMap.set(line.customerId, (dailyAmountMap.get(line.customerId) ?? 0) + total);
       });
-    });
-
-    verifiedPayments.forEach((payment) => {
-      paidMap.set(
-        payment.customerId,
-        (paidMap.get(payment.customerId) ?? 0) + Number(payment.amount),
-      );
     });
 
     return {
@@ -382,7 +372,7 @@ export async function getBulkPaymentPayload(input?: {
         const monthlyBillAmount = bill
           ? Number(bill.deliveryAmount)
           : (dailyAmountMap.get(line.customerId) ?? 0);
-        const alreadyPaid = paidMap.get(line.customerId) ?? 0;
+        const alreadyPaid = receivedAgainstOpenBill(customerLedger.get(line.customerId));
 
         return {
           customerId: line.customerId,

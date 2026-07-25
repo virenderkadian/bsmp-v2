@@ -6,6 +6,7 @@ import { z } from "zod";
 import { getCurrentCityId } from "@/lib/current-city";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
+import { getCityCustomerLedger, receivedAgainstOpenBill } from "@/lib/bill-ledger";
 import { buildBillPairs, computeClosingBalance } from "@/lib/monthly-bills-math";
 
 export type MonthlyBillActionState = {
@@ -103,22 +104,10 @@ export async function generateMonthlyBills(
       },
     });
 
-    const verifiedPayments = await prisma.payment.findMany({
-      where: {
-        status: "VERIFIED",
-        routeId: { not: null },
-        route: { cityId },
-        paymentDate: {
-          gte: start,
-          lt: end,
-        },
-      },
-      select: {
-        customerId: true,
-        routeId: true,
-        amount: true,
-      },
-    });
+    // Collection ledger: how much each customer has paid that isn't already
+    // frozen into a locked bill (see src/lib/bill-ledger.ts). This — not the
+    // payment date — is what the open bill being generated collects.
+    const customerLedger = await getCityCustomerLedger(prisma, cityId);
 
     const customers = await prisma.customer.findMany({
       where: { cityId },
@@ -127,6 +116,30 @@ export async function generateMonthlyBills(
         openingBalance: true,
       },
     });
+
+    // Running-ledger carry-forward: a bill's opening balance is the previous
+    // statement's closing balance, so an unpaid amount rolls into the next
+    // month and a payment received later (a common flow — bill first, collect
+    // next month) reduces the running balance on that later statement. Keyed
+    // by customer (not customer+route) so a mid-stream route change doesn't
+    // drop the carried balance. Falls back to the customer's static opening
+    // balance only when there's no earlier bill (their first month).
+    const priorBills = await prisma.monthlyBill.findMany({
+      where: {
+        route: { cityId },
+        billingMonth: { lt: start },
+      },
+      orderBy: { billingMonth: "desc" },
+      select: { customerId: true, closingBalance: true },
+    });
+    const priorClosingMap = new Map<string, number>();
+    for (const priorBill of priorBills) {
+      // Ordered newest-first, so the first entry seen per customer is the
+      // latest prior bill's closing balance.
+      if (!priorClosingMap.has(priorBill.customerId)) {
+        priorClosingMap.set(priorBill.customerId, Number(priorBill.closingBalance));
+      }
+    }
 
     // Who SHOULD have a bill this month, per the route's monthly customer
     // sequence — the authoritative source, independent of whether they
@@ -143,7 +156,6 @@ export async function generateMonthlyBills(
     const openingBalanceMap = new Map(
       customers.map((customer) => [customer.id, customer.openingBalance]),
     );
-    const paymentMap = new Map<string, number>();
     const billMap = new Map<
       string,
       {
@@ -153,19 +165,6 @@ export async function generateMonthlyBills(
         items: Map<string, { qty: number; totalAmount: number; rateTotal: number; rateCount: number }>;
       }
     >();
-
-    verifiedPayments.forEach((payment) => {
-      if (!payment.routeId) {
-        return;
-      }
-
-      const key = `${payment.customerId}:${payment.routeId}`;
-
-      paymentMap.set(
-        key,
-        (paymentMap.get(key) ?? 0) + Number(payment.amount),
-      );
-    });
 
     entries.forEach((entry) => {
       entry.lines.forEach((line) => {
@@ -232,8 +231,14 @@ export async function generateMonthlyBills(
             continue;
           }
 
-          const openingBalance = Number(openingBalanceMap.get(bill.customerId) ?? 0);
-          const paymentAmount = paymentMap.get(`${bill.customerId}:${bill.routeId}`) ?? 0;
+          const openingBalance = priorClosingMap.has(bill.customerId)
+            ? (priorClosingMap.get(bill.customerId) ?? 0)
+            : Number(openingBalanceMap.get(bill.customerId) ?? 0);
+          // Collections attribute to the customer's open bill, not by payment
+          // date: everything verified minus what's frozen into their locked
+          // bills. That's why a payment entered in July (default date = today)
+          // still lands on the June statement being generated.
+          const paymentAmount = receivedAgainstOpenBill(customerLedger.get(bill.customerId));
           const closingBalance = computeClosingBalance(openingBalance, bill.deliveryAmount, paymentAmount);
 
           const savedBill = await tx.monthlyBill.upsert({
@@ -324,11 +329,40 @@ export async function updateMonthlyBillStatus(
   return runAction(async () => {
     const cityId = await getCurrentCityId();
     const before = await prisma.monthlyBill.findUnique({ where: { id: parsed.data.id } });
+
+    if (!before) {
+      throw new Error("Bill not found.");
+    }
+
+    const nextStatus = parsed.data.status;
+
+    // A status change is also the moment we (re)settle collections against this
+    // bill. Locking freezes the amount currently collected; reverting to
+    // DRAFT/GENERATED re-opens the bill and recomputes it live so a payment
+    // added meanwhile is reflected. Cancelling just parks it — no money move.
+    let data: Prisma.MonthlyBillUpdateInput = { status: nextStatus };
+
+    if (nextStatus !== "CANCELLED") {
+      const ledger = await getCityCustomerLedger(prisma, cityId);
+      const entry = ledger.get(before.customerId);
+      // Exclude THIS bill's own frozen amount when it's currently LOCKED, so a
+      // LOCKED -> DRAFT revert gives its collections back to the open pool
+      // instead of double-counting them.
+      const otherLockedPaid =
+        (entry?.lockedPaid ?? 0) - (before.status === "LOCKED" ? Number(before.paymentAmount) : 0);
+      const paymentAmount = Math.max(0, (entry?.totalVerified ?? 0) - otherLockedPaid);
+      const openingBalance = Number(before.openingBalance);
+      const deliveryAmount = Number(before.deliveryAmount);
+      data = {
+        status: nextStatus,
+        paymentAmount,
+        closingBalance: computeClosingBalance(openingBalance, deliveryAmount, paymentAmount),
+      };
+    }
+
     const after = await prisma.monthlyBill.update({
       where: { id: parsed.data.id },
-      data: {
-        status: parsed.data.status,
-      },
+      data,
     });
 
     await logAudit(prisma, {
@@ -336,7 +370,7 @@ export async function updateMonthlyBillStatus(
       entityType: "MonthlyBill",
       entityId: after.id,
       action: "STATUS_CHANGE",
-      summary: `Monthly bill status changed from ${before?.status ?? "UNKNOWN"} to ${after.status}.`,
+      summary: `Monthly bill status changed from ${before.status} to ${after.status}.`,
       before,
       after,
     });

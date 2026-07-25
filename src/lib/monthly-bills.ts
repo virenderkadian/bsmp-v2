@@ -155,6 +155,7 @@ export type MonthlyBillSummaryCustomerRow = {
   pendingAmount: string;
   source: "BILL" | "DAILY_ENTRY";
   billId: string | null;
+  status: BillingStatus | null;
 };
 
 export type MonthlyBillSummaryTotals = {
@@ -211,9 +212,17 @@ function getMonthBounds(monthValue: Date) {
 }
 
 function getMonthInputValue(monthValue?: string) {
-  return monthValue && /^\d{4}-\d{2}$/.test(monthValue)
-    ? monthValue
-    : new Date().toISOString().slice(0, 7);
+  if (monthValue && /^\d{4}-\d{2}$/.test(monthValue)) {
+    return monthValue;
+  }
+
+  // Default to the PREVIOUS month, not the current one: a month's bills are
+  // only generated and chased once the month is complete, so when someone
+  // opens this page mid-July the statements they're actually collecting on
+  // are June's.
+  const now = new Date();
+  const previous = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  return previous.toISOString().slice(0, 7);
 }
 
 function monthInputToDate(monthValue?: string) {
@@ -504,6 +513,7 @@ export async function getMonthlyBillSummary(input?: {
           id: true,
           routeId: true,
           customerId: true,
+          status: true,
           openingBalance: true,
           deliveryAmount: true,
           paymentAmount: true,
@@ -656,6 +666,7 @@ export async function getMonthlyBillSummary(input?: {
         pendingAmount: toMoney(pendingAmount),
         source: bill ? "BILL" : "DAILY_ENTRY",
         billId: bill?.id ?? null,
+        status: bill?.status ?? null,
       });
 
       rowsByRoute.set(line.routeId, routeRows);
