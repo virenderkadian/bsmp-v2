@@ -6,7 +6,12 @@ import { type NextRequest, NextResponse } from "next/server";
 // (see reset-password-form.tsx), so on the very first request that lands
 // here there's no session cookie yet — gating it here would redirect the
 // user to /login before that exchange ever gets a chance to run.
-const PUBLIC_PATHS = ["/login", "/forgot-password", "/reset-password"];
+// /api/driver is the mobile driver API: it authenticates with its own Bearer
+// JWT (see src/lib/driver-auth.ts requireDriver), never Supabase cookies, so
+// the Supabase gate here must not intercept it — without this exemption every
+// driver call gets 307-redirected to /login and the app can never talk to a
+// deployed environment.
+const PUBLIC_PATHS = ["/login", "/forgot-password", "/reset-password", "/api/driver"];
 
 export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
