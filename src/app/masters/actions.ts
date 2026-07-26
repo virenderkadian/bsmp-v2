@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getCurrentCityId } from "@/lib/current-city";
 import { nextCustomerCode, nextCustomerCodes } from "@/lib/customer-code";
+import { hashPin } from "@/lib/driver-auth";
 import { prisma } from "@/lib/prisma";
 
 export type ActionState = {
@@ -59,6 +60,11 @@ const customerSchema = z.object({
 const customerCreateSchema = customerSchema.omit({ code: true });
 
 const idSchema = z.string().trim().min(1, "Record id is required.");
+
+const vehiclePinSchema = z.object({
+  id: idSchema,
+  pin: z.string().trim().regex(/^\d{4,6}$/, "PIN must be 4 to 6 digits."),
+});
 
 const activeStateSchema = z.object({
   id: idSchema,
@@ -260,6 +266,29 @@ export async function updateVehicle(_prevState: ActionState = idleState, formDat
       },
     });
   }, "Vehicle updated.");
+}
+
+// Sets/resets the driver mobile-app login PIN for a vehicle. Stores only a
+// scrypt hash (see src/lib/driver-auth.ts), never the PIN. The vehicle.update
+// is city-scoped by the Prisma backstop once getCurrentCityId() sets context.
+export async function setVehiclePin(_prevState: ActionState = idleState, formData: FormData): Promise<ActionState> {
+  void _prevState;
+  const parsed = vehiclePinSchema.safeParse({
+    id: getValue(formData, "id"),
+    pin: getValue(formData, "pin"),
+  });
+
+  if (!parsed.success) {
+    return { status: "error", message: parsed.error.issues[0]?.message };
+  }
+
+  return runAction(async () => {
+    await getCurrentCityId();
+    await prisma.vehicle.update({
+      where: { id: parsed.data.id },
+      data: { pinHash: hashPin(parsed.data.pin), pinUpdatedAt: new Date() },
+    });
+  }, "Driver PIN updated.");
 }
 
 export async function createRoute(_prevState: ActionState = idleState, formData: FormData): Promise<ActionState> {

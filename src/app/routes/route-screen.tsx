@@ -6,6 +6,7 @@ import {
   createVehicle,
   setRouteActiveState,
   setVehicleActiveState,
+  setVehiclePin,
   type ActionState,
   updateRoute,
   updateVehicle,
@@ -51,6 +52,7 @@ type VehicleDraft = {
   code: string;
   name: string;
   registration: string;
+  hasPin: boolean;
 };
 
 const emptyRouteDraft: RouteDraft = {
@@ -66,6 +68,7 @@ const emptyVehicleDraft: VehicleDraft = {
   code: "",
   name: "",
   registration: "",
+  hasPin: false,
 };
 
 function RouteDialog({
@@ -160,6 +163,46 @@ function RouteDialog({
   );
 }
 
+// Driver mobile-app login PIN for a vehicle. Its own form (sibling to the
+// vehicle edit form — HTML forms can't nest), so setting a PIN doesn't touch
+// the vehicle's other fields and vice-versa.
+function VehiclePinSection({ vehicleId, hasPin }: { vehicleId: string; hasPin: boolean }) {
+  const [state, action, pending] = useActionState(setVehiclePin, initialState);
+
+  return (
+    <form action={action} className="space-y-3 border-t border-surface-border pt-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm font-medium text-text-primary">Driver login PIN</p>
+        <StatusBadge tone={hasPin ? "success" : "warning"}>{hasPin ? "PIN set" : "No PIN"}</StatusBadge>
+      </div>
+      <p className="text-xs text-text-secondary">
+        The driver enters the vehicle code and this PIN to log in to the mobile app. Setting a new
+        PIN replaces any existing one.
+      </p>
+      <input type="hidden" name="id" value={vehicleId} />
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="flex-1 min-w-[160px]">
+          <FormInput
+            label="New PIN (4–6 digits)"
+            name="pin"
+            inputMode="numeric"
+            autoComplete="off"
+            placeholder="••••"
+          />
+        </div>
+        <SecondaryButton type="submit" disabled={pending}>
+          {pending ? "Saving..." : hasPin ? "Reset PIN" : "Set PIN"}
+        </SecondaryButton>
+      </div>
+      {state.status !== "idle" && state.message ? (
+        <p className={state.status === "success" ? "text-sm text-emerald-700" : "text-sm text-rose-700"}>
+          {state.message}
+        </p>
+      ) : null}
+    </form>
+  );
+}
+
 function VehicleDialog({
   open,
   mode,
@@ -223,6 +266,11 @@ function VehicleDialog({
           </PrimaryButton>
         </div>
       </KeyboardForm>
+      {mode === "edit" && draft.id ? (
+        <div className="mt-4">
+          <VehiclePinSection vehicleId={draft.id} hasPin={draft.hasPin} />
+        </div>
+      ) : null}
     </Dialog>
   );
 }
@@ -574,6 +622,7 @@ export function RouteScreen({ dbConnected, routes, vehicles }: RouteScreenProps)
         code: selectedVehicle.code,
         name: selectedVehicle.name,
         registration: selectedVehicle.registration ?? "",
+        hasPin: selectedVehicle.hasPin,
       }
     : emptyVehicleDraft;
 

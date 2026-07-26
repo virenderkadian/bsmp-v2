@@ -17,7 +17,11 @@ export type ProductRecord = Pick<
 > & {
   defaultRate: string;
 };
-export type VehicleRecord = Pick<Vehicle, "id" | "code" | "name" | "registration" | "isActive">;
+export type VehicleRecord = Pick<Vehicle, "id" | "code" | "name" | "registration" | "isActive"> & {
+  // Whether a driver mobile-app PIN has been set (derived from pinUpdatedAt —
+  // the hash itself is never sent to the client).
+  hasPin: boolean;
+};
 export type CustomerRecord = Pick<Customer, "id" | "code" | "name" | "area" | "mobile" | "isActive"> & {
   openingBalance: string;
   sequenceRouteId: string | null;
@@ -72,7 +76,7 @@ export async function getMastersPayload(): Promise<MastersPayload> {
       },
     }), "Product master request");
 
-    const vehicles = await withDbTimeout(prisma.vehicle.findMany({
+    const vehicleRows = await withDbTimeout(prisma.vehicle.findMany({
       where: { cityId },
       orderBy: { code: "asc" },
       select: {
@@ -81,8 +85,17 @@ export async function getMastersPayload(): Promise<MastersPayload> {
         name: true,
         registration: true,
         isActive: true,
+        pinUpdatedAt: true,
       },
     }), "Vehicle master request");
+    const vehicles: VehicleRecord[] = vehicleRows.map((vehicle) => ({
+      id: vehicle.id,
+      code: vehicle.code,
+      name: vehicle.name,
+      registration: vehicle.registration,
+      isActive: vehicle.isActive,
+      hasPin: vehicle.pinUpdatedAt != null,
+    }));
 
     const routes = await withDbTimeout(prisma.route.findMany({
       where: { cityId },

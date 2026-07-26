@@ -118,6 +118,11 @@ model Vehicle {
   name             String
   registration     String?
   isActive         Boolean                  @default(true)
+  // Driver mobile-app login credential: scrypt hash of the vehicle's PIN
+  // (never the PIN itself). Null = no driver login set up yet. See
+  // src/lib/driver-auth.ts.
+  pinHash          String?
+  pinUpdatedAt     DateTime?
   createdAt        DateTime                 @default(now())
   updatedAt        DateTime                 @updatedAt
   city             City                     @relation(fields: [cityId], references: [id])
