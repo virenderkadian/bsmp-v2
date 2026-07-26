@@ -7,6 +7,7 @@ import { useActiveRoute } from "@/active-route";
 import { api, ApiError } from "@/api";
 import { SlideToConfirm } from "@/components/SlideToConfirm";
 import { Stepper } from "@/components/Stepper";
+import { StopsListModal } from "@/components/StopsListModal";
 import { todayStr } from "@/route-progress";
 import { radius } from "@/theme";
 import { Card, Chip, PrimaryButton, ProgressBar, useColors } from "@/ui";
@@ -37,6 +38,7 @@ export default function RunScreen() {
   // if a few earlier ones are still pending (they went out of order) —
   // separate from allDone, which is the automatic "everything's actually done" case.
   const [manuallyFinished, setManuallyFinished] = useState(false);
+  const [stopsListOpen, setStopsListOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!routeId) return;
@@ -168,6 +170,14 @@ export default function RunScreen() {
             </Text>
           ) : null}
         </View>
+        {sheet && total > 0 && !allDone && !manuallyFinished ? (
+          <Pressable
+            onPress={() => setStopsListOpen(true)}
+            style={{ width: 36, height: 36, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
+          >
+            <Text style={{ color: colors.ink, fontSize: 16 }}>☰</Text>
+          </Pressable>
+        ) : null}
       </View>
       {sheet && total > 0 ? (
         <View style={{ paddingHorizontal: 18, paddingBottom: 10 }}>
@@ -435,6 +445,18 @@ export default function RunScreen() {
           </Pressable>
         </View>
       ) : null}
+
+      <StopsListModal
+        visible={stopsListOpen}
+        onClose={() => setStopsListOpen(false)}
+        customers={sheet.customers}
+        currentIndex={cursor}
+        statusOf={statusOf}
+        onSelect={(index) => {
+          setCursor(index);
+          setStopsListOpen(false);
+        }}
+      />
     </SafeAreaView>
   );
 }
