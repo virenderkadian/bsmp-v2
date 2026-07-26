@@ -97,10 +97,13 @@ export type DriverSaveLineRequest = {
   // builds from its own numeric state; the backend's zod schema coerces
   // either shape anyway.
   products: Array<{ productId: string; quantity: number; rateSnapshot: number }>;
-  // Device location at the moment of delivery. Only used to BACKFILL the
-  // customer's saved location the first time (see saveDriverLine) — ignored
-  // once the customer already has coordinates, and never sent for a skip.
+  // Device location at the moment of delivery. Backfills the customer's saved
+  // location the first time for free; once they already have coordinates, a
+  // new fix only overwrites them if confirmLocationUpdate is also true (the
+  // driver said yes to a "this looks different, update it?" prompt). Never
+  // sent for a skip.
   location?: { latitude: number; longitude: number };
+  confirmLocationUpdate?: boolean;
 };
 
 export type DriverSaveLineResponse = {

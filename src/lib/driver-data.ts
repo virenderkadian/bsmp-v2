@@ -23,6 +23,26 @@ function toDay(dateInput: string): Date {
   return new Date(`${day}T00:00:00.000Z`);
 }
 
+// How far a new GPS fix must be from a customer's already-saved location
+// before it's treated as a real move (vs. ordinary fix jitter) worth asking
+// the driver about. Re-verified here in saveDriverLine — see there.
+const LOCATION_DRIFT_THRESHOLD_METERS = 12;
+
+// Great-circle distance between two lat/lng points, in meters. Duplicated in
+// mobile/src/location.ts rather than imported: this project deliberately
+// keeps Metro from reaching outside mobile/'s own directory for anything but
+// type-only imports (see that file's header comment), and this is a ~10-line
+// pure function — not worth the cross-project resolution risk to dedupe.
+function haversineDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const EARTH_RADIUS_METERS = 6371000;
+  const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 + Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) ** 2;
+  return EARTH_RADIUS_METERS * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 // The vehicle's active routes (what the driver can run).
 export async function getDriverRoutes(vehicleId: string): Promise<DriverRoute[]> {
   const routes = await prisma.route.findMany({
@@ -193,6 +213,11 @@ export type SaveDriverLineInput = {
   remarks?: string;
   products: Array<{ productId: string; quantity: number; rateSnapshot: number }>;
   location?: { latitude: number; longitude: number };
+  // True only when the driver explicitly answered "yes" to the "update saved
+  // location?" prompt shown after a >12m drift was detected client-side.
+  // Re-verified server-side rather than trusted outright, since it overwrites
+  // persisted customer data.
+  confirmLocationUpdate?: boolean;
 };
 
 export type SaveDriverLineResult =
@@ -275,10 +300,11 @@ export async function saveDriverLine(
     }
 
     // Backfill the customer's location from their first delivery that
-    // includes one — never overwrite it once set (a driver's GPS fix is a
-    // point-in-time reading, not necessarily more accurate than what's
-    // already saved). Skipped visits never carry a location; see
-    // DriverSaveLineRequest.location.
+    // includes one. After that, a new fix only overwrites it if the driver
+    // was prompted (client-side, comparing against the location it already
+    // had) and said yes — never silently, since a single GPS fix is a
+    // point-in-time reading, not necessarily more accurate than what's saved.
+    // Skipped visits never carry a location; see DriverSaveLineRequest.location.
     if (!input.skipped && input.location) {
       const existing = await tx.customer.findUnique({
         where: { id: customerId },
@@ -289,6 +315,22 @@ export async function saveDriverLine(
           where: { id: customerId },
           data: { latitude: input.location.latitude, longitude: input.location.longitude },
         });
+      } else if (existing && input.confirmLocationUpdate) {
+        // Re-check the drift ourselves rather than trusting the client's flag
+        // at face value — it only means "the driver said yes to a prompt",
+        // not "the distance genuinely warrants it".
+        const distance = haversineDistanceMeters(
+          Number(existing.latitude),
+          Number(existing.longitude),
+          input.location.latitude,
+          input.location.longitude,
+        );
+        if (distance > LOCATION_DRIFT_THRESHOLD_METERS) {
+          await tx.customer.update({
+            where: { id: customerId },
+            data: { latitude: input.location.latitude, longitude: input.location.longitude },
+          });
+        }
       }
     }
   });

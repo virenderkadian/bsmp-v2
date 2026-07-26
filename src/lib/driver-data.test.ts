@@ -145,4 +145,38 @@ describe("saveDriverLine location backfill (dev DB)", () => {
       expect(result.customer.longitude).toBeNull();
     }
   });
+
+  it("overwrites the saved location when confirmLocationUpdate is true and the drift is real", async () => {
+    await rawPrisma.customer.update({ where: { id: customerId }, data: { latitude: 28.6, longitude: 77.2 } });
+
+    const result = await saveDriverLine(vehicleId, routeId, customerId, "2027-01-27", {
+      skipped: false,
+      products: [{ productId, quantity: 1, rateSnapshot: 50 }],
+      location: { latitude: 12.9, longitude: 77.5 }, // clearly >12m from the saved point
+      confirmLocationUpdate: true,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.customer.latitude).toBe("12.9");
+      expect(result.customer.longitude).toBe("77.5");
+    }
+  });
+
+  it("ignores confirmLocationUpdate when the new fix isn't actually more than 12m away (server re-verifies, doesn't trust the flag)", async () => {
+    await rawPrisma.customer.update({ where: { id: customerId }, data: { latitude: 28.6, longitude: 77.2 } });
+
+    const result = await saveDriverLine(vehicleId, routeId, customerId, "2027-01-28", {
+      skipped: false,
+      products: [{ productId, quantity: 1, rateSnapshot: 50 }],
+      location: { latitude: 28.6, longitude: 77.2 }, // identical — zero drift
+      confirmLocationUpdate: true,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      // Unchanged: distance is 0, well under the 12m threshold, so the
+      // client's flag alone isn't enough to move an already-set location.
+      expect(result.customer.latitude).toBe("28.6");
+      expect(result.customer.longitude).toBe("77.2");
+    }
+  });
 });

@@ -25,6 +25,7 @@ const saveSchema = z.object({
       longitude: z.coerce.number().min(-180).max(180),
     })
     .optional(),
+  confirmLocationUpdate: z.boolean().optional(),
 });
 
 export function OPTIONS() {
@@ -59,6 +60,7 @@ export async function POST(
     remarks: parsed.data.remarks,
     products: parsed.data.products,
     location: parsed.data.location,
+    confirmLocationUpdate: parsed.data.confirmLocationUpdate,
   });
 
   if (!result.ok) {

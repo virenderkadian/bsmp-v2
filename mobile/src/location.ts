@@ -1,11 +1,11 @@
 import * as Location from "expo-location";
-import { Linking, Platform } from "react-native";
+import { Alert, Linking, Platform } from "react-native";
 
 const FIX_TIMEOUT_MS = 8000;
 
-// Best-effort GPS fix for backfilling a customer's location on first delivery
-// (see saveDriverLine on the backend). Never throws and never blocks a save
-// for long: denied permission, a timeout, or any device error all resolve to
+// Best-effort GPS fix for backfilling a customer's location on delivery (see
+// saveDriverLine on the backend). Never throws and never blocks a save for
+// long: denied permission, a timeout, or any device error all resolve to
 // null so the delivery still gets recorded — capturing the address is a
 // bonus, not a requirement.
 export async function tryGetCurrentLocation(): Promise<{ latitude: number; longitude: number } | null> {
@@ -28,21 +28,99 @@ export async function tryGetCurrentLocation(): Promise<{ latitude: number; longi
   }
 }
 
-// Turn-by-turn directions to a saved customer location — Apple Maps on iOS,
-// Google Maps specifically on Android (google.navigation: targets that app
-// directly, rather than a generic geo: URI that lets Android pick any
-// installed maps app). Falls back to a universal web link if the native
-// scheme can't be opened (app not installed, scheme blocked, etc.).
+// Mirrors the server-side threshold/check in src/lib/driver-data.ts
+// (LOCATION_DRIFT_THRESHOLD_METERS) — used here only to decide whether to
+// bother the driver with a prompt; the backend re-verifies independently
+// before actually overwriting anything, so this copy drifting slightly out
+// of sync would only affect prompt frequency, never correctness.
+const LOCATION_DRIFT_THRESHOLD_METERS = 12;
+
+function haversineDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const EARTH_RADIUS_METERS = 6371000;
+  const toRadians = (degrees: number) => (degrees * Math.PI) / 180;
+  const dLat = toRadians(lat2 - lat1);
+  const dLon = toRadians(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) ** 2 + Math.cos(toRadians(lat1)) * Math.cos(toRadians(lat2)) * Math.sin(dLon / 2) ** 2;
+  return EARTH_RADIUS_METERS * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function confirmAsync(title: string, message: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    Alert.alert(title, message, [
+      { text: "Keep saved", style: "cancel", onPress: () => resolve(false) },
+      { text: "Update", onPress: () => resolve(true) },
+    ]);
+  });
+}
+
+export type LocationSaveFields = {
+  location?: { latitude: number; longitude: number };
+  confirmLocationUpdate?: boolean;
+};
+
+// Resolves what to send along with a delivery save: always attempts a fresh
+// GPS fix (skip entirely if the caller already knows this is a skip), then
+// either backfills silently (customer has no saved location yet) or — if the
+// new fix is more than ~12m from what's saved — prompts the driver before
+// agreeing to move it. Never throws; a failed fix or a "keep saved" answer
+// both just mean nothing location-related gets sent.
+export async function resolveLocationForSave(
+  savedLatitude: string | null,
+  savedLongitude: string | null,
+): Promise<LocationSaveFields> {
+  const fix = await tryGetCurrentLocation();
+  if (!fix) {
+    return {};
+  }
+
+  if (!savedLatitude || !savedLongitude) {
+    return { location: fix };
+  }
+
+  const distance = haversineDistanceMeters(Number(savedLatitude), Number(savedLongitude), fix.latitude, fix.longitude);
+  if (distance <= LOCATION_DRIFT_THRESHOLD_METERS) {
+    return {};
+  }
+
+  const confirmed = await confirmAsync(
+    "Update saved location?",
+    `Your location is about ${Math.round(distance)}m from this customer's saved address. Update it?`,
+  );
+  return confirmed ? { location: fix, confirmLocationUpdate: true } : {};
+}
+
+// Turn-by-turn directions to a saved customer location.
+//   iOS: lets the driver choose Apple Maps or Google Maps (comgooglemaps://,
+//        falling back to the universal web link if Google Maps isn't
+//        installed).
+//   Android: opens Google Maps directly (google.navigation: targets that app
+//        specifically, rather than a generic geo: URI that lets Android pick
+//        any installed maps app).
 export function openNavigation(latitude: number, longitude: number): void {
   const webFallback = `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}`;
-  const url =
-    Platform.OS === "ios"
-      ? `maps://app?daddr=${latitude},${longitude}&dirflg=d`
-      : Platform.OS === "android"
-        ? `google.navigation:q=${latitude},${longitude}`
-        : webFallback;
+  const openWithFallback = (url: string) => {
+    Linking.openURL(url).catch(() => {
+      Linking.openURL(webFallback).catch(() => undefined);
+    });
+  };
 
-  Linking.openURL(url).catch(() => {
-    Linking.openURL(webFallback).catch(() => undefined);
-  });
+  if (Platform.OS === "android") {
+    openWithFallback(`google.navigation:q=${latitude},${longitude}`);
+    return;
+  }
+
+  if (Platform.OS === "ios") {
+    Alert.alert("Navigate with", undefined, [
+      { text: "Apple Maps", onPress: () => openWithFallback(`maps://app?daddr=${latitude},${longitude}&dirflg=d`) },
+      {
+        text: "Google Maps",
+        onPress: () => openWithFallback(`comgooglemaps://?daddr=${latitude},${longitude}&directionsmode=driving`),
+      },
+      { text: "Cancel", style: "cancel" },
+    ]);
+    return;
+  }
+
+  openWithFallback(webFallback);
 }

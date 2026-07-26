@@ -5,10 +5,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import type { DriverSheetCustomer, DriverSheetResponse } from "@shared/driver-api-types";
 import { useActiveRoute } from "@/active-route";
 import { api, ApiError } from "@/api";
+import { CashSaleModal } from "@/components/CashSaleModal";
 import { SlideToConfirm } from "@/components/SlideToConfirm";
 import { Stepper } from "@/components/Stepper";
 import { StopsListModal } from "@/components/StopsListModal";
-import { openNavigation, tryGetCurrentLocation } from "@/location";
+import { openNavigation, resolveLocationForSave } from "@/location";
 import { todayStr } from "@/route-progress";
 import { radius } from "@/theme";
 import { Card, Chip, PrimaryButton, ProgressBar, useColors } from "@/ui";
@@ -40,6 +41,7 @@ export default function RunScreen() {
   // separate from allDone, which is the automatic "everything's actually done" case.
   const [manuallyFinished, setManuallyFinished] = useState(false);
   const [stopsListOpen, setStopsListOpen] = useState(false);
+  const [cashSaleOpen, setCashSaleOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!routeId) return;
@@ -128,17 +130,16 @@ export default function RunScreen() {
             quantity: draftQty[product.productId] ?? 0,
             rateSnapshot: Number(product.rate),
           }));
-      // Only bother fetching a GPS fix when the customer doesn't already
-      // have one saved — the backend backfills once and never overwrites, so
-      // sending it again after that would just be wasted work.
-      const needsLocation = !skipped && !customer.latitude && !customer.longitude;
-      const location = needsLocation ? await tryGetCurrentLocation() : null;
+      // Backfills silently if the customer has no saved location yet; if they
+      // do and this fix is >12m off, prompts the driver before agreeing to
+      // move it. Skipped visits never touch location at all.
+      const locationFields = skipped ? {} : await resolveLocationForSave(customer.latitude, customer.longitude);
       const result = await api.saveLine(routeId, customer.customerId, {
         date: todayStr(),
         skipped,
         remarks: remarks.trim() || undefined,
         products,
-        location: location ?? undefined,
+        ...locationFields,
       });
       setSheet((prev) =>
         prev
@@ -177,6 +178,14 @@ export default function RunScreen() {
             </Text>
           ) : null}
         </View>
+        {sheet ? (
+          <Pressable
+            onPress={() => setCashSaleOpen(true)}
+            style={{ width: 36, height: 36, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
+          >
+            <Text style={{ fontSize: 16 }}>💵</Text>
+          </Pressable>
+        ) : null}
         {sheet && total > 0 && !allDone && !manuallyFinished ? (
           <Pressable
             onPress={() => setStopsListOpen(true)}
@@ -256,6 +265,13 @@ export default function RunScreen() {
           ) : null}
           <PrimaryButton label="Back to routes" onPress={() => router.back()} />
         </ScrollView>
+
+        <CashSaleModal
+          visible={cashSaleOpen}
+          onClose={() => setCashSaleOpen(false)}
+          routeId={sheet.route.id}
+          products={sheet.customers[0]?.products ?? []}
+        />
       </SafeAreaView>
     );
   }
@@ -473,6 +489,13 @@ export default function RunScreen() {
           setCursor(index);
           setStopsListOpen(false);
         }}
+      />
+
+      <CashSaleModal
+        visible={cashSaleOpen}
+        onClose={() => setCashSaleOpen(false)}
+        routeId={sheet.route.id}
+        products={sheet.customers[0]?.products ?? []}
       />
     </SafeAreaView>
   );
