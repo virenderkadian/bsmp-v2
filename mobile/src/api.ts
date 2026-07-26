@@ -15,6 +15,14 @@ import type {
 // reload keeps the old baked-in value).
 export const API_BASE = (process.env.EXPO_PUBLIC_API_URL ?? "https://atmv2.bsmp.in").replace(/\/+$/, "");
 
+// Vercel Deployment Protection guards Preview deployments from the open
+// internet (they're not meant to be public — the driver login endpoint has no
+// rate-limiting yet). This header is Vercel's documented bypass for trusted
+// non-browser clients; it's the app's own secret, not the driver's, so it's
+// sent unconditionally rather than tied to auth state. Unset on Production
+// (which isn't protected) — see mobile/.env.example.
+const PROTECTION_BYPASS = process.env.EXPO_PUBLIC_VERCEL_PROTECTION_BYPASS;
+
 let authToken: string | null = null;
 
 export function setAuthToken(token: string | null): void {
@@ -48,6 +56,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       headers: {
         "Content-Type": "application/json",
         ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        ...(PROTECTION_BYPASS ? { "x-vercel-protection-bypass": PROTECTION_BYPASS } : {}),
         ...(init?.headers ?? {}),
       },
     });
