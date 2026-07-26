@@ -39,8 +39,13 @@ export async function getDriverRoutes(vehicleId: string): Promise<DriverRoute[]>
 }
 
 // The delivery sheet for one route + date: the month's customer sequence in
-// order, each with its pre-filled deliverables and any marks already saved.
-// Returns null when the route isn't this vehicle's (or doesn't exist).
+// order, each with the same active product catalog the web Daily Entry screen
+// uses (see src/lib/daily-entry.ts) and any marks already saved. There is no
+// per-customer "usual order" anywhere in this app today — RouteCustomerAssignment
+// / RouteCustomerProductDefault exist in the schema but nothing writes to them
+// — so every customer gets the full catalog with quantity 0 until the driver
+// (or a prior save) sets it, exactly like the web screen. Returns null when
+// the route isn't this vehicle's (or doesn't exist).
 export async function getDriverSheet(
   vehicleId: string,
   routeId: string,
@@ -49,77 +54,66 @@ export async function getDriverSheet(
   const sequenceMonth = toMonthStart(dateInput);
   const entryDate = toDay(dateInput);
 
-  const route = await prisma.route.findFirst({
-    where: { id: routeId, vehicleId, isActive: true },
-    select: {
-      id: true,
-      code: true,
-      name: true,
-      shift: true,
-      monthlySequences: {
-        where: { status: "ACTIVE", sequenceMonth },
-        orderBy: { sequenceNo: "asc" },
-        select: {
-          customerId: true,
-          sequenceNo: true,
-          customer: { select: { name: true, area: true, mobile: true } },
+  const [route, products] = await Promise.all([
+    prisma.route.findFirst({
+      where: { id: routeId, vehicleId, isActive: true },
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        shift: true,
+        monthlySequences: {
+          where: { status: "ACTIVE", sequenceMonth },
+          orderBy: { sequenceNo: "asc" },
+          select: {
+            customerId: true,
+            sequenceNo: true,
+            customer: { select: { name: true, area: true, mobile: true } },
+          },
         },
-      },
-      assignments: {
-        where: { status: "ACTIVE" },
-        select: {
-          customerId: true,
-          defaults: {
-            select: {
-              productId: true,
-              defaultQty: true,
-              defaultRate: true,
-              product: { select: { code: true, shortName: true, unit: true, displayOrder: true } },
+        entries: {
+          where: { entryDate },
+          take: 1,
+          select: {
+            lines: {
+              select: {
+                customerId: true,
+                skipped: true,
+                remarks: true,
+                productEntries: { select: { productId: true, quantity: true, rateSnapshot: true } },
+              },
             },
           },
         },
       },
-      entries: {
-        where: { entryDate },
-        take: 1,
-        select: {
-          lines: {
-            select: {
-              customerId: true,
-              skipped: true,
-              remarks: true,
-              productEntries: { select: { productId: true, quantity: true, rateSnapshot: true } },
-            },
-          },
-        },
-      },
-    },
-  });
+    }),
+    prisma.product.findMany({
+      where: { isActive: true, showInDailyEntry: true },
+      orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
+      select: { id: true, code: true, shortName: true, unit: true, defaultRate: true },
+    }),
+  ]);
 
   if (!route) {
     return null;
   }
 
-  const defaultsByCustomer = new Map(route.assignments.map((assignment) => [assignment.customerId, assignment.defaults]));
   const lineByCustomer = new Map((route.entries[0]?.lines ?? []).map((line) => [line.customerId, line]));
 
   const customers: DriverSheetCustomer[] = route.monthlySequences.map((seq) => {
-    const defaults = [...(defaultsByCustomer.get(seq.customerId) ?? [])].sort(
-      (a, b) => a.product.displayOrder - b.product.displayOrder || a.product.code.localeCompare(b.product.code),
-    );
     const savedLine = lineByCustomer.get(seq.customerId);
     const savedProducts = new Map((savedLine?.productEntries ?? []).map((entry) => [entry.productId, entry]));
 
-    const products: DriverSheetProduct[] = defaults.map((def) => {
-      const saved = savedProducts.get(def.productId);
+    const sheetProducts: DriverSheetProduct[] = products.map((product) => {
+      const saved = savedProducts.get(product.id);
       return {
-        productId: def.productId,
-        code: def.product.code,
-        shortName: def.product.shortName,
-        unit: def.product.unit,
-        rate: String(saved?.rateSnapshot ?? def.defaultRate),
-        defaultQty: String(def.defaultQty),
-        deliveredQty: String(saved?.quantity ?? def.defaultQty),
+        productId: product.id,
+        code: product.code,
+        shortName: product.shortName,
+        unit: product.unit,
+        rate: String(saved?.rateSnapshot ?? product.defaultRate),
+        defaultQty: "0",
+        deliveredQty: String(saved?.quantity ?? 0),
       };
     });
 
@@ -129,7 +123,7 @@ export async function getDriverSheet(
       name: seq.customer.name,
       area: seq.customer.area,
       mobile: seq.customer.mobile,
-      products,
+      products: sheetProducts,
       skipped: savedLine?.skipped ?? false,
       remarks: savedLine?.remarks ?? null,
       saved: Boolean(savedLine),
