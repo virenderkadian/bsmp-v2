@@ -150,6 +150,11 @@ export async function getDriverSheet(
       const saved = savedProducts.get(product.id);
       const recentQty = recentOrder?.get(product.id);
       const defaultQty = recentQty !== undefined ? String(recentQty) : "0";
+      // Once there's a real line for today, it's authoritative — 0 if this
+      // product isn't on it, never the recent-order suggestion. Without this,
+      // a skipped (or partially-delivered) line would misreport the
+      // suggested "usual order" as if it had actually been delivered.
+      const deliveredQty = savedLine ? String(saved?.quantity ?? 0) : defaultQty;
       return {
         productId: product.id,
         code: product.code,
@@ -157,7 +162,7 @@ export async function getDriverSheet(
         unit: product.unit,
         rate: String(saved?.rateSnapshot ?? product.defaultRate),
         defaultQty,
-        deliveredQty: String(saved?.quantity ?? defaultQty),
+        deliveredQty,
       };
     });
 

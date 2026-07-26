@@ -1,9 +1,16 @@
 import { usePathname, useRouter } from "expo-router";
-import { Pressable, Text, View } from "react-native";
+import { Platform, Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useActiveRoute } from "@/active-route";
 import { radius } from "@/theme";
 import { useColors } from "@/ui";
+
+// Standard tab bar content height (excluding the safe-area inset, which is
+// added separately below) — 49pt is iOS's UITabBar constant regardless of
+// liquid glass styling; 56dp is Material's baseline bottom-nav height.
+// NativeTabs doesn't expose the real rendered height, so this is an
+// approximation — nudge it if it visibly overlaps or gaps on a real device.
+const TAB_BAR_HEIGHT = Platform.select({ ios: 49, android: 56, default: 56 });
 
 // A persistent, tappable reminder that a route is mid-delivery — visible on
 // every screen (Dashboard/Delivery/Profile, or the app cold-started back into
@@ -13,11 +20,10 @@ import { useColors } from "@/ui";
 // (saved lines), so it resumes in the right place with no client-side session
 // state to go stale.
 //
-// Placed near the TOP of the screen rather than floating above the tab bar:
-// NativeTabs renders a genuine native tab bar (UITabBar / Material bar), and
-// a JS overlay isn't guaranteed to sit reliably above that native layer. A
-// top banner sidesteps the question entirely, since the tab bar always lives
-// at the bottom.
+// Floats just above the bottom tab bar. This overlay is rendered as a sibling
+// AFTER <Stack> at the root layout (see app/_layout.tsx), not nested inside
+// any one tab's content — so it sits later in the same native view hierarchy
+// NativeTabs mounts into, which normal platform z-ordering renders on top of.
 export function ActiveRoutePill() {
   const { activeRoute } = useActiveRoute();
   const router = useRouter();
@@ -33,11 +39,11 @@ export function ActiveRoutePill() {
   }
 
   return (
-    <View pointerEvents="box-none" style={{ position: "absolute", top: 0, left: 0, right: 0 }}>
+    <View pointerEvents="box-none" style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}>
       <Pressable
         onPress={() => router.push(`/run/${activeRoute.id}`)}
         style={({ pressed }) => ({
-          marginTop: insets.top + 6,
+          marginBottom: insets.bottom + TAB_BAR_HEIGHT + 10,
           marginHorizontal: 14,
           flexDirection: "row",
           alignItems: "center",

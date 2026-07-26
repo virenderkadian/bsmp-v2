@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { DriverSheetCustomer, DriverSheetResponse } from "@shared/driver-api-types";
 import { useActiveRoute } from "@/active-route";
@@ -29,6 +29,14 @@ export default function RunScreen() {
   const [remarks, setRemarks] = useState("");
   const [saving, setSaving] = useState(false);
   const [snackbar, setSnackbar] = useState<{ index: number; label: string } | null>(null);
+  // A saved stop opens read-only by default (see canEdit below) so browsing
+  // with Prev/Next can't silently overwrite an already-recorded delivery;
+  // this explicitly unlocks it. Resets whenever the viewed stop changes.
+  const [editMode, setEditMode] = useState(false);
+  // Lets the driver view the round summary from the last sequence stop even
+  // if a few earlier ones are still pending (they went out of order) —
+  // separate from allDone, which is the automatic "everything's actually done" case.
+  const [manuallyFinished, setManuallyFinished] = useState(false);
 
   const load = useCallback(async () => {
     if (!routeId) return;
@@ -59,6 +67,7 @@ export default function RunScreen() {
     });
     setDraftQty(next);
     setRemarks(customer.remarks ?? "");
+    setEditMode(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [custId]);
 
@@ -72,6 +81,24 @@ export default function RunScreen() {
   const total = sheet?.customers.length ?? 0;
   const done = sheet?.customers.filter((entry) => entry.saved).length ?? 0;
   const allDone = total > 0 && done === total;
+  const isLastStop = total > 0 && cursor === total - 1;
+
+  const finishRoute = () => {
+    if (!sheet) return;
+    const pendingCount = sheet.customers.filter((entry) => !entry.saved).length;
+    if (pendingCount > 0) {
+      Alert.alert(
+        "Finish route?",
+        `${pendingCount} stop${pendingCount === 1 ? "" : "s"} still pending. You can finish now and come back to ${pendingCount === 1 ? "it" : "them"} later.`,
+        [
+          { text: "Keep going", style: "cancel" },
+          { text: "Finish anyway", style: "destructive", onPress: () => setManuallyFinished(true) },
+        ],
+      );
+      return;
+    }
+    setManuallyFinished(true);
+  };
 
   const advance = () => {
     if (!sheet) return;
@@ -88,11 +115,16 @@ export default function RunScreen() {
     if (!customer || !sheet || !routeId || saving) return;
     setSaving(true);
     try {
-      const products = customer.products.map((product) => ({
-        productId: product.productId,
-        quantity: draftQty[product.productId] ?? 0,
-        rateSnapshot: Number(product.rate),
-      }));
+      // A skip carries no deliverables — the backend already discards
+      // products when skipped is true, so send none rather than whatever
+      // happens to be sitting in the (irrelevant) quantity steppers.
+      const products = skipped
+        ? []
+        : customer.products.map((product) => ({
+            productId: product.productId,
+            quantity: draftQty[product.productId] ?? 0,
+            rateSnapshot: Number(product.rate),
+          }));
       const result = await api.saveLine(routeId, customer.customerId, {
         date: todayStr(),
         skipped,
@@ -105,6 +137,7 @@ export default function RunScreen() {
           : prev,
       );
       setSnackbar({ index: cursor, label: skipped ? "Skipped" : "Delivered" });
+      setEditMode(false); // freshly saved — lock again even if we don't move (e.g. last stop)
       advance();
       // Progress just changed (and may have just hit 100%) — let the pill and
       // the route-start guard pick that up without waiting for their poll.
@@ -168,7 +201,7 @@ export default function RunScreen() {
   }
 
   // Round complete
-  if (allDone || !customer) {
+  if (allDone || manuallyFinished || !customer) {
     const delivered = sheet.customers.filter((entry) => entry.saved && !entry.skipped).length;
     const skipped = sheet.customers.filter((entry) => entry.saved && entry.skipped).length;
     const totals = new Map<string, { qty: number; unit: string }>();
@@ -212,6 +245,9 @@ export default function RunScreen() {
 
   const status = statusOf(customer);
   const stopTotal = customer.products.reduce((sum, product) => sum + (draftQty[product.productId] ?? 0) * Number(product.rate), 0);
+  // A saved stop is read-only until explicitly unlocked, so browsing with
+  // Prev/Next can't silently overwrite an already-recorded delivery.
+  const canEdit = !customer.saved || editMode;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.ground }} edges={["top", "left", "right"]}>
@@ -220,7 +256,14 @@ export default function RunScreen() {
         <Card>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
             <View style={{ flex: 1, paddingRight: 10 }}>
-              <Chip label={status.label} tone={status.tone} />
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Chip label={status.label} tone={status.tone} />
+                {customer.saved && !editMode ? (
+                  <Pressable onPress={() => setEditMode(true)} hitSlop={6}>
+                    <Text style={{ color: colors.brand, fontSize: 12.5, fontWeight: "700" }}>Edit</Text>
+                  </Pressable>
+                ) : null}
+              </View>
               <Text style={{ color: colors.ink, fontSize: 20, fontWeight: "800", marginTop: 9 }}>
                 {customer.sequenceNo}. {customer.name}
               </Text>
@@ -257,7 +300,13 @@ export default function RunScreen() {
                   <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "700" }}>{product.shortName ?? product.code}</Text>
                   <Text style={{ color: colors.inkFaint, fontSize: 12.5 }}>₹ {product.rate} / {product.unit}</Text>
                 </View>
-                <Stepper value={draftQty[product.productId] ?? 0} onChange={(next) => setDraftQty((prev) => ({ ...prev, [product.productId]: next }))} />
+                {canEdit ? (
+                  <Stepper value={draftQty[product.productId] ?? 0} onChange={(next) => setDraftQty((prev) => ({ ...prev, [product.productId]: next }))} />
+                ) : (
+                  <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "800" }}>
+                    {draftQty[product.productId] ?? 0} {product.unit}
+                  </Text>
+                )}
               </View>
             ))
           )}
@@ -307,18 +356,68 @@ export default function RunScreen() {
           </Pressable>
         </View>
 
-        <TextInput
-          value={remarks}
-          onChangeText={setRemarks}
-          placeholder="Add a note (optional)"
-          placeholderTextColor={colors.inkFaint}
-          style={{ marginTop: 12, backgroundColor: colors.surface, borderColor: colors.border, borderWidth: 1, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 12, color: colors.ink, fontSize: 14 }}
-        />
+        {isLastStop ? (
+          <Pressable
+            onPress={finishRoute}
+            style={({ pressed }) => ({
+              marginTop: 10,
+              paddingVertical: 13,
+              borderRadius: radius.md,
+              borderWidth: 1.5,
+              borderColor: colors.brand,
+              alignItems: "center",
+              opacity: pressed ? 0.7 : 1,
+            })}
+          >
+            <Text style={{ color: colors.brand, fontSize: 14, fontWeight: "800" }}>Finish route</Text>
+          </Pressable>
+        ) : null}
 
-        <View key={customer.customerId} style={{ marginTop: 14, gap: 10 }}>
-          <SlideToConfirm direction="right" tone="delivered" label="Slide to deliver" disabled={saving} onConfirm={() => doSave(false)} />
-          <SlideToConfirm direction="left" tone="skipped" label="Slide to skip" disabled={saving} onConfirm={() => doSave(true)} />
-        </View>
+        {canEdit || remarks.trim() ? (
+          <TextInput
+            value={remarks}
+            onChangeText={setRemarks}
+            editable={canEdit}
+            placeholder="Add a note (optional)"
+            placeholderTextColor={colors.inkFaint}
+            style={{
+              marginTop: 12,
+              backgroundColor: canEdit ? colors.surface : colors.surface2,
+              borderColor: colors.border,
+              borderWidth: 1,
+              borderRadius: radius.md,
+              paddingHorizontal: 14,
+              paddingVertical: 12,
+              color: canEdit ? colors.ink : colors.inkSoft,
+              fontSize: 14,
+            }}
+          />
+        ) : null}
+
+        {canEdit ? (
+          <View key={customer.customerId} style={{ marginTop: 14, gap: 10 }}>
+            <SlideToConfirm direction="right" tone="delivered" label="Slide to deliver" disabled={saving} onConfirm={() => doSave(false)} />
+            <SlideToConfirm direction="left" tone="skipped" label="Slide to skip" disabled={saving} onConfirm={() => doSave(true)} />
+          </View>
+        ) : (
+          <Pressable
+            onPress={() => setEditMode(true)}
+            style={({ pressed }) => ({
+              marginTop: 14,
+              paddingVertical: 14,
+              borderRadius: radius.md,
+              backgroundColor: colors.surface2,
+              borderWidth: 1,
+              borderColor: colors.border,
+              alignItems: "center",
+              opacity: pressed ? 0.7 : 1,
+            })}
+          >
+            <Text style={{ color: colors.inkSoft, fontSize: 13.5, fontWeight: "700" }}>
+              Recorded as {status.label.toLowerCase()} · tap to edit
+            </Text>
+          </Pressable>
+        )}
 
         {error ? <Text style={{ color: colors.danger, fontSize: 13, marginTop: 12, textAlign: "center" }}>{error}</Text> : null}
       </ScrollView>
