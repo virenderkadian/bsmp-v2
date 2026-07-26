@@ -58,7 +58,8 @@ src/
   session.tsx         SecureStore token/vehicle + context
   active-route.tsx     shared "is a route in progress" tracker (poll + refresh)
   route-progress.ts     route progress fetch/derive helpers
-  location.ts          GPS backfill capture + Apple/Google Maps navigation
+  location.ts          GPS capture, drift-confirm prompt, Apple/Google Maps navigation
+  cash-sale.ts          LOCAL-ONLY cash sale storage (AsyncStorage, 2-day retention)
   theme.ts            palette (light/dark)
   ui.tsx              small component kit
   route-card.tsx
@@ -66,6 +67,7 @@ src/
   components/Stepper.tsx          quantity stepper
   components/StopsListModal.tsx   search/jump-to-customer modal
   components/ActiveRoutePill.tsx  floating "route in progress" resume banner
+  components/CashSaleModal.tsx    fast local cash-sale entry + 2-day history
 ```
 
 ## Status / next
@@ -76,8 +78,12 @@ from the customer's most recent delivery) + quantity steppers, two
 slide-to-confirm controls, auto-advance, undo, explicit Prev/Next and a
 search/jump "All stops" modal, an explicit Finish-route action at the last
 stop, a round-complete summary, a floating resume pill + one-active-route
-guard app-wide, and GPS: the customer's location is captured once on their
-first delivery (never overwritten) and a Navigate button opens turn-by-turn
-directions (Apple Maps on iOS, Google Maps on Android) once it's set.
+guard app-wide, GPS (location captured on first delivery; a >12m drift on a
+later delivery prompts before overwriting; Navigate opens Apple or Google
+Maps on iOS, Google Maps directly on Android), and Cash Sale — a fast,
+**local-only** entry screen (no server call, ever) that self-expires after 2
+days on the device.
 
-Next: offline queue, cash sale, map/GPS beyond navigation (e.g. a live map view).
+Next: offline queue for delivery marks, map/GPS beyond point-to-point
+navigation (e.g. a live map view), theme override (system default / light /
+dark) in Profile.
