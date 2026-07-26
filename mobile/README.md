@@ -85,7 +85,16 @@ Maps on iOS, Google Maps directly on Android), Cash Sale (fast, **local-only**
 entry, no server call ever, self-expires after 2 days), and a full theme
 system in Profile — **Appearance** (System default / Light / Dark, persisted)
 crossed with **Theme** (Teal / Ocean / Indigo color families, persisted),
-resolved through one `useTheme()` every screen already reads from.
+resolved through one `useTheme()` every screen already reads from. Also has a
+real app icon + splash screen (`assets/`, a milk-bottle mark on brand teal —
+generated as SVG and rasterized locally, see git history if the source SVGs
+are ever needed again).
+
+Note: the splash screen's light/dark image follows the **device's** OS
+appearance, not the in-app Appearance override above — the splash renders
+before the JS/React tree (and thus before ThemePreferenceProvider) ever
+starts, so it has no way to know about a persisted in-app choice. This is a
+platform limitation, not a bug.
 
 Next: offline queue for delivery marks, map/GPS beyond point-to-point
 navigation (e.g. a live map view).
