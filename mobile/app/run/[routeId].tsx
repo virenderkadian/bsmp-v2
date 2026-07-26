@@ -3,15 +3,13 @@ import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { DriverSheetCustomer, DriverSheetResponse } from "@shared/driver-api-types";
+import { useActiveRoute } from "@/active-route";
 import { api, ApiError } from "@/api";
 import { SlideToConfirm } from "@/components/SlideToConfirm";
 import { Stepper } from "@/components/Stepper";
+import { todayStr } from "@/route-progress";
 import { radius } from "@/theme";
 import { Card, Chip, PrimaryButton, ProgressBar, useColors } from "@/ui";
-
-function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
-}
 
 function statusOf(customer: DriverSheetCustomer): { tone: "delivered" | "skipped" | "pending"; label: string } {
   if (!customer.saved) return { tone: "pending", label: "Pending" };
@@ -22,6 +20,7 @@ export default function RunScreen() {
   const colors = useColors();
   const router = useRouter();
   const { routeId } = useLocalSearchParams<{ routeId: string }>();
+  const { refresh: refreshActiveRoute } = useActiveRoute();
 
   const [sheet, setSheet] = useState<DriverSheetResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -107,6 +106,9 @@ export default function RunScreen() {
       );
       setSnackbar({ index: cursor, label: skipped ? "Skipped" : "Delivered" });
       advance();
+      // Progress just changed (and may have just hit 100%) — let the pill and
+      // the route-start guard pick that up without waiting for their poll.
+      refreshActiveRoute();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't save. Try again.");
     } finally {
@@ -265,6 +267,45 @@ export default function RunScreen() {
             <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800" }}>₹ {Math.round(stopTotal)}</Text>
           </View>
         </Card>
+
+        {/* Explicit navigation — separate from the slide controls, which
+            always advance to the next PENDING stop after a save. These move
+            freely between adjacent stops (including already-saved ones, to
+            review or correct), one at a time. */}
+        <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
+          <Pressable
+            onPress={() => setCursor((current) => Math.max(0, current - 1))}
+            disabled={cursor === 0}
+            style={({ pressed }) => ({
+              flex: 1,
+              paddingVertical: 13,
+              borderRadius: radius.md,
+              borderWidth: 1,
+              borderColor: colors.borderStrong,
+              backgroundColor: colors.surface,
+              alignItems: "center",
+              opacity: cursor === 0 ? 0.4 : pressed ? 0.7 : 1,
+            })}
+          >
+            <Text style={{ color: colors.ink, fontSize: 14, fontWeight: "700" }}>‹ Previous</Text>
+          </Pressable>
+          <Pressable
+            onPress={() => setCursor((current) => Math.min(total - 1, current + 1))}
+            disabled={cursor >= total - 1}
+            style={({ pressed }) => ({
+              flex: 1,
+              paddingVertical: 13,
+              borderRadius: radius.md,
+              borderWidth: 1,
+              borderColor: colors.borderStrong,
+              backgroundColor: colors.surface,
+              alignItems: "center",
+              opacity: cursor >= total - 1 ? 0.4 : pressed ? 0.7 : 1,
+            })}
+          >
+            <Text style={{ color: colors.ink, fontSize: 14, fontWeight: "700" }}>Next ›</Text>
+          </Pressable>
+        </View>
 
         <TextInput
           value={remarks}

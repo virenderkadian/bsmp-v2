@@ -87,7 +87,11 @@ export type DriverSaveLineRequest = {
   date: string; // YYYY-MM-DD
   skipped: boolean;
   remarks?: string;
-  products: Array<{ productId: string; quantity: string; rateSnapshot: string }>;
+  // Numeric here (unlike DriverSheetProduct's string fields, which are
+  // Decimal-serialized read values) — this is a request payload the client
+  // builds from its own numeric state; the backend's zod schema coerces
+  // either shape anyway.
+  products: Array<{ productId: string; quantity: number; rateSnapshot: number }>;
 };
 
 export type DriverSaveLineResponse = {
