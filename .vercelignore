@@ -1,0 +1,4 @@
+# The driver mobile app is a separate Expo/React Native project with its own
+# node_modules and is shipped via Expo EAS, not Vercel. Keep it out of the web
+# build entirely so it can never affect Next.js installs or builds.
+mobile/
