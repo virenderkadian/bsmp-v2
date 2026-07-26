@@ -38,14 +38,19 @@ export async function getDriverRoutes(vehicleId: string): Promise<DriverRoute[]>
   }));
 }
 
+// How far back to look for a customer's most recent delivery when suggesting
+// today's default quantity. Bounds the history query; well past a month
+// covers a customer who's been skipped for a while (holiday, temporary stop).
+const RECENT_ORDER_LOOKBACK_DAYS = 45;
+
 // The delivery sheet for one route + date: the month's customer sequence in
 // order, each with the same active product catalog the web Daily Entry screen
-// uses (see src/lib/daily-entry.ts) and any marks already saved. There is no
-// per-customer "usual order" anywhere in this app today — RouteCustomerAssignment
-// / RouteCustomerProductDefault exist in the schema but nothing writes to them
-// — so every customer gets the full catalog with quantity 0 until the driver
-// (or a prior save) sets it, exactly like the web screen. Returns null when
-// the route isn't this vehicle's (or doesn't exist).
+// uses (see src/lib/daily-entry.ts), pre-filled with what the customer most
+// recently took (their "usual order" — there's no separately configured
+// default anywhere in this app; RouteCustomerAssignment /
+// RouteCustomerProductDefault exist in the schema but nothing writes to them),
+// and any marks already saved for this date. Returns null when the route
+// isn't this vehicle's (or doesn't exist).
 export async function getDriverSheet(
   vehicleId: string,
   routeId: string,
@@ -53,8 +58,10 @@ export async function getDriverSheet(
 ): Promise<DriverSheetResponse | null> {
   const sequenceMonth = toMonthStart(dateInput);
   const entryDate = toDay(dateInput);
+  const recentSince = new Date(entryDate);
+  recentSince.setUTCDate(recentSince.getUTCDate() - RECENT_ORDER_LOOKBACK_DAYS);
 
-  const [route, products] = await Promise.all([
+  const [route, products, recentEntries] = await Promise.all([
     prisma.route.findFirst({
       where: { id: routeId, vehicleId, isActive: true },
       select: {
@@ -92,6 +99,19 @@ export async function getDriverSheet(
       orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
       select: { id: true, code: true, shortName: true, unit: true, defaultRate: true },
     }),
+    // One bounded query for the whole route, not per customer: every prior
+    // day's non-skipped lines, newest first, so we can pick each customer's
+    // most recent delivery in a single pass below.
+    prisma.dailyRouteEntry.findMany({
+      where: { routeId, entryDate: { lt: entryDate, gte: recentSince } },
+      orderBy: { entryDate: "desc" },
+      select: {
+        lines: {
+          where: { skipped: false },
+          select: { customerId: true, productEntries: { select: { productId: true, quantity: true } } },
+        },
+      },
+    }),
   ]);
 
   if (!route) {
@@ -100,20 +120,44 @@ export async function getDriverSheet(
 
   const lineByCustomer = new Map((route.entries[0]?.lines ?? []).map((line) => [line.customerId, line]));
 
+  // First non-empty delivery found per customer, walking newest-to-oldest —
+  // that's their most recent "usual order".
+  const recentOrderByCustomer = new Map<string, Map<string, number>>();
+  for (const entry of recentEntries) {
+    for (const line of entry.lines) {
+      if (recentOrderByCustomer.has(line.customerId)) {
+        continue;
+      }
+      const quantities = new Map<string, number>();
+      line.productEntries.forEach((productEntry) => {
+        const quantity = Number(productEntry.quantity);
+        if (quantity > 0) {
+          quantities.set(productEntry.productId, quantity);
+        }
+      });
+      if (quantities.size > 0) {
+        recentOrderByCustomer.set(line.customerId, quantities);
+      }
+    }
+  }
+
   const customers: DriverSheetCustomer[] = route.monthlySequences.map((seq) => {
     const savedLine = lineByCustomer.get(seq.customerId);
     const savedProducts = new Map((savedLine?.productEntries ?? []).map((entry) => [entry.productId, entry]));
+    const recentOrder = recentOrderByCustomer.get(seq.customerId);
 
     const sheetProducts: DriverSheetProduct[] = products.map((product) => {
       const saved = savedProducts.get(product.id);
+      const recentQty = recentOrder?.get(product.id);
+      const defaultQty = recentQty !== undefined ? String(recentQty) : "0";
       return {
         productId: product.id,
         code: product.code,
         shortName: product.shortName,
         unit: product.unit,
         rate: String(saved?.rateSnapshot ?? product.defaultRate),
-        defaultQty: "0",
-        deliveredQty: String(saved?.quantity ?? 0),
+        defaultQty,
+        deliveredQty: String(saved?.quantity ?? defaultQty),
       };
     });
 

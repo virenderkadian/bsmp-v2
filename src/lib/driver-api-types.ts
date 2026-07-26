@@ -50,9 +50,10 @@ export type DriverSheetProduct = {
   unit: string;
   // Rate to apply for this delivery (snapshot). Decimal serialized as string.
   rate: string;
-  // Always "0" today — there is no per-customer "usual order" stored anywhere
-  // in this app (matches the web Daily Entry screen, which starts every
-  // product at 0 too). Kept as a field in case that changes later.
+  // The customer's most recently delivered quantity for this product, looked
+  // up from prior daily entries (up to ~45 days back) since there's no
+  // separately configured "usual order" anywhere in this app. "0" if there's
+  // no recent history (new customer, or they haven't taken this product).
   defaultQty: string;
   // The quantity currently marked delivered (defaults to defaultQty until the
   // driver saves an explicit value).
