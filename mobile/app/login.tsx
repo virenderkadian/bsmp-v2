@@ -9,7 +9,7 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { api, ApiError } from "@/api";
+import { api, API_BASE, ApiError } from "@/api";
 import { useSession } from "@/session";
 import { radius } from "@/theme";
 import { PrimaryButton, useColors } from "@/ui";
@@ -119,6 +119,12 @@ export default function LoginScreen() {
         ) : null}
 
         <PrimaryButton label="Log in" onPress={onSubmit} loading={submitting} disabled={!vehicleCode.trim() || pin.trim().length < 4} />
+
+        {/* Dev diagnostic — shows exactly which server this build is calling, so a
+            stuck/failed login is never a mystery. Remove once the API URL is stable. */}
+        <Text style={{ color: colors.inkFaint, fontSize: 11, textAlign: "center", marginTop: 18 }}>
+          Server: {API_BASE}
+        </Text>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
