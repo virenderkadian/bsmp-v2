@@ -6,6 +6,7 @@ import type { DriverSaveLineRequest, DriverSheetCustomer, DriverSheetResponse } 
 import { useActiveRoute } from "@/active-route";
 import { api, ApiError } from "@/api";
 import { CashSaleModal } from "@/components/CashSaleModal";
+import { RouteMapModal } from "@/components/RouteMapModal";
 import { SlideToConfirm } from "@/components/SlideToConfirm";
 import { Stepper } from "@/components/Stepper";
 import { StopsListModal } from "@/components/StopsListModal";
@@ -75,6 +76,7 @@ export default function RunScreen() {
   const [manuallyFinished, setManuallyFinished] = useState(false);
   const [stopsListOpen, setStopsListOpen] = useState(false);
   const [cashSaleOpen, setCashSaleOpen] = useState(false);
+  const [mapOpen, setMapOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!routeId) return;
@@ -273,6 +275,14 @@ export default function RunScreen() {
             <Text style={{ fontSize: 16 }}>💵</Text>
           </Pressable>
         ) : null}
+        {sheet && total > 0 ? (
+          <Pressable
+            onPress={() => setMapOpen(true)}
+            style={{ width: 36, height: 36, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
+          >
+            <Text style={{ fontSize: 16 }}>🗺️</Text>
+          </Pressable>
+        ) : null}
         {sheet && total > 0 && !allDone && !manuallyFinished ? (
           <Pressable
             onPress={() => setStopsListOpen(true)}
@@ -373,6 +383,19 @@ export default function RunScreen() {
           onClose={() => setCashSaleOpen(false)}
           routeId={sheet.route.id}
           products={sheet.customers[0]?.products ?? []}
+        />
+
+        <RouteMapModal
+          visible={mapOpen}
+          onClose={() => setMapOpen(false)}
+          customers={sheet.customers}
+          currentIndex={cursor}
+          statusOf={(c) => statusOf(c, queuedIds.has(c.customerId))}
+          onSelect={(index) => {
+            setCursor(index);
+            setManuallyFinished(false);
+            setMapOpen(false);
+          }}
         />
       </SafeAreaView>
     );
@@ -598,6 +621,18 @@ export default function RunScreen() {
         onClose={() => setCashSaleOpen(false)}
         routeId={sheet.route.id}
         products={sheet.customers[0]?.products ?? []}
+      />
+
+      <RouteMapModal
+        visible={mapOpen}
+        onClose={() => setMapOpen(false)}
+        customers={sheet.customers}
+        currentIndex={cursor}
+        statusOf={(c) => statusOf(c, queuedIds.has(c.customerId))}
+        onSelect={(index) => {
+          setCursor(index);
+          setMapOpen(false);
+        }}
       />
     </SafeAreaView>
   );

@@ -28,6 +28,20 @@ export async function tryGetCurrentLocation(): Promise<{ latitude: number; longi
   }
 }
 
+// Used by the live map view to get `showsUserLocation` working without
+// waiting for a delivery save to first trigger the permission prompt (the
+// map may be the very first thing a driver opens on a route).
+export async function ensureForegroundLocationPermission(): Promise<boolean> {
+  try {
+    const existing = await Location.getForegroundPermissionsAsync();
+    if (existing.status === "granted") return true;
+    const requested = await Location.requestForegroundPermissionsAsync();
+    return requested.status === "granted";
+  } catch {
+    return false;
+  }
+}
+
 // Mirrors the server-side threshold/check in src/lib/driver-data.ts
 // (LOCATION_DRIFT_THRESHOLD_METERS) — used here only to decide whether to
 // bother the driver with a prompt; the backend re-verifies independently

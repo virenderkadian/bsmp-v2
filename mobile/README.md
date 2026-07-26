@@ -72,6 +72,7 @@ src/
   components/StopsListModal.tsx   search/jump-to-customer modal
   components/ActiveRoutePill.tsx  floating "route in progress" resume banner
   components/CashSaleModal.tsx    fast local cash-sale entry + 2-day history
+  components/RouteMapModal.tsx    route stops on a map, color-coded, tap to jump
 ```
 
 ## Status / next
@@ -94,7 +95,12 @@ icon + splash screen (`assets/`, a milk-bottle mark on brand teal), and an
 connectivity), and — only when the network attempt fails or the device is
 offline — also queues it locally for automatic replay on reconnect/foreground.
 A real server rejection (e.g. a bill got locked) is NOT queued for retry —
-that would never succeed — it's surfaced immediately instead.
+that would never succeed — it's surfaced immediately instead. Also a
+**route map** (🗺️ in the run screen header): every stop with a saved location
+as a pin, color-coded delivered/skipped/pending, the current stop highlighted
+in the brand color, the driver's live position via `showsUserLocation`, and
+tapping a pin jumps the cursor straight to that stop — same idea as the "All
+stops" list, just spatial.
 
 Note: the splash screen's light/dark image follows the **device's** OS
 appearance, not the in-app Appearance override above — the splash renders
@@ -102,5 +108,12 @@ before the JS/React tree (and thus before ThemePreferenceProvider) ever
 starts, so it has no way to know about a persisted in-app choice. This is a
 platform limitation, not a bug.
 
-Next: map/GPS beyond point-to-point navigation (e.g. a live map view showing
-the route's stops).
+Note: on Android, `react-native-maps` needs a Google Maps API key to render
+tiles. Expo Go's shared debug key covers local testing, but before an EAS
+build (dev client or production) add a real key at
+`expo.android.config.googleMaps.apiKey` in `app.json`.
+
+Next: production readiness — DB migrations on the production database
+(vehicle PIN fields, `DriverLoginAttempt`), a distinct `DRIVER_JWT_SECRET`
+for the Production Vercel env, real PINs for real vehicles, then promoting
+`develop` to `main`.
