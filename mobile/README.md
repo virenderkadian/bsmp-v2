@@ -52,20 +52,23 @@ app/
   (tabs)/index.tsx      Dashboard
   (tabs)/delivery.tsx   Routes to run
   (tabs)/profile.tsx    Vehicle info, links, log out
-  run/[routeId].tsx     Delivery run (currently a live read-only stop list)
+  run/[routeId].tsx     Interactive delivery run (stop-by-stop)
 src/
   api.ts        fetch client (base URL + bearer token)
   session.tsx   SecureStore token/vehicle + context
   theme.ts      palette (light/dark)
   ui.tsx        small component kit
   route-card.tsx
+  components/SlideToConfirm.tsx   Reanimated slide-to-confirm
+  components/Stepper.tsx          quantity stepper
 ```
 
 ## Status / next
 
-Done: login, native tabs, Dashboard, Delivery, Profile, and a live delivery run
-that lists the real monthly-sequence stops with pre-filled deliverables.
+Done: login, native tabs, Dashboard, Delivery, Profile, and the interactive
+delivery run — single-stop card with pre-filled deliverables + quantity
+steppers, the two slide-to-confirm controls (slide right = deliver, left =
+skip), auto-advance to the next pending stop, an undo snackbar, and a
+round-complete summary.
 
-Next: the interactive stop-by-stop flow — the two slide-to-confirm controls
-(slide right = deliver, left = skip), auto-advance, undo — plus the stops search
-and the round-complete summary. Later: offline queue, cash sale, map/GPS.
+Next: stops search / jump-to-customer, then offline queue, cash sale, map/GPS.
