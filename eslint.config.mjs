@@ -13,6 +13,10 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
     "bsmpops-v2-temp/**",
+    // mobile/ is a separate, isolated Expo project (own tsconfig, own
+    // node_modules, own npm install) — this project's type-aware rules would
+    // resolve its imports against the WEB app's src/, not mobile's.
+    "mobile/**",
   ]),
 ]);
 

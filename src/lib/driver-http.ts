@@ -10,8 +10,8 @@ const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Max-Age": "86400",
 };
 
-export function driverJson(body: unknown, status = 200): NextResponse {
-  return NextResponse.json(body, { status, headers: CORS_HEADERS });
+export function driverJson(body: unknown, status = 200, extraHeaders?: Record<string, string>): NextResponse {
+  return NextResponse.json(body, { status, headers: { ...CORS_HEADERS, ...extraHeaders } });
 }
 
 export function driverPreflight(): NextResponse {

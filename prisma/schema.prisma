@@ -516,3 +516,19 @@ model AuditLog {
   @@index([entityType, entityId])
   @@index([actorId])
 }
+
+// Rate-limit ledger for POST /api/driver/login (see src/lib/driver-rate-limit.ts).
+// One row per attempt, pruned opportunistically once past the lockout window —
+// this is a short-lived ledger, not a permanent log (AuditLog covers that).
+// No cityId: login happens before a vehicle's city is known, so limiting is by
+// the submitted vehicleCode text and the caller's IP, not a resolved entity.
+model DriverLoginAttempt {
+  id          String   @id @default(uuid()) @db.Uuid
+  vehicleCode String
+  ipAddress   String?
+  success     Boolean
+  createdAt   DateTime @default(now())
+
+  @@index([vehicleCode, createdAt])
+  @@index([ipAddress, createdAt])
+}
