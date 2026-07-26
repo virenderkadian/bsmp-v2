@@ -73,6 +73,11 @@ export type DriverSheetCustomer = {
   remarks: string | null;
   // True once a line has been saved for this customer on this date.
   saved: boolean;
+  // Captured once, from the first delivery that includes a device location
+  // (see DriverSaveLineRequest.location) — never overwritten after that. Null
+  // until then; the app shows the Navigate button only once both are set.
+  latitude: string | null;
+  longitude: string | null;
 };
 
 export type DriverSheetResponse = {
@@ -92,6 +97,10 @@ export type DriverSaveLineRequest = {
   // builds from its own numeric state; the backend's zod schema coerces
   // either shape anyway.
   products: Array<{ productId: string; quantity: number; rateSnapshot: number }>;
+  // Device location at the moment of delivery. Only used to BACKFILL the
+  // customer's saved location the first time (see saveDriverLine) — ignored
+  // once the customer already has coordinates, and never sent for a skip.
+  location?: { latitude: number; longitude: number };
 };
 
 export type DriverSaveLineResponse = {

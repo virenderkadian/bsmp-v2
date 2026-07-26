@@ -19,6 +19,12 @@ const saveSchema = z.object({
       }),
     )
     .default([]),
+  location: z
+    .object({
+      latitude: z.coerce.number().min(-90).max(90),
+      longitude: z.coerce.number().min(-180).max(180),
+    })
+    .optional(),
 });
 
 export function OPTIONS() {
@@ -52,6 +58,7 @@ export async function POST(
     skipped: parsed.data.skipped,
     remarks: parsed.data.remarks,
     products: parsed.data.products,
+    location: parsed.data.location,
   });
 
   if (!result.ok) {

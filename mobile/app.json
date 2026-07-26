@@ -9,15 +9,25 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "in.bsmp.driver"
+      "bundleIdentifier": "in.bsmp.driver",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Used to save a customer's location the first time you deliver to them, and to give you directions there."
+      }
     },
     "android": {
       "package": "in.bsmp.driver",
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"]
     },
     "plugins": [
       "expo-router",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Used to save a customer's location the first time you deliver to them, and to give you directions there."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

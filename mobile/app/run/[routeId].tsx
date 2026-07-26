@@ -8,6 +8,7 @@ import { api, ApiError } from "@/api";
 import { SlideToConfirm } from "@/components/SlideToConfirm";
 import { Stepper } from "@/components/Stepper";
 import { StopsListModal } from "@/components/StopsListModal";
+import { openNavigation, tryGetCurrentLocation } from "@/location";
 import { todayStr } from "@/route-progress";
 import { radius } from "@/theme";
 import { Card, Chip, PrimaryButton, ProgressBar, useColors } from "@/ui";
@@ -127,11 +128,17 @@ export default function RunScreen() {
             quantity: draftQty[product.productId] ?? 0,
             rateSnapshot: Number(product.rate),
           }));
+      // Only bother fetching a GPS fix when the customer doesn't already
+      // have one saved — the backend backfills once and never overwrites, so
+      // sending it again after that would just be wasted work.
+      const needsLocation = !skipped && !customer.latitude && !customer.longitude;
+      const location = needsLocation ? await tryGetCurrentLocation() : null;
       const result = await api.saveLine(routeId, customer.customerId, {
         date: todayStr(),
         skipped,
         remarks: remarks.trim() || undefined,
         products,
+        location: location ?? undefined,
       });
       setSheet((prev) =>
         prev
@@ -279,14 +286,24 @@ export default function RunScreen() {
               </Text>
               {customer.area ? <Text style={{ color: colors.inkSoft, fontSize: 13.5, marginTop: 2 }}>{customer.area}</Text> : null}
             </View>
-            {customer.mobile ? (
-              <Pressable
-                onPress={() => Linking.openURL(`tel:${customer.mobile}`)}
-                style={{ width: 42, height: 42, borderRadius: 13, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
-              >
-                <Text style={{ color: colors.brand, fontSize: 18 }}>📞</Text>
-              </Pressable>
-            ) : null}
+            <View style={{ flexDirection: "row", gap: 8 }}>
+              {customer.latitude && customer.longitude ? (
+                <Pressable
+                  onPress={() => openNavigation(Number(customer.latitude), Number(customer.longitude))}
+                  style={{ width: 42, height: 42, borderRadius: 13, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
+                >
+                  <Text style={{ fontSize: 18 }}>🧭</Text>
+                </Pressable>
+              ) : null}
+              {customer.mobile ? (
+                <Pressable
+                  onPress={() => Linking.openURL(`tel:${customer.mobile}`)}
+                  style={{ width: 42, height: 42, borderRadius: 13, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
+                >
+                  <Text style={{ color: colors.brand, fontSize: 18 }}>📞</Text>
+                </Pressable>
+              ) : null}
+            </View>
           </View>
 
           <View style={{ height: 1, backgroundColor: colors.border, marginVertical: 14 }} />

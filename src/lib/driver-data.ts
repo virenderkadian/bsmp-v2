@@ -75,7 +75,7 @@ export async function getDriverSheet(
           select: {
             customerId: true,
             sequenceNo: true,
-            customer: { select: { name: true, area: true, mobile: true } },
+            customer: { select: { name: true, area: true, mobile: true, latitude: true, longitude: true } },
           },
         },
         entries: {
@@ -176,6 +176,8 @@ export async function getDriverSheet(
       skipped: savedLine?.skipped ?? false,
       remarks: savedLine?.remarks ?? null,
       saved: Boolean(savedLine),
+      latitude: seq.customer.latitude !== null ? String(seq.customer.latitude) : null,
+      longitude: seq.customer.longitude !== null ? String(seq.customer.longitude) : null,
     };
   });
 
@@ -190,6 +192,7 @@ export type SaveDriverLineInput = {
   skipped: boolean;
   remarks?: string;
   products: Array<{ productId: string; quantity: number; rateSnapshot: number }>;
+  location?: { latitude: number; longitude: number };
 };
 
 export type SaveDriverLineResult =
@@ -269,6 +272,24 @@ export async function saveDriverLine(
       await tx.dailyRouteEntryLineProduct.createMany({
         data: productRows.map((row) => ({ lineId: line.id, ...row })),
       });
+    }
+
+    // Backfill the customer's location from their first delivery that
+    // includes one — never overwrite it once set (a driver's GPS fix is a
+    // point-in-time reading, not necessarily more accurate than what's
+    // already saved). Skipped visits never carry a location; see
+    // DriverSaveLineRequest.location.
+    if (!input.skipped && input.location) {
+      const existing = await tx.customer.findUnique({
+        where: { id: customerId },
+        select: { latitude: true, longitude: true },
+      });
+      if (existing && existing.latitude === null && existing.longitude === null) {
+        await tx.customer.update({
+          where: { id: customerId },
+          data: { latitude: input.location.latitude, longitude: input.location.longitude },
+        });
+      }
     }
   });
 

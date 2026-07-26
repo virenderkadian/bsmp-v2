@@ -54,21 +54,30 @@ app/
   (tabs)/profile.tsx    Vehicle info, links, log out
   run/[routeId].tsx     Interactive delivery run (stop-by-stop)
 src/
-  api.ts        fetch client (base URL + bearer token)
-  session.tsx   SecureStore token/vehicle + context
-  theme.ts      palette (light/dark)
-  ui.tsx        small component kit
+  api.ts             fetch client (base URL + bearer token)
+  session.tsx         SecureStore token/vehicle + context
+  active-route.tsx     shared "is a route in progress" tracker (poll + refresh)
+  route-progress.ts     route progress fetch/derive helpers
+  location.ts          GPS backfill capture + Apple/Google Maps navigation
+  theme.ts            palette (light/dark)
+  ui.tsx              small component kit
   route-card.tsx
   components/SlideToConfirm.tsx   Reanimated slide-to-confirm
   components/Stepper.tsx          quantity stepper
+  components/StopsListModal.tsx   search/jump-to-customer modal
+  components/ActiveRoutePill.tsx  floating "route in progress" resume banner
 ```
 
 ## Status / next
 
 Done: login, native tabs, Dashboard, Delivery, Profile, and the interactive
-delivery run — single-stop card with pre-filled deliverables + quantity
-steppers, the two slide-to-confirm controls (slide right = deliver, left =
-skip), auto-advance to the next pending stop, an undo snackbar, and a
-round-complete summary.
+delivery run — single-stop card with pre-filled deliverables (carried forward
+from the customer's most recent delivery) + quantity steppers, two
+slide-to-confirm controls, auto-advance, undo, explicit Prev/Next and a
+search/jump "All stops" modal, an explicit Finish-route action at the last
+stop, a round-complete summary, a floating resume pill + one-active-route
+guard app-wide, and GPS: the customer's location is captured once on their
+first delivery (never overwritten) and a Navigate button opens turn-by-turn
+directions (Apple Maps on iOS, Google Maps on Android) once it's set.
 
-Next: stops search / jump-to-customer, then offline queue, cash sale, map/GPS.
+Next: offline queue, cash sale, map/GPS beyond navigation (e.g. a live map view).

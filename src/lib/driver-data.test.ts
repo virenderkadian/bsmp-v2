@@ -1,6 +1,6 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { getDriverSheet } from "@/lib/driver-data";
+import { getDriverSheet, saveDriverLine } from "@/lib/driver-data";
 
 // Self-contained fixture proving the deliveredQty leak is fixed: a customer
 // delivered 5 yesterday (becomes their recent-order suggestion), is SKIPPED
@@ -16,8 +16,6 @@ let vehicleId: string;
 let routeId: string;
 let customerId: string;
 let productId: string;
-let yesterdayEntryId: string;
-let todayEntryId: string;
 
 const YESTERDAY = new Date(Date.UTC(2027, 0, 14));
 const TODAY = new Date(Date.UTC(2027, 0, 15));
@@ -53,9 +51,8 @@ beforeAll(async () => {
   const yesterdayEntry = await rawPrisma.dailyRouteEntry.create({
     data: { routeId, entryDate: YESTERDAY, syncStatus: "SYNCED" },
   });
-  yesterdayEntryId = yesterdayEntry.id;
   const yesterdayLine = await rawPrisma.dailyRouteEntryLine.create({
-    data: { entryId: yesterdayEntryId, customerId, sequenceNo: 1, skipped: false },
+    data: { entryId: yesterdayEntry.id, customerId, sequenceNo: 1, skipped: false },
   });
   await rawPrisma.dailyRouteEntryLineProduct.create({
     data: { lineId: yesterdayLine.id, productId, quantity: 5, rateSnapshot: 50 },
@@ -64,16 +61,17 @@ beforeAll(async () => {
   const todayEntry = await rawPrisma.dailyRouteEntry.create({
     data: { routeId, entryDate: TODAY, syncStatus: "SYNCED" },
   });
-  todayEntryId = todayEntry.id;
   await rawPrisma.dailyRouteEntryLine.create({
-    data: { entryId: todayEntryId, customerId, sequenceNo: 1, skipped: true },
+    data: { entryId: todayEntry.id, customerId, sequenceNo: 1, skipped: true },
   });
 });
 
 afterAll(async () => {
-  await rawPrisma.dailyRouteEntryLineProduct.deleteMany({ where: { line: { entryId: { in: [yesterdayEntryId, todayEntryId] } } } });
-  await rawPrisma.dailyRouteEntryLine.deleteMany({ where: { entryId: { in: [yesterdayEntryId, todayEntryId] } } });
-  await rawPrisma.dailyRouteEntry.deleteMany({ where: { id: { in: [yesterdayEntryId, todayEntryId] } } });
+  // Scoped by routeId (not just the two beforeAll entries) since the
+  // location-backfill tests below create further entries via saveDriverLine.
+  await rawPrisma.dailyRouteEntryLineProduct.deleteMany({ where: { line: { entry: { routeId } } } });
+  await rawPrisma.dailyRouteEntryLine.deleteMany({ where: { entry: { routeId } } });
+  await rawPrisma.dailyRouteEntry.deleteMany({ where: { routeId } });
   await rawPrisma.monthlyRouteCustomerSequence.deleteMany({ where: { routeId } });
   await rawPrisma.customer.delete({ where: { id: customerId } });
   await rawPrisma.product.delete({ where: { id: productId } });
@@ -102,5 +100,49 @@ describe("driver sheet deliveredQty (dev DB)", () => {
 
     expect(product?.defaultQty).toBe("5");
     expect(product?.deliveredQty).toBe("5");
+  });
+});
+
+describe("saveDriverLine location backfill (dev DB)", () => {
+  it("captures location on the first non-skipped save and never overwrites it on later saves", async () => {
+    await rawPrisma.customer.update({ where: { id: customerId }, data: { latitude: null, longitude: null } });
+
+    const first = await saveDriverLine(vehicleId, routeId, customerId, "2027-01-20", {
+      skipped: false,
+      products: [{ productId, quantity: 2, rateSnapshot: 50 }],
+      location: { latitude: 28.6, longitude: 77.2 },
+    });
+    expect(first.ok).toBe(true);
+    if (first.ok) {
+      expect(first.customer.latitude).toBe("28.6");
+      expect(first.customer.longitude).toBe("77.2");
+    }
+
+    // A later save with a DIFFERENT location must not move an already-set one.
+    const second = await saveDriverLine(vehicleId, routeId, customerId, "2027-01-21", {
+      skipped: false,
+      products: [{ productId, quantity: 2, rateSnapshot: 50 }],
+      location: { latitude: 12.9, longitude: 77.5 },
+    });
+    expect(second.ok).toBe(true);
+    if (second.ok) {
+      expect(second.customer.latitude).toBe("28.6");
+      expect(second.customer.longitude).toBe("77.2");
+    }
+  });
+
+  it("does not capture location on a skip", async () => {
+    await rawPrisma.customer.update({ where: { id: customerId }, data: { latitude: null, longitude: null } });
+
+    const result = await saveDriverLine(vehicleId, routeId, customerId, "2027-01-25", {
+      skipped: true,
+      products: [],
+      location: { latitude: 28.6, longitude: 77.2 },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.customer.latitude).toBeNull();
+      expect(result.customer.longitude).toBeNull();
+    }
   });
 });
