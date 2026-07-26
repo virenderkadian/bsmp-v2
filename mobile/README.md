@@ -60,7 +60,8 @@ src/
   route-progress.ts     route progress fetch/derive helpers
   location.ts          GPS capture, drift-confirm prompt, Apple/Google Maps navigation
   cash-sale.ts          LOCAL-ONLY cash sale storage (AsyncStorage, 2-day retention)
-  theme.ts            palette (light/dark)
+  theme.ts            pure palette DATA — color families (Teal/Ocean/Indigo) x light/dark
+  theme-preference.tsx persisted appearance + theme choice, resolves to the active Palette
   ui.tsx              small component kit
   route-card.tsx
   components/SlideToConfirm.tsx   Reanimated slide-to-confirm
@@ -80,10 +81,11 @@ search/jump "All stops" modal, an explicit Finish-route action at the last
 stop, a round-complete summary, a floating resume pill + one-active-route
 guard app-wide, GPS (location captured on first delivery; a >12m drift on a
 later delivery prompts before overwriting; Navigate opens Apple or Google
-Maps on iOS, Google Maps directly on Android), and Cash Sale — a fast,
-**local-only** entry screen (no server call, ever) that self-expires after 2
-days on the device.
+Maps on iOS, Google Maps directly on Android), Cash Sale (fast, **local-only**
+entry, no server call ever, self-expires after 2 days), and a full theme
+system in Profile — **Appearance** (System default / Light / Dark, persisted)
+crossed with **Theme** (Teal / Ocean / Indigo color families, persisted),
+resolved through one `useTheme()` every screen already reads from.
 
 Next: offline queue for delivery marks, map/GPS beyond point-to-point
-navigation (e.g. a live map view), theme override (system default / light /
-dark) in Profile.
+navigation (e.g. a live map view).
