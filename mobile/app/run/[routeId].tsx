@@ -2,7 +2,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import type { DriverSheetCustomer, DriverSheetResponse } from "@shared/driver-api-types";
+import type { DriverSaveLineRequest, DriverSheetCustomer, DriverSheetResponse } from "@shared/driver-api-types";
 import { useActiveRoute } from "@/active-route";
 import { api, ApiError } from "@/api";
 import { CashSaleModal } from "@/components/CashSaleModal";
@@ -10,13 +10,40 @@ import { SlideToConfirm } from "@/components/SlideToConfirm";
 import { Stepper } from "@/components/Stepper";
 import { StopsListModal } from "@/components/StopsListModal";
 import { openNavigation, resolveLocationForSave } from "@/location";
+import { enqueueSave, getQueueForRoute } from "@/offline-queue";
+import { useOfflineSync } from "@/offline-sync-context";
 import { todayStr } from "@/route-progress";
+import { isOnline } from "@/sync";
 import { radius } from "@/theme";
 import { Card, Chip, PrimaryButton, ProgressBar, useColors } from "@/ui";
 
-function statusOf(customer: DriverSheetCustomer): { tone: "delivered" | "skipped" | "pending"; label: string } {
+function statusOf(customer: DriverSheetCustomer, isQueued: boolean): { tone: "delivered" | "skipped" | "pending"; label: string } {
   if (!customer.saved) return { tone: "pending", label: "Pending" };
+  if (isQueued) return { tone: "pending", label: customer.skipped ? "Skipped · queued" : "Delivered · queued" };
   return customer.skipped ? { tone: "skipped", label: "Skipped" } : { tone: "delivered", label: "Delivered" };
+}
+
+// Mirrors what the server would compute for a save, so a queued (offline)
+// delivery shows correctly in the UI immediately — sheet state is always the
+// optimistic local truth regardless of whether the save has actually reached
+// the server yet; the offline queue is purely "what still needs sending".
+function buildOptimisticCustomer(
+  customer: DriverSheetCustomer,
+  skipped: boolean,
+  remarks: string,
+  products: Array<{ productId: string; quantity: number; rateSnapshot: number }>,
+): DriverSheetCustomer {
+  const byProduct = new Map(products.map((product) => [product.productId, product]));
+  return {
+    ...customer,
+    saved: true,
+    skipped,
+    remarks: remarks.trim() || null,
+    products: customer.products.map((product) => {
+      const match = byProduct.get(product.productId);
+      return match ? { ...product, deliveredQty: String(match.quantity) } : { ...product, deliveredQty: "0" };
+    }),
+  };
 }
 
 export default function RunScreen() {
@@ -24,6 +51,7 @@ export default function RunScreen() {
   const router = useRouter();
   const { routeId } = useLocalSearchParams<{ routeId: string }>();
   const { refresh: refreshActiveRoute } = useActiveRoute();
+  const { pendingCount, isOnline: online, syncing, syncNow } = useOfflineSync();
 
   const [sheet, setSheet] = useState<DriverSheetResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +60,11 @@ export default function RunScreen() {
   const [remarks, setRemarks] = useState("");
   const [saving, setSaving] = useState(false);
   const [snackbar, setSnackbar] = useState<{ index: number; label: string } | null>(null);
+  // Which of THIS route's customers have a save sitting in the local offline
+  // queue right now — display-only (sheet state is already the optimistic
+  // source of truth for saved/skipped/quantities either way), used just to
+  // label a stop "queued" instead of "Delivered" until it's actually synced.
+  const [queuedIds, setQueuedIds] = useState<Set<string>>(new Set());
   // A saved stop opens read-only by default (see canEdit below) so browsing
   // with Prev/Next can't silently overwrite an already-recorded delivery;
   // this explicitly unlocks it. Resets whenever the viewed stop changes.
@@ -60,6 +93,19 @@ export default function RunScreen() {
     load();
   }, [load]);
 
+  const refreshQueuedIds = useCallback(async () => {
+    if (!routeId) return;
+    const items = await getQueueForRoute(routeId);
+    setQueuedIds(new Set(items.map((item) => item.customerId)));
+  }, [routeId]);
+
+  useEffect(() => {
+    refreshQueuedIds();
+    // Also re-check whenever the GLOBAL pending count changes — covers a
+    // background auto-sync (triggered by the provider on reconnect/foreground)
+    // completing while this screen happens to be open.
+  }, [refreshQueuedIds, pendingCount]);
+
   const customer = sheet?.customers[cursor];
   const custId = customer?.customerId;
 
@@ -87,14 +133,15 @@ export default function RunScreen() {
   const done = sheet?.customers.filter((entry) => entry.saved).length ?? 0;
   const allDone = total > 0 && done === total;
   const isLastStop = total > 0 && cursor === total - 1;
+  const routeQueueCount = queuedIds.size;
 
   const finishRoute = () => {
     if (!sheet) return;
-    const pendingCount = sheet.customers.filter((entry) => !entry.saved).length;
-    if (pendingCount > 0) {
+    const pendingStops = sheet.customers.filter((entry) => !entry.saved).length;
+    if (pendingStops > 0) {
       Alert.alert(
         "Finish route?",
-        `${pendingCount} stop${pendingCount === 1 ? "" : "s"} still pending. You can finish now and come back to ${pendingCount === 1 ? "it" : "them"} later.`,
+        `${pendingStops} stop${pendingStops === 1 ? "" : "s"} still pending. You can finish now and come back to ${pendingStops === 1 ? "it" : "them"} later.`,
         [
           { text: "Keep going", style: "cancel" },
           { text: "Finish anyway", style: "destructive", onPress: () => setManuallyFinished(true) },
@@ -130,23 +177,63 @@ export default function RunScreen() {
             quantity: draftQty[product.productId] ?? 0,
             rateSnapshot: Number(product.rate),
           }));
+      // GPS works fully offline — only the actual network save is
+      // connectivity-sensitive, so location resolution always runs first.
       // Backfills silently if the customer has no saved location yet; if they
       // do and this fix is >12m off, prompts the driver before agreeing to
       // move it. Skipped visits never touch location at all.
       const locationFields = skipped ? {} : await resolveLocationForSave(customer.latitude, customer.longitude);
-      const result = await api.saveLine(routeId, customer.customerId, {
+      const request: DriverSaveLineRequest = {
         date: todayStr(),
         skipped,
         remarks: remarks.trim() || undefined,
         products,
         ...locationFields,
-      });
-      setSheet((prev) =>
-        prev
-          ? { ...prev, customers: prev.customers.map((entry) => (entry.customerId === result.saved.customerId ? result.saved : entry)) }
-          : prev,
-      );
-      setSnackbar({ index: cursor, label: skipped ? "Skipped" : "Delivered" });
+      };
+
+      let queued = false;
+      if (await isOnline()) {
+        try {
+          const result = await api.saveLine(routeId, customer.customerId, request);
+          setSheet((prev) =>
+            prev
+              ? { ...prev, customers: prev.customers.map((entry) => (entry.customerId === result.saved.customerId ? result.saved : entry)) }
+              : prev,
+          );
+        } catch (err) {
+          // status 0 = never reached the server (see api.ts) — a real
+          // connectivity failure, worth queuing for later. Any other status
+          // means the server responded and rejected it (e.g. bill locked) —
+          // retrying later won't change that, so surface it now instead of
+          // silently queuing a save that's certain to fail again.
+          if (err instanceof ApiError && err.status !== 0) {
+            throw err;
+          }
+          queued = true;
+        }
+      } else {
+        queued = true;
+      }
+
+      if (queued) {
+        await enqueueSave(routeId, customer.customerId, request);
+        // Sheet is always the optimistic local truth regardless of sync
+        // state — this is what lets total/done/advance/round-complete all
+        // keep working unchanged whether a stop is confirmed or still queued.
+        setSheet((prev) =>
+          prev
+            ? {
+                ...prev,
+                customers: prev.customers.map((entry) =>
+                  entry.customerId === customer.customerId ? buildOptimisticCustomer(entry, skipped, remarks, products) : entry,
+                ),
+              }
+            : prev,
+        );
+        refreshQueuedIds();
+      }
+
+      setSnackbar({ index: cursor, label: `${skipped ? "Skipped" : "Delivered"}${queued ? " (offline, will sync)" : ""}` });
       setEditMode(false); // freshly saved — lock again even if we don't move (e.g. last stop)
       advance();
       // Progress just changed (and may have just hit 100%) — let the pill and
@@ -198,6 +285,21 @@ export default function RunScreen() {
       {sheet && total > 0 ? (
         <View style={{ paddingHorizontal: 18, paddingBottom: 10 }}>
           <ProgressBar value={total === 0 ? 0 : done / total} />
+        </View>
+      ) : null}
+      {routeQueueCount > 0 ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 18, paddingBottom: 10 }}>
+          <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: online ? colors.brand : colors.inkFaint }} />
+          <Text style={{ flex: 1, color: colors.inkSoft, fontSize: 12 }}>
+            {online
+              ? `${routeQueueCount} stop${routeQueueCount === 1 ? "" : "s"} syncing…`
+              : `${routeQueueCount} stop${routeQueueCount === 1 ? "" : "s"} waiting to sync (offline)`}
+          </Text>
+          <Pressable onPress={() => syncNow()} disabled={syncing || !online} hitSlop={6}>
+            <Text style={{ color: colors.brand, fontSize: 12, fontWeight: "700", opacity: syncing || !online ? 0.4 : 1 }}>
+              {syncing ? "Syncing…" : "Sync now"}
+            </Text>
+          </Pressable>
         </View>
       ) : null}
     </>
@@ -276,7 +378,7 @@ export default function RunScreen() {
     );
   }
 
-  const status = statusOf(customer);
+  const status = statusOf(customer, queuedIds.has(customer.customerId));
   const stopTotal = customer.products.reduce((sum, product) => sum + (draftQty[product.productId] ?? 0) * Number(product.rate), 0);
   // A saved stop is read-only until explicitly unlocked, so browsing with
   // Prev/Next can't silently overwrite an already-recorded delivery.
@@ -484,7 +586,7 @@ export default function RunScreen() {
         onClose={() => setStopsListOpen(false)}
         customers={sheet.customers}
         currentIndex={cursor}
-        statusOf={statusOf}
+        statusOf={(c) => statusOf(c, queuedIds.has(c.customerId))}
         onSelect={(index) => {
           setCursor(index);
           setStopsListOpen(false);

@@ -62,6 +62,9 @@ src/
   cash-sale.ts          LOCAL-ONLY cash sale storage (AsyncStorage, 2-day retention)
   theme.ts            pure palette DATA — color families (Teal/Ocean/Indigo) x light/dark
   theme-preference.tsx persisted appearance + theme choice, resolves to the active Palette
+  offline-queue.ts      AsyncStorage queue of delivery saves not yet confirmed by the server
+  sync.ts               replays the queue against the real API; isOnline() via NetInfo
+  offline-sync-context.tsx  app-wide: WHEN to sync (reconnect/foreground/poll) + pending count
   ui.tsx              small component kit
   route-card.tsx
   components/SlideToConfirm.tsx   Reanimated slide-to-confirm
@@ -82,13 +85,16 @@ stop, a round-complete summary, a floating resume pill + one-active-route
 guard app-wide, GPS (location captured on first delivery; a >12m drift on a
 later delivery prompts before overwriting; Navigate opens Apple or Google
 Maps on iOS, Google Maps directly on Android), Cash Sale (fast, **local-only**
-entry, no server call ever, self-expires after 2 days), and a full theme
-system in Profile — **Appearance** (System default / Light / Dark, persisted)
-crossed with **Theme** (Teal / Ocean / Indigo color families, persisted),
-resolved through one `useTheme()` every screen already reads from. Also has a
-real app icon + splash screen (`assets/`, a milk-bottle mark on brand teal —
-generated as SVG and rasterized locally, see git history if the source SVGs
-are ever needed again).
+entry, no server call ever, self-expires after 2 days), a full theme system
+in Profile — **Appearance** (System default / Light / Dark, persisted) crossed
+with **Theme** (Teal / Ocean / Indigo color families, persisted) — a real app
+icon + splash screen (`assets/`, a milk-bottle mark on brand teal), and an
+**offline queue**: a delivery save always writes to `sheet` state optimistically
+(so progress/totals/advance all keep working immediately regardless of
+connectivity), and — only when the network attempt fails or the device is
+offline — also queues it locally for automatic replay on reconnect/foreground.
+A real server rejection (e.g. a bill got locked) is NOT queued for retry —
+that would never succeed — it's surfaced immediately instead.
 
 Note: the splash screen's light/dark image follows the **device's** OS
 appearance, not the in-app Appearance override above — the splash renders
@@ -96,5 +102,5 @@ before the JS/React tree (and thus before ThemePreferenceProvider) ever
 starts, so it has no way to know about a persisted in-app choice. This is a
 platform limitation, not a bug.
 
-Next: offline queue for delivery marks, map/GPS beyond point-to-point
-navigation (e.g. a live map view).
+Next: map/GPS beyond point-to-point navigation (e.g. a live map view showing
+the route's stops).

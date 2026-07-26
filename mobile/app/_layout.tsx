@@ -6,6 +6,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ActiveRouteProvider } from "@/active-route";
 import { ActiveRoutePill } from "@/components/ActiveRoutePill";
+import { OfflineSyncProvider } from "@/offline-sync-context";
 import { SessionProvider } from "@/session";
 import { ThemePreferenceProvider, useTheme } from "@/theme-preference";
 
@@ -36,7 +37,9 @@ export default function RootLayout() {
         <ThemePreferenceProvider>
           <SessionProvider>
             <ActiveRouteProvider>
-              <AppShell />
+              <OfflineSyncProvider>
+                <AppShell />
+              </OfflineSyncProvider>
             </ActiveRouteProvider>
           </SessionProvider>
         </ThemePreferenceProvider>
