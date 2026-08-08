@@ -6,10 +6,18 @@ import type {
   DriverSheetResponse,
 } from "@/lib/driver-api-types";
 
-// Data layer for the driver mobile API. All queries run after requireDriver()
-// has set the city context, so the Prisma city-isolation backstop scopes
-// Route/Customer/Product automatically; we additionally pin routes to the
-// token's vehicleId so a driver only ever sees their own vehicle's work.
+// Data layer for the driver mobile API.
+//
+// Every query here scopes by cityId EXPLICITLY, from the driver token, rather
+// than leaning on the Prisma city-isolation backstop in src/lib/prisma.ts.
+// That backstop is a safety net, and it was silently not applying on this
+// path in production: the product catalog came back with every city's
+// products merged (a driver in one city saw the other city's items in their
+// delivery sheet). Explicit scoping is what the rest of the app already does
+// — see the note in prisma.ts that it "is a backstop, not the primary
+// defense — every action file already scopes its own queries explicitly".
+// Routes are additionally pinned to the token's vehicleId so a driver only
+// ever sees their own vehicle's work.
 
 function toMonthStart(dateInput: string): Date {
   const month = /^\d{4}-\d{2}-\d{2}$/.test(dateInput)
@@ -44,9 +52,9 @@ function haversineDistanceMeters(lat1: number, lon1: number, lat2: number, lon2:
 }
 
 // The vehicle's active routes (what the driver can run).
-export async function getDriverRoutes(vehicleId: string): Promise<DriverRoute[]> {
+export async function getDriverRoutes(vehicleId: string, cityId: string): Promise<DriverRoute[]> {
   const routes = await prisma.route.findMany({
-    where: { vehicleId, isActive: true },
+    where: { cityId, vehicleId, isActive: true },
     orderBy: [{ shift: "asc" }, { code: "asc" }],
     select: { id: true, code: true, name: true, shift: true },
   });
@@ -73,6 +81,7 @@ const RECENT_ORDER_LOOKBACK_DAYS = 45;
 // isn't this vehicle's (or doesn't exist).
 export async function getDriverSheet(
   vehicleId: string,
+  cityId: string,
   routeId: string,
   dateInput: string,
 ): Promise<DriverSheetResponse | null> {
@@ -83,7 +92,7 @@ export async function getDriverSheet(
 
   const [route, products, recentEntries] = await Promise.all([
     prisma.route.findFirst({
-      where: { id: routeId, vehicleId, isActive: true },
+      where: { id: routeId, cityId, vehicleId, isActive: true },
       select: {
         id: true,
         code: true,
@@ -114,8 +123,12 @@ export async function getDriverSheet(
         },
       },
     }),
+    // cityId is REQUIRED here, not optional hardening: without it this
+    // returned every city's catalog merged together, so a driver saw
+    // products that don't exist in their city (and could have delivered
+    // against one, writing a cross-city row into billing).
     prisma.product.findMany({
-      where: { isActive: true, showInDailyEntry: true },
+      where: { cityId, isActive: true, showInDailyEntry: true },
       orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
       select: { id: true, code: true, shortName: true, unit: true, defaultRate: true },
     }),
@@ -230,6 +243,7 @@ export type SaveDriverLineResult =
 // customer's bill for the month is already finalized (Generated/Locked).
 export async function saveDriverLine(
   vehicleId: string,
+  cityId: string,
   routeId: string,
   customerId: string,
   dateInput: string,
@@ -239,7 +253,7 @@ export async function saveDriverLine(
   const entryDate = toDay(dateInput);
 
   const route = await prisma.route.findFirst({
-    where: { id: routeId, vehicleId, isActive: true },
+    where: { id: routeId, cityId, vehicleId, isActive: true },
     select: { id: true },
   });
   if (!route) {
@@ -270,6 +284,26 @@ export async function saveDriverLine(
     : input.products
         .filter((product) => product.quantity > 0)
         .map((product) => ({ productId: product.productId, quantity: product.quantity, rateSnapshot: product.rateSnapshot }));
+
+  // Never trust the client's productIds: a phone still running the build that
+  // listed every city's catalog (or an offline save queued from before this
+  // fix) could post a product belonging to another city, which would land a
+  // cross-city row in billing. Verified against this city's catalog here so a
+  // stale client gets a clear rejection instead of silently corrupting data.
+  if (productRows.length > 0) {
+    const validProducts = await prisma.product.findMany({
+      where: { cityId, id: { in: productRows.map((row) => row.productId) } },
+      select: { id: true },
+    });
+    const validIds = new Set(validProducts.map((product) => product.id));
+    const unknown = productRows.filter((row) => !validIds.has(row.productId));
+    if (unknown.length > 0) {
+      return {
+        ok: false,
+        error: "Some products aren't available in this city — please update the app and try again.",
+      };
+    }
+  }
 
   await prisma.$transaction(async (tx) => {
     const entry = await tx.dailyRouteEntry.upsert({
@@ -335,7 +369,7 @@ export async function saveDriverLine(
     }
   });
 
-  const sheet = await getDriverSheet(vehicleId, routeId, dateInput);
+  const sheet = await getDriverSheet(vehicleId, cityId, routeId, dateInput);
   const customer = sheet?.customers.find((entry) => entry.customerId === customerId);
   if (!customer) {
     return { ok: false, error: "Saved, but could not reload the customer." };
