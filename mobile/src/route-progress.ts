@@ -32,17 +32,22 @@ export async function fetchRouteProgress(
 
 export type ActiveRouteInfo = DriverRoute & { progress: RouteProgress };
 
-// A route counts as "in progress" once at least one stop is done but not all
-// of them — that's the only state observable from saved daily-entry lines
-// (there's no explicit start/stop marker), and it's exactly the state where
-// resuming — or blocking a second route from starting — matters.
+// A route counts as "in progress" once at least one stop is saved and the
+// driver hasn't explicitly finished it (see route-completion.ts).
+//
+// Note there's deliberately NO upper bound at done === total: a route with
+// every stop saved but no Finish tap is still in progress. Ending it at 100%
+// would leave a dead zone — the resume pill would vanish and the one-active-
+// route guard would release, even though the driver never said they were
+// done, which is exactly the premature-completion problem this design fixes.
 export function findActiveRoute(
   routes: DriverRoute[],
   progress: Record<string, RouteProgress>,
+  completedRouteIds: Set<string>,
 ): ActiveRouteInfo | null {
   for (const route of routes) {
     const p = progress[route.id];
-    if (p && p.total > 0 && p.done > 0 && p.done < p.total) {
+    if (p && p.total > 0 && p.done > 0 && !completedRouteIds.has(route.id)) {
       return { ...route, progress: p };
     }
   }
