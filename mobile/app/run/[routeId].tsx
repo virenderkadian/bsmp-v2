@@ -13,6 +13,7 @@ import { StopsListModal } from "@/components/StopsListModal";
 import { openNavigation, resolveLocationForSave } from "@/location";
 import { enqueueSave, getQueueForRoute } from "@/offline-queue";
 import { useOfflineSync } from "@/offline-sync-context";
+import { isRouteCompleted, markRouteCompleted, reopenRoute } from "@/route-completion";
 import { todayStr } from "@/route-progress";
 import { isOnline } from "@/sync";
 import { radius } from "@/theme";
@@ -70,10 +71,12 @@ export default function RunScreen() {
   // with Prev/Next can't silently overwrite an already-recorded delivery;
   // this explicitly unlocks it. Resets whenever the viewed stop changes.
   const [editMode, setEditMode] = useState(false);
-  // Lets the driver view the round summary from the last sequence stop even
-  // if a few earlier ones are still pending (they went out of order) —
-  // separate from allDone, which is the automatic "everything's actually done" case.
-  const [manuallyFinished, setManuallyFinished] = useState(false);
+  // The ONLY thing that ends a round. Never inferred from "every stop is
+  // saved" — a short or partly-filled monthly sequence would otherwise report
+  // itself complete while the driver still had customers to visit. Persisted
+  // locally per route+date (see route-completion.ts), so it survives leaving
+  // the screen or restarting the app.
+  const [completed, setCompleted] = useState(false);
   const [stopsListOpen, setStopsListOpen] = useState(false);
   const [cashSaleOpen, setCashSaleOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
@@ -94,6 +97,13 @@ export default function RunScreen() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Completion lives on the device, not in the sheet response — read it back
+  // on mount so re-entering a finished route shows the summary, not the run.
+  useEffect(() => {
+    if (!routeId) return;
+    isRouteCompleted(routeId, todayStr()).then(setCompleted);
+  }, [routeId]);
 
   const refreshQueuedIds = useCallback(async () => {
     if (!routeId) return;
@@ -137,6 +147,14 @@ export default function RunScreen() {
   const isLastStop = total > 0 && cursor === total - 1;
   const routeQueueCount = queuedIds.size;
 
+  const commitFinish = async () => {
+    if (!routeId) return;
+    await markRouteCompleted(routeId, todayStr());
+    setCompleted(true);
+    // Releases the one-active-route guard and clears the resume pill.
+    refreshActiveRoute();
+  };
+
   const finishRoute = () => {
     if (!sheet) return;
     const pendingStops = sheet.customers.filter((entry) => !entry.saved).length;
@@ -146,12 +164,29 @@ export default function RunScreen() {
         `${pendingStops} stop${pendingStops === 1 ? "" : "s"} still pending. You can finish now and come back to ${pendingStops === 1 ? "it" : "them"} later.`,
         [
           { text: "Keep going", style: "cancel" },
-          { text: "Finish anyway", style: "destructive", onPress: () => setManuallyFinished(true) },
+          { text: "Finish anyway", style: "destructive", onPress: () => void commitFinish() },
         ],
       );
       return;
     }
-    setManuallyFinished(true);
+    void commitFinish();
+  };
+
+  // Explicit completion would otherwise be a one-way door for the rest of the
+  // day — these put the driver back on the run if they tapped Finish early or
+  // a stop still needs correcting. Clearing the stored marker (not just local
+  // state) is what makes it stick across a reload.
+  const reopenAt = async (index: number) => {
+    if (!routeId) return;
+    await reopenRoute(routeId, todayStr());
+    setCompleted(false);
+    setCursor(index);
+    refreshActiveRoute();
+  };
+
+  const reopen = async () => {
+    const firstPending = sheet?.customers.findIndex((entry) => !entry.saved) ?? -1;
+    await reopenAt(firstPending >= 0 ? firstPending : 0);
   };
 
   const advance = () => {
@@ -263,7 +298,11 @@ export default function RunScreen() {
           </Text>
           {sheet ? (
             <Text style={{ color: colors.inkFaint, fontSize: 12 }}>
-              {allDone ? `${total} stops done` : customer ? `Stop ${cursor + 1} of ${total}` : `${done} of ${total} done`}
+              {completed
+                ? `Finished · ${done} of ${total} stops`
+                : customer
+                  ? `Stop ${cursor + 1} of ${total}`
+                  : `${done} of ${total} done`}
             </Text>
           ) : null}
         </View>
@@ -283,7 +322,7 @@ export default function RunScreen() {
             <Text style={{ fontSize: 16 }}>🗺️</Text>
           </Pressable>
         ) : null}
-        {sheet && total > 0 && !allDone && !manuallyFinished ? (
+        {sheet && total > 0 && !completed ? (
           <Pressable
             onPress={() => setStopsListOpen(true)}
             style={{ width: 36, height: 36, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
@@ -338,19 +377,25 @@ export default function RunScreen() {
     );
   }
 
-  // Round complete
-  if (allDone || manuallyFinished || !customer) {
+  // Round complete — ONLY when the driver explicitly finished it. Reaching
+  // done === total no longer ends the round on its own (see `completed`).
+  if (completed || !customer) {
     const delivered = sheet.customers.filter((entry) => entry.saved && !entry.skipped).length;
     const skipped = sheet.customers.filter((entry) => entry.saved && entry.skipped).length;
-    const totals = new Map<string, { qty: number; unit: string }>();
+    // Keyed by productId (not code/shortName) so the same product can never
+    // split into two rows — the label shown is shortName ?? code, matching
+    // every other product label in this app (delivery card, All stops list),
+    // so a driver never sees the same product under two different names.
+    const totals = new Map<string, { label: string; qty: number; unit: string }>();
     sheet.customers.forEach((entry) => {
       if (entry.skipped) return;
       entry.products.forEach((product) => {
         const qty = Number(product.deliveredQty) || 0;
         if (qty <= 0) return;
-        const current = totals.get(product.code) ?? { qty: 0, unit: product.unit };
+        const label = product.shortName ?? product.code;
+        const current = totals.get(product.productId) ?? { label, qty: 0, unit: product.unit };
         current.qty += qty;
-        totals.set(product.code, current);
+        totals.set(product.productId, current);
       });
     });
     return (
@@ -376,6 +421,12 @@ export default function RunScreen() {
             </Card>
           ) : null}
           <PrimaryButton label="Back to routes" onPress={() => router.back()} />
+          <Pressable
+            onPress={() => void reopen()}
+            style={({ pressed }) => ({ marginTop: 12, paddingVertical: 12, alignItems: "center", opacity: pressed ? 0.6 : 1 })}
+          >
+            <Text style={{ color: colors.inkSoft, fontSize: 13.5, fontWeight: "700" }}>Reopen route</Text>
+          </Pressable>
         </ScrollView>
 
         <CashSaleModal
@@ -392,9 +443,11 @@ export default function RunScreen() {
           currentIndex={cursor}
           statusOf={(c) => statusOf(c, queuedIds.has(c.customerId))}
           onSelect={(index) => {
-            setCursor(index);
-            setManuallyFinished(false);
+            // Jumping to a stop from the summary means the driver isn't done
+            // after all — reopen the route rather than silently showing a
+            // stop card behind a still-recorded completion.
             setMapOpen(false);
+            void reopenAt(index);
           }}
         />
       </SafeAreaView>
@@ -524,6 +577,8 @@ export default function RunScreen() {
           </Pressable>
         </View>
 
+        {/* The only way to end a round. Filled once every stop is marked, so
+            the driver can see at a glance that this is the remaining step. */}
         {isLastStop ? (
           <Pressable
             onPress={finishRoute}
@@ -533,11 +588,14 @@ export default function RunScreen() {
               borderRadius: radius.md,
               borderWidth: 1.5,
               borderColor: colors.brand,
+              backgroundColor: allDone ? colors.brand : "transparent",
               alignItems: "center",
               opacity: pressed ? 0.7 : 1,
             })}
           >
-            <Text style={{ color: colors.brand, fontSize: 14, fontWeight: "800" }}>Finish route</Text>
+            <Text style={{ color: allDone ? colors.onBrand : colors.brand, fontSize: 14, fontWeight: "800" }}>
+              Finish route
+            </Text>
           </Pressable>
         ) : null}
 

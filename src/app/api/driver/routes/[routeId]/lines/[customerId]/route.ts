@@ -55,7 +55,7 @@ export async function POST(
     return driverJson({ error: parsed.error.issues[0]?.message ?? "Invalid data." }, 400);
   }
 
-  const result = await saveDriverLine(driver.vehicleId, routeId, customerId, parsed.data.date, {
+  const result = await saveDriverLine(driver.vehicleId, driver.cityId, routeId, customerId, parsed.data.date, {
     skipped: parsed.data.skipped,
     remarks: parsed.data.remarks,
     products: parsed.data.products,

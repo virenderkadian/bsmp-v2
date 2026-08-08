@@ -15,7 +15,7 @@ export async function GET(request: Request) {
     return driverJson({ error: "Not signed in." }, 401);
   }
 
-  const routes = await getDriverRoutes(driver.vehicleId);
+  const routes = await getDriverRoutes(driver.vehicleId, driver.cityId);
   const response: DriverRoutesResponse = { routes };
   return driverJson(response);
 }

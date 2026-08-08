@@ -83,7 +83,7 @@ export function StopsListModal({
               const status = statusOf(customer);
               const summary = customer.products
                 .filter((product) => Number(product.deliveredQty) > 0)
-                .map((product) => `${product.code} ${product.deliveredQty}`)
+                .map((product) => `${product.shortName ?? product.code} ${product.deliveredQty}`)
                 .join(" · ");
 
               return (

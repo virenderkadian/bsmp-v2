@@ -16,6 +16,10 @@ let vehicleId: string;
 let routeId: string;
 let customerId: string;
 let productId: string;
+// A SECOND city with its own active product, used to prove the driver sheet
+// never leaks another city's catalog (see the city-isolation tests below).
+let otherCityId: string;
+let otherCityProductId: string;
 
 const YESTERDAY = new Date(Date.UTC(2027, 0, 14));
 const TODAY = new Date(Date.UTC(2027, 0, 15));
@@ -43,6 +47,25 @@ beforeAll(async () => {
     data: { cityId, code: `DQC-${suffix}`, name: "Test Customer", openingBalance: 0 },
   });
   customerId = customer.id;
+
+  // Second city + its own active, daily-entry-visible product. Nothing about
+  // it should ever surface on the first city's driver sheet.
+  const otherCity = await rawPrisma.city.create({
+    data: { code: `DQX${suffix}`, name: `Other City ${suffix}` },
+  });
+  otherCityId = otherCity.id;
+  const otherProduct = await rawPrisma.product.create({
+    data: {
+      cityId: otherCityId,
+      code: `DQO-${suffix}`,
+      name: "Other City Product",
+      unit: "L",
+      defaultRate: 99,
+      isActive: true,
+      showInDailyEntry: true,
+    },
+  });
+  otherCityProductId = otherProduct.id;
 
   await rawPrisma.monthlyRouteCustomerSequence.create({
     data: { routeId, customerId, sequenceMonth, sequenceNo: 1, status: "ACTIVE" },
@@ -78,12 +101,14 @@ afterAll(async () => {
   await rawPrisma.route.delete({ where: { id: routeId } });
   await rawPrisma.vehicle.delete({ where: { id: vehicleId } });
   await rawPrisma.city.delete({ where: { id: cityId } });
+  await rawPrisma.product.delete({ where: { id: otherCityProductId } });
+  await rawPrisma.city.delete({ where: { id: otherCityId } });
   await rawPrisma.$disconnect();
 });
 
 describe("driver sheet deliveredQty (dev DB)", () => {
   it("reports 0 for a skipped day, not yesterday's recent-order suggestion", async () => {
-    const sheet = await getDriverSheet(vehicleId, routeId, "2027-01-15");
+    const sheet = await getDriverSheet(vehicleId, cityId, routeId, "2027-01-15");
     expect(sheet).not.toBeNull();
 
     const customer = sheet!.customers.find((c) => c.customerId === customerId);
@@ -94,7 +119,7 @@ describe("driver sheet deliveredQty (dev DB)", () => {
   });
 
   it("still shows yesterday's quantity as both default and delivered when unsaved (no line yet)", async () => {
-    const sheet = await getDriverSheet(vehicleId, routeId, "2027-01-16");
+    const sheet = await getDriverSheet(vehicleId, cityId, routeId, "2027-01-16");
     const customer = sheet!.customers.find((c) => c.customerId === customerId);
     const product = customer?.products.find((p) => p.productId === productId);
 
@@ -103,11 +128,49 @@ describe("driver sheet deliveredQty (dev DB)", () => {
   });
 });
 
+// Regression tests for a real production leak: getDriverSheet listed the
+// product catalog with no cityId filter, relying on the Prisma city-scope
+// backstop — which was silently not applying on the driver path. Drivers saw
+// every city's products merged into one list (e.g. both "B MILK" and "B",
+// "LASSI" and "L"), and could have delivered against another city's product.
+describe("driver sheet city isolation (dev DB)", () => {
+  it("never includes another city's products in the sheet", async () => {
+    const sheet = await getDriverSheet(vehicleId, cityId, routeId, "2027-01-16");
+    expect(sheet).not.toBeNull();
+
+    const customer = sheet!.customers.find((c) => c.customerId === customerId);
+    expect(customer).toBeDefined();
+
+    const productIds = customer!.products.map((p) => p.productId);
+    expect(productIds).toContain(productId);
+    expect(productIds).not.toContain(otherCityProductId);
+  });
+
+  it("returns no sheet when the route is asked for under the wrong city", async () => {
+    const sheet = await getDriverSheet(vehicleId, otherCityId, routeId, "2027-01-16");
+    expect(sheet).toBeNull();
+  });
+
+  it("rejects a save that references another city's product instead of writing a cross-city row", async () => {
+    const result = await saveDriverLine(vehicleId, cityId, routeId, customerId, "2027-01-29", {
+      skipped: false,
+      products: [{ productId: otherCityProductId, quantity: 3, rateSnapshot: 99 }],
+    });
+    expect(result.ok).toBe(false);
+
+    // And nothing was persisted for that product.
+    const leaked = await rawPrisma.dailyRouteEntryLineProduct.count({
+      where: { productId: otherCityProductId },
+    });
+    expect(leaked).toBe(0);
+  });
+});
+
 describe("saveDriverLine location backfill (dev DB)", () => {
   it("captures location on the first non-skipped save and never overwrites it on later saves", async () => {
     await rawPrisma.customer.update({ where: { id: customerId }, data: { latitude: null, longitude: null } });
 
-    const first = await saveDriverLine(vehicleId, routeId, customerId, "2027-01-20", {
+    const first = await saveDriverLine(vehicleId, cityId, routeId, customerId, "2027-01-20", {
       skipped: false,
       products: [{ productId, quantity: 2, rateSnapshot: 50 }],
       location: { latitude: 28.6, longitude: 77.2 },
@@ -119,7 +182,7 @@ describe("saveDriverLine location backfill (dev DB)", () => {
     }
 
     // A later save with a DIFFERENT location must not move an already-set one.
-    const second = await saveDriverLine(vehicleId, routeId, customerId, "2027-01-21", {
+    const second = await saveDriverLine(vehicleId, cityId, routeId, customerId, "2027-01-21", {
       skipped: false,
       products: [{ productId, quantity: 2, rateSnapshot: 50 }],
       location: { latitude: 12.9, longitude: 77.5 },
@@ -134,7 +197,7 @@ describe("saveDriverLine location backfill (dev DB)", () => {
   it("does not capture location on a skip", async () => {
     await rawPrisma.customer.update({ where: { id: customerId }, data: { latitude: null, longitude: null } });
 
-    const result = await saveDriverLine(vehicleId, routeId, customerId, "2027-01-25", {
+    const result = await saveDriverLine(vehicleId, cityId, routeId, customerId, "2027-01-25", {
       skipped: true,
       products: [],
       location: { latitude: 28.6, longitude: 77.2 },
@@ -149,7 +212,7 @@ describe("saveDriverLine location backfill (dev DB)", () => {
   it("overwrites the saved location when confirmLocationUpdate is true and the drift is real", async () => {
     await rawPrisma.customer.update({ where: { id: customerId }, data: { latitude: 28.6, longitude: 77.2 } });
 
-    const result = await saveDriverLine(vehicleId, routeId, customerId, "2027-01-27", {
+    const result = await saveDriverLine(vehicleId, cityId, routeId, customerId, "2027-01-27", {
       skipped: false,
       products: [{ productId, quantity: 1, rateSnapshot: 50 }],
       location: { latitude: 12.9, longitude: 77.5 }, // clearly >12m from the saved point
@@ -165,7 +228,7 @@ describe("saveDriverLine location backfill (dev DB)", () => {
   it("ignores confirmLocationUpdate when the new fix isn't actually more than 12m away (server re-verifies, doesn't trust the flag)", async () => {
     await rawPrisma.customer.update({ where: { id: customerId }, data: { latitude: 28.6, longitude: 77.2 } });
 
-    const result = await saveDriverLine(vehicleId, routeId, customerId, "2027-01-28", {
+    const result = await saveDriverLine(vehicleId, cityId, routeId, customerId, "2027-01-28", {
       skipped: false,
       products: [{ productId, quantity: 1, rateSnapshot: 50 }],
       location: { latitude: 28.6, longitude: 77.2 }, // identical — zero drift
