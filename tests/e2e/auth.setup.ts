@@ -1,5 +1,5 @@
 import { test as setup } from "@playwright/test";
-import { TEST_CITY_ID, TEST_SUPERADMIN } from "./fixtures";
+import { ensureTestData, TEST_CITY_ID, TEST_SUPERADMIN } from "./fixtures";
 
 const authFile = "tests/e2e/.auth/superadmin.json";
 
@@ -9,6 +9,9 @@ const authFile = "tests/e2e/.auth/superadmin.json";
 // and scoped to the city that actually has test fixture data (routes,
 // customers, sequences) rather than whichever city happens to sort first.
 setup("authenticate", async ({ page, context }) => {
+  // Seed the fixture rows before anything else touches them.
+  await ensureTestData();
+
   await page.goto("/login");
   await page.fill('input[type="email"]', TEST_SUPERADMIN.email);
   await page.fill('input[type="password"]', TEST_SUPERADMIN.password);

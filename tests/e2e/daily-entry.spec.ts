@@ -27,8 +27,8 @@ test.describe("Daily Entry", () => {
     const quantityInputs = page.locator('input[data-daily-entry-quantity="true"]');
     await expect(quantityInputs.first()).toBeVisible();
     await quantityInputs.nth(0).fill("5");
-    await page.getByRole("button", { name: "Save All" }).click();
-    await expect(page.getByText("Daily entry saved.")).toBeVisible({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await expect(page.getByText("Daily entry saved.").first()).toBeVisible({ timeout: 10_000 });
 
     const entry = await testPrisma().dailyRouteEntry.findFirst({
       where: { routeId: TEST_ROUTE_ID, entryDate: new Date(`${date}T00:00:00.000Z`) },
@@ -48,14 +48,14 @@ test.describe("Daily Entry", () => {
     await page.waitForLoadState("networkidle");
 
     await page.locator('input[data-daily-entry-quantity="true"]').first().fill("20");
-    await page.getByRole("button", { name: "Save All" }).click();
-    await expect(page.getByText("Daily entry saved.")).toBeVisible({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await expect(page.getByText("Daily entry saved.").first()).toBeVisible({ timeout: 10_000 });
 
     await page.goto(`/daily-entry?routeId=${TEST_ROUTE_ID}&entryDate=${date}`);
     await page.waitForLoadState("networkidle");
     await page.locator('input[data-daily-entry-quantity="true"]').first().fill("0");
-    await page.getByRole("button", { name: "Save All" }).click();
-    await expect(page.getByText("Daily entry saved.")).toBeVisible({ timeout: 10_000 });
+    await page.getByRole("button", { name: "Save changes" }).click();
+    await expect(page.getByText("Daily entry saved.").first()).toBeVisible({ timeout: 10_000 });
 
     const entry = await testPrisma().dailyRouteEntry.findFirst({
       where: { routeId: TEST_ROUTE_ID, entryDate: new Date(`${date}T00:00:00.000Z`) },
@@ -88,9 +88,9 @@ test.describe("Daily Entry", () => {
     await page.goto(`/daily-entry?routeId=${TEST_ROUTE_ID}&entryDate=${date}`);
     await page.waitForLoadState("networkidle");
     await page.locator('input[data-daily-entry-quantity="true"]').first().fill("3");
-    await page.getByRole("button", { name: "Save All" }).click();
+    await page.getByRole("button", { name: "Save changes" }).click();
 
-    await expect(page.getByText(/already Generated/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/already have Generated bills/i).first()).toBeVisible({ timeout: 10_000 });
 
     const entry = await prisma.dailyRouteEntry.findFirst({
       where: { routeId: TEST_ROUTE_ID, entryDate: new Date(`${date}T00:00:00.000Z`) },

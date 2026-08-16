@@ -1,8 +1,10 @@
 import { test, expect } from "@playwright/test";
-import { testPrisma, testDate } from "./fixtures";
+import { testPrisma, testDate, TEST_PRODUCT_ID, TEST_VEHICLE_ID } from "./fixtures";
 
-const VEHICLE_ID = "5de299ab-7213-4ad4-a460-9bacb7f05874"; // Vehicle01, has both a morning and evening route
-const BUFFALO_MILK_ID = "bd5e3067-28d6-4f63-92c2-44f616465dbb";
+// Both come from ensureTestData() rather than being hardcoded — the previous
+// literals pointed at rows that only exist in the production database.
+const VEHICLE_ID = TEST_VEHICLE_ID;
+const BUFFALO_MILK_ID = TEST_PRODUCT_ID;
 
 test.describe("Reconciliation", () => {
   const cycleDate = testDate("20");
