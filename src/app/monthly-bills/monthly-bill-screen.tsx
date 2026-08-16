@@ -52,6 +52,15 @@ function formatMonth(value: Date) {
   });
 }
 
+function formatSnapshot(value: string) {
+  return new Date(value).toLocaleString("en-IN", {
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function formatMoney(value: string | number) {
   return `₹${Number(value).toLocaleString("en-IN", {
     minimumFractionDigits: 2,
@@ -317,6 +326,18 @@ function CustomerSummaryTab({
       {summaryPayload.error ? (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
           {summaryPayload.error}
+        </div>
+      ) : null}
+
+      {/* Generated bills freeze their amounts, so deliveries entered afterwards
+          don't show here until the month is regenerated. Without saying so the
+          screen presents a snapshot exactly like live data — someone checking
+          mid-month has no way to tell they're reading stale figures. */}
+      {summaryPayload.figuresAsOf ? (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <span className="font-semibold">Figures as of {formatSnapshot(summaryPayload.figuresAsOf)}.</span>{" "}
+          These come from bills already generated for this month, so anything delivered since
+          isn&apos;t included. Regenerate the month to bring them up to date.
         </div>
       ) : null}
 

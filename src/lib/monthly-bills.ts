@@ -202,6 +202,12 @@ export type MonthlyBillSummaryPayload = {
   routes: MonthlyBillSummaryRoute[];
   grandTotals: MonthlyBillSummaryTotals;
   outstanding: MonthlyBillOutstandingRow[];
+  // When the displayed figures were computed, if any row is reading a stored
+  // bill rather than live daily-entry data. A generated bill freezes its
+  // amounts, so deliveries recorded afterwards don't appear until the month is
+  // regenerated — without this the screen presents a snapshot exactly like
+  // live data and there's no way to tell. Null when nothing is stale.
+  figuresAsOf: string | null;
   error?: string;
 };
 
@@ -546,6 +552,7 @@ export async function getMonthlyBillSummary(input?: {
         routes: [],
         grandTotals: emptyTotals,
         outstanding: [],
+        figuresAsOf: null,
       };
     }
 
@@ -582,6 +589,7 @@ export async function getMonthlyBillSummary(input?: {
           routeId: true,
           customerId: true,
           status: true,
+          generatedAt: true,
           openingBalance: true,
           deliveryAmount: true,
           paymentAmount: true,
@@ -901,6 +909,19 @@ export async function getMonthlyBillSummary(input?: {
       }))
       .sort((left, right) => Number(right.outstandingAmount) - Number(left.outstandingAmount));
 
+    // Oldest generation time among the rows actually being shown from stored
+    // bills. Oldest rather than newest: it's the point beyond which SOME figure
+    // on this screen stopped tracking daily entry, which is what a reader needs
+    // to know. Rows previewed live don't count — they're already current.
+    const shownBillIds = new Set(
+      allRows.filter((row) => row.source === "BILL" && row.billId).map((row) => row.billId),
+    );
+    const snapshotTimes = bills
+      .filter((bill) => shownBillIds.has(bill.id) && bill.generatedAt !== null)
+      .map((bill) => (bill.generatedAt as Date).getTime());
+    const figuresAsOf =
+      snapshotTimes.length > 0 ? new Date(Math.min(...snapshotTimes)).toISOString() : null;
+
     return {
       dbConnected: true,
       selectedMonth,
@@ -912,6 +933,7 @@ export async function getMonthlyBillSummary(input?: {
       routes: summaryRoutes,
       grandTotals: buildTotals(allRows),
       outstanding,
+      figuresAsOf,
     };
   } catch (error) {
     const message =
@@ -926,6 +948,7 @@ export async function getMonthlyBillSummary(input?: {
       routes: [],
       grandTotals: emptyTotals,
       outstanding: [],
+      figuresAsOf: null,
       error: message,
     };
   }

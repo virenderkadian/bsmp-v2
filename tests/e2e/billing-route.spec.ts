@@ -273,3 +273,44 @@ test.describe("Daily Entry usual-order helper", () => {
     await expect(quantity).toHaveValue("3");
   });
 });
+
+// A generated bill freezes its amounts, so the summary can show figures that
+// no longer match daily entry. The banner is the only thing distinguishing a
+// snapshot from live data on that screen.
+test.describe("Summary snapshot notice", () => {
+  test.afterAll(async () => {
+    await clearTestMonthData(TEST_ROUTE_ID);
+  });
+
+  test("warns when figures come from an already-generated bill, and not when they're live", async ({ page }) => {
+    const prisma = testPrisma();
+    await clearTestMonthData(TEST_ROUTE_ID);
+    await ensureTestSequence(TEST_ROUTE_ID, [TEST_CUSTOMER_1_ID]);
+
+    // Live preview only — no bill exists yet, so nothing is stale.
+    await page.goto(`/monthly-bills?month=${TEST_MONTH}`);
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByText(/Figures as of/i)).toBeHidden();
+
+    // A generated bill freezes its numbers as of generatedAt.
+    await prisma.monthlyBill.create({
+      data: {
+        customerId: TEST_CUSTOMER_1_ID,
+        routeId: TEST_ROUTE_ID,
+        billingMonth: TEST_MONTH_DATE,
+        openingBalance: 0,
+        deliveryAmount: 250,
+        paymentAmount: 0,
+        closingBalance: 250,
+        status: "GENERATED",
+        generatedAt: new Date("2027-01-04T11:11:00.000Z"),
+      },
+    });
+
+    await page.goto(`/monthly-bills?month=${TEST_MONTH}`);
+    await page.waitForLoadState("networkidle");
+
+    await expect(page.getByText(/Figures as of/i)).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText(/Regenerate the month/i)).toBeVisible();
+  });
+});
