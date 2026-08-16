@@ -133,6 +133,30 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
     setTotals({ perProduct, grandAmount });
   };
 
+  // Applies each customer's usual order to the cells still sitting at 0.
+  // Deliberately does NOT overwrite a value someone has already typed, and is
+  // never automatic — an operator has to ask for it, so nobody saves last
+  // week's quantities as today's delivery by tabbing past them.
+  const fillUsual = () => {
+    const inputs = entryFormRef.current?.querySelectorAll<HTMLInputElement>(
+      "[data-daily-entry-quantity='true']",
+    );
+
+    if (!inputs) {
+      return;
+    }
+
+    inputs.forEach((input) => {
+      const usual = Number(input.dataset.lastQuantity ?? "0");
+
+      if (usual > 0 && Number(input.value || 0) === 0) {
+        input.value = String(usual);
+      }
+    });
+
+    recompute();
+  };
+
   const lastMessageRef = useRef("");
   const [toast, setToast] = useState<ToastState | null>(null);
 
@@ -225,6 +249,15 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
               )}
             </select>
           </form>
+          <SecondaryButton
+            type="button"
+            onClick={fillUsual}
+            disabled={payload.lines.length === 0}
+            className="h-10 px-4 text-sm font-medium"
+            title="Fill every empty cell with what that customer usually takes on this route"
+          >
+            Fill usual
+          </SecondaryButton>
           <PrimaryButton
             type="submit"
             form="daily-entry-form"
@@ -281,6 +314,11 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
           if (nextInput) {
             nextInput.focus();
             nextInput.select();
+            // focus() alone scrolls only far enough to make the input barely
+            // visible, which puts it under the sticky toolbar near the end of a
+            // long route. Centring keeps the row being typed into — and the
+            // ones on either side — actually readable.
+            nextInput.scrollIntoView({ block: "center", behavior: "smooth" });
             return;
           }
 
@@ -363,8 +401,23 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
                                 data-original-value={product?.quantity ?? "0"}
                                 data-product-id={column.productId}
                                 data-rate={product?.defaultRate ?? "0"}
+                                data-last-quantity={product?.lastQuantity ?? "0"}
+                                // The quantity is NOT prefilled — every cell
+                                // starts at 0 and the highlight alone says
+                                // "this is a product they normally take", so
+                                // nobody saves last week's numbers by tabbing
+                                // past. Hovering gives the actual figure, and
+                                // "Fill usual" applies them deliberately.
+                                title={
+                                  Number(product?.lastQuantity ?? 0) > 0
+                                    ? `Usually takes ${formatQty(Number(product?.lastQuantity ?? 0))}`
+                                    : undefined
+                                }
                                 className={cn(
-                                  "h-10 w-20 rounded-md border border-surface-border-strong bg-surface px-2 text-sm text-text-primary outline-none transition focus:border-accent",
+                                  "h-10 w-20 rounded-md border px-2 text-sm text-text-primary outline-none transition focus:border-accent",
+                                  Number(product?.lastQuantity ?? 0) > 0
+                                    ? "border-accent/60 bg-accent/5"
+                                    : "border-surface-border-strong bg-surface",
                                 )}
                               />
                             </td>

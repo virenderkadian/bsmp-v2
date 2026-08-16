@@ -19,6 +19,10 @@ export type DailyEntryProductRecord = {
   unit: string;
   quantity: string;
   defaultRate: string;
+  // What this customer most recently took on this route (within 45 days), so
+  // the screen can show their usual order while entering. "0" when there's no
+  // recent delivery to go on.
+  lastQuantity: string;
 };
 
 export type DailyEntryLineRecord = {
@@ -208,6 +212,48 @@ export async function getDailyEntryPayload(input?: {
       existingEntry?.lines.map((line) => [line.customerId, line]) ?? [],
     );
 
+    // What each customer most recently took ON THIS ROUTE, so the operator can
+    // see their usual order while typing instead of recalling it. Bounded to a
+    // 45-day window (same as the driver app) so a customer who's been away for
+    // a while still shows something, without scanning all history.
+    const entryDate = new Date(selectedDate);
+    const recentSince = new Date(entryDate);
+    recentSince.setUTCDate(recentSince.getUTCDate() - 45);
+    const recentEntries = await withDbTimeout(
+      prisma.dailyRouteEntry.findMany({
+        where: { routeId: routePacket.id, entryDate: { lt: entryDate, gte: recentSince } },
+        orderBy: { entryDate: "desc" },
+        select: {
+          lines: {
+            where: { skipped: false },
+            select: { customerId: true, productEntries: { select: { productId: true, quantity: true } } },
+          },
+        },
+      }),
+      "Daily entry recent order request",
+    );
+
+    // Newest-first, so the first non-empty delivery seen per customer is their
+    // latest actual order.
+    const recentOrderByCustomer = new Map<string, Map<string, number>>();
+    for (const entry of recentEntries) {
+      for (const line of entry.lines) {
+        if (recentOrderByCustomer.has(line.customerId)) {
+          continue;
+        }
+        const quantities = new Map<string, number>();
+        line.productEntries.forEach((productEntry) => {
+          const quantity = Number(productEntry.quantity);
+          if (quantity > 0) {
+            quantities.set(productEntry.productId, quantity);
+          }
+        });
+        if (quantities.size > 0) {
+          recentOrderByCustomer.set(line.customerId, quantities);
+        }
+      }
+    }
+
     return {
       dbConnected: true,
       selectedRouteId: routePacket.id,
@@ -229,6 +275,7 @@ export async function getDailyEntryPayload(input?: {
         const savedProducts = new Map(
           savedLine?.productEntries.map((item) => [item.productId, item]) ?? [],
         );
+        const recentOrder = recentOrderByCustomer.get(sequenceLine.customerId);
 
         return {
           customerId: sequenceLine.customerId,
@@ -249,6 +296,7 @@ export async function getDailyEntryPayload(input?: {
               unit: product.unit,
               quantity: String(saved?.quantity ?? 0),
               defaultRate: String(saved?.rateSnapshot ?? product.defaultRate),
+              lastQuantity: String(recentOrder?.get(product.id) ?? 0),
             };
           }),
         };
