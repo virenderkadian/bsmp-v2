@@ -8,6 +8,7 @@ import {
   reorderMonthlyRouteSequenceLines,
   type MonthlySequenceActionState,
 } from "@/app/monthly-route-sequence/actions";
+import { BillingRouteDialog } from "@/app/monthly-route-sequence/billing-route-dialog";
 import { PrimaryButton } from "@/components/admin/buttons";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { CustomerQuickCreateDialog } from "@/components/admin/customer-quick-create-dialog";
@@ -501,7 +502,15 @@ function SequenceTable({
         title="Remove customer from sequence?"
         description={
           lineToRemove
-            ? `${lineToRemove.customerName} will be removed from this route/month sequence. Remaining rows will be renumbered automatically.`
+            ? lineToRemove.deliveredDays > 0
+              ? // Mid-month removal with deliveries already recorded. Say plainly
+                // that this does NOT undo them and they're still charged for —
+                // otherwise "remove" reads as "cancel what happened", and
+                // someone discovers the bill later and assumes it's a bug.
+                `${lineToRemove.customerName} already has ${lineToRemove.deliveredDays} day${
+                  lineToRemove.deliveredDays === 1 ? "" : "s"
+                } delivered on this route this month. Those deliveries are kept and will still be billed — removing them only stops future days on this route. Remaining rows will be renumbered automatically.`
+              : `${lineToRemove.customerName} will be removed from this route/month sequence. Remaining rows will be renumbered automatically.`
             : undefined
         }
         confirmLabel="Remove"
@@ -540,8 +549,17 @@ export function MonthlyRouteSequenceScreen({ payload }: { payload: MonthlyRouteS
   const lastAddMessageRef = useRef("");
   const formRef = useRef<HTMLFormElement>(null);
   const customerIdRef = useRef<HTMLInputElement>(null);
+  const billingRouteIdRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [state, formAction, pending] = useActionState(addMonthlyRouteSequenceLine, initialState);
+  // The server returns needs-billing-route without writing anything. Track
+  // which prompt has been dismissed so cancelling doesn't immediately reopen
+  // the dialog off the same (still-current) action state.
+  const [dismissedBillingKey, setDismissedBillingKey] = useState<string | null>(null);
+
+  const billingChoice = state.status === "needs-billing-route" ? state.billingChoice : undefined;
+  const billingChoiceKey = billingChoice ? `${billingChoice.customerId}:${billingChoice.routeId}` : null;
+  const billingDialogOpen = Boolean(billingChoice) && billingChoiceKey !== dismissedBillingKey;
 
   const showToast = useCallback((nextToast: ToastState) => {
     setToast(nextToast);
@@ -635,6 +653,12 @@ export function MonthlyRouteSequenceScreen({ payload }: { payload: MonthlyRouteS
     if (customerIdRef.current) {
       customerIdRef.current.value = customerId;
     }
+    // A fresh add must never inherit the billing route chosen for a previous
+    // customer — the server would silently apply it to this one.
+    if (billingRouteIdRef.current) {
+      billingRouteIdRef.current.value = "";
+    }
+    setDismissedBillingKey(null);
 
     setQuery("");
     setSuggestionsOpen(false);
@@ -659,6 +683,10 @@ export function MonthlyRouteSequenceScreen({ payload }: { payload: MonthlyRouteS
             <input type="hidden" name="routeId" value={payload.selectedRouteId} readOnly />
             <input type="hidden" name="sequenceMonth" value={payload.selectedMonth} readOnly />
             <input ref={customerIdRef} type="hidden" name="customerId" />
+            {/* Empty on the first attempt. Filled in and resubmitted only after
+                the billing-route dialog is answered — see addCustomer, which
+                clears it so a later plain add can't inherit a stale choice. */}
+            <input ref={billingRouteIdRef} type="hidden" name="billingRouteId" />
           </form>
 
           <AddCustomerBar
@@ -694,6 +722,24 @@ export function MonthlyRouteSequenceScreen({ payload }: { payload: MonthlyRouteS
       )}
 
       {toast ? <Toast tone={toast.tone}>{toast.message}</Toast> : null}
+
+      {billingDialogOpen && billingChoice ? (
+        <BillingRouteDialog
+          choice={billingChoice}
+          pending={pending}
+          onCancel={() => setDismissedBillingKey(billingChoiceKey)}
+          onConfirm={(billingRouteId) => {
+            // Resubmit the SAME form with the answer filled in. customerId is
+            // still set from the first attempt, which the server rejected
+            // without writing anything.
+            if (billingRouteIdRef.current) {
+              billingRouteIdRef.current.value = billingRouteId;
+            }
+            setDismissedBillingKey(billingChoiceKey);
+            formRef.current?.requestSubmit();
+          }}
+        />
+      ) : null}
 
       {quickCreateOpen ? (
         <CustomerQuickCreateDialog

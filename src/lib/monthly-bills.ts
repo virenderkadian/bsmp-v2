@@ -1,6 +1,7 @@
 import type { BillingStatus, MonthlyBill, PaymentMode } from "@prisma/client";
 import { getCurrentCityId } from "@/lib/current-city";
 import { getCityCustomerLedger, receivedAgainstOpenBill } from "@/lib/bill-ledger";
+import { mergeCalendarDays, resolveBillingRoutes, selectBillingRows } from "@/lib/monthly-bills-math";
 import { withDbTimeout } from "@/lib/db-timeout";
 import { prisma } from "@/lib/prisma";
 
@@ -157,6 +158,10 @@ export type MonthlyBillSummaryCustomerRow = {
   source: "BILL" | "DAILY_ENTRY";
   billId: string | null;
   status: BillingStatus | null;
+  // False when the customer has deliveries this month but no sequence row —
+  // removed mid-month. Still billed for what they received; shown so they
+  // can't be billed invisibly.
+  inSequence: boolean;
 };
 
 export type MonthlyBillSummaryTotals = {
@@ -176,6 +181,18 @@ export type MonthlyBillSummaryRoute = {
   totals: MonthlyBillSummaryTotals;
 };
 
+// A customer carrying a balance who has NO bill this month — they're not on
+// any route and had no deliveries, so nothing in the normal flow would show
+// them. Without this they quietly drop off the radar while still owing money.
+export type MonthlyBillOutstandingRow = {
+  customerId: string;
+  customerCode: string;
+  customerName: string;
+  customerMobile: string | null;
+  lastBilledMonth: string;
+  outstandingAmount: string;
+};
+
 export type MonthlyBillSummaryPayload = {
   dbConnected: boolean;
   selectedMonth: string;
@@ -184,6 +201,7 @@ export type MonthlyBillSummaryPayload = {
   products: MonthlyBillSummaryProduct[];
   routes: MonthlyBillSummaryRoute[];
   grandTotals: MonthlyBillSummaryTotals;
+  outstanding: MonthlyBillOutstandingRow[];
   error?: string;
 };
 
@@ -246,6 +264,54 @@ type CalendarSourceLine = {
     product: { id: string };
   }>;
 };
+
+// Collapses a customer's daily lines into one per calendar date, merging any
+// date that has lines from several routes (morning + evening). A date with a
+// single line passes through completely untouched, so the overwhelmingly
+// common single-route case keeps its exact previous shape and behaviour.
+function buildMergedDayEntryMap(
+  rows: Array<{ day: number; line: CalendarSourceLine | undefined }>,
+): Map<number, CalendarSourceLine | undefined> {
+  const linesByDay = new Map<number, CalendarSourceLine[]>();
+  for (const row of rows) {
+    if (!row.line) {
+      continue;
+    }
+    const existing = linesByDay.get(row.day) ?? [];
+    existing.push(row.line);
+    linesByDay.set(row.day, existing);
+  }
+
+  const merged = new Map<number, CalendarSourceLine | undefined>();
+  for (const [day, lines] of linesByDay) {
+    if (lines.length === 1) {
+      merged.set(day, lines[0]);
+      continue;
+    }
+
+    const combined = mergeCalendarDays(
+      lines.map((line) => ({
+        skipped: line.skipped,
+        entries: line.productEntries.map((entry) => ({
+          productId: entry.product.id,
+          quantity: Number(entry.quantity),
+          rateSnapshot: Number(entry.rateSnapshot),
+        })),
+      })),
+    );
+
+    merged.set(day, {
+      skipped: combined.skipped,
+      productEntries: combined.entries.map((entry) => ({
+        quantity: entry.quantity,
+        rateSnapshot: entry.rateSnapshot,
+        product: { id: entry.productId },
+      })),
+    });
+  }
+
+  return merged;
+}
 
 function buildCalendarDays(
   dayEntryMap: Map<number, CalendarSourceLine | undefined>,
@@ -479,10 +545,11 @@ export async function getMonthlyBillSummary(input?: {
         products,
         routes: [],
         grandTotals: emptyTotals,
+        outstanding: [],
       };
     }
 
-    const [sequenceLines, bills, dailyEntries, priorBills, customerLedger] = await withDbTimeout(Promise.all([
+    const [sequenceLines, bills, dailyEntries, priorBills, customerLedger, monthSequenceRows] = await withDbTimeout(Promise.all([
       prisma.monthlyRouteCustomerSequence.findMany({
         where: {
           routeId: { in: routeIds },
@@ -527,9 +594,13 @@ export async function getMonthlyBillSummary(input?: {
           },
         },
       }),
+      // City-wide for the month, NOT limited to the selected route(s): a
+      // customer billed on their morning route must still have their evening
+      // route's deliveries counted into that one bill, and those entries
+      // belong to a route that may not be in routeIds at all.
       prisma.dailyRouteEntry.findMany({
         where: {
-          routeId: { in: routeIds },
+          route: { cityId },
           entryDate: {
             gte: start,
             lt: end,
@@ -560,27 +631,47 @@ export async function getMonthlyBillSummary(input?: {
           billingMonth: { lt: start },
         },
         orderBy: { billingMonth: "desc" },
-        select: { customerId: true, closingBalance: true },
+        select: { customerId: true, closingBalance: true, billingMonth: true },
       }),
       // Collection ledger (verified total minus what's frozen into locked
       // bills), so the preview's Received/Pending matches what Generate would
       // write — attributed to the open bill, not by payment date.
       getCityCustomerLedger(prisma, cityId),
+      // Every route each customer runs this month, city-wide — deliberately
+      // NOT limited to the selected route(s). A customer on a morning AND an
+      // evening route gets ONE combined bill on the route flagged billsHere,
+      // and while viewing just one of those routes we still have to know
+      // whether this is that route. Without this, the non-billing route can't
+      // tell it isn't the billing route and re-shows the customer's whole
+      // opening balance and payments — the double-count this all fixes.
+      prisma.monthlyRouteCustomerSequence.findMany({
+        where: { route: { cityId }, sequenceMonth: start, status: "ACTIVE" },
+        orderBy: { createdAt: "asc" },
+        select: { customerId: true, routeId: true, billsHere: true },
+      }),
     ]), "Monthly bill summary request", 8000);
 
+    // Same resolver bill generation uses, so the summary and the bills it
+    // previews can never disagree about which route carries a customer.
+    const billingRoutes = resolveBillingRoutes(monthSequenceRows);
+
     const routeIndex = new Map(routeIds.map((routeId, index) => [routeId, index]));
-    const sortedSequenceLines = [...sequenceLines].sort((left, right) => {
+    const sortedSequenceLines = selectBillingRows(sequenceLines, billingRoutes).sort((left, right) => {
       const routeSort = (routeIndex.get(left.routeId) ?? 0) - (routeIndex.get(right.routeId) ?? 0);
 
       return routeSort === 0 ? left.sequenceNo - right.sequenceNo : routeSort;
     });
-    const billMap = new Map(bills.map((bill) => [`${bill.routeId}:${bill.customerId}`, bill]));
+    // Keyed by customer, not customer+route — there is one bill per customer
+    // per month now, wherever it happens to be issued.
+    const billMap = new Map(bills.map((bill) => [bill.customerId, bill]));
     const priorClosingMap = new Map<string, number>();
+    const priorMonthMap = new Map<string, string>();
     for (const priorBill of priorBills) {
       // Ordered newest-first, so the first entry seen per customer is the
       // latest prior bill's closing balance.
       if (!priorClosingMap.has(priorBill.customerId)) {
         priorClosingMap.set(priorBill.customerId, Number(priorBill.closingBalance));
+        priorMonthMap.set(priorBill.customerId, priorBill.billingMonth.toISOString().slice(0, 7));
       }
     }
     const dailyMap = new Map<
@@ -591,9 +682,21 @@ export async function getMonthlyBillSummary(input?: {
       }
     >();
 
+    // Where a customer's deliveries happened, for customers who have NO
+    // sequence row left (removed mid-month). Their bill lands on the route the
+    // deliveries were recorded against — see buildBillPairs' fallback — so the
+    // summary has to place their row on that same route.
+    const deliveryRouteByCustomer = new Map<string, string>();
+
     dailyEntries.forEach((entry) => {
       entry.lines.forEach((line) => {
-        const key = `${entry.routeId}:${line.customerId}`;
+        // Keyed by customer alone, so a customer delivered on both a morning
+        // and an evening route accumulates ONE set of totals covering both —
+        // matching the single combined bill they're issued.
+        const key = line.customerId;
+        if (!deliveryRouteByCustomer.has(key)) {
+          deliveryRouteByCustomer.set(key, entry.routeId);
+        }
         const current =
           dailyMap.get(key) ??
           {
@@ -616,10 +719,54 @@ export async function getMonthlyBillSummary(input?: {
       });
     });
 
+    // Customers with deliveries this month but NO sequence row left — removed
+    // from every route mid-month. They're still billed (buildBillPairs walks
+    // delivery data first, so the milk they actually received is charged for),
+    // and without this they'd be billed while being invisible in the very
+    // screen used to check the month before generating.
+    const shownCustomerIds = new Set(sortedSequenceLines.map((line) => line.customerId));
+    const orphanCustomerIds = [...dailyMap.keys()].filter(
+      (customerId) =>
+        !shownCustomerIds.has(customerId) &&
+        // Only those landing on a route currently in view.
+        routeIds.includes(deliveryRouteByCustomer.get(customerId) ?? ""),
+    );
+
+    const orphanCustomers =
+      orphanCustomerIds.length > 0
+        ? await withDbTimeout(
+            prisma.customer.findMany({
+              where: { id: { in: orphanCustomerIds } },
+              select: { id: true, code: true, name: true, area: true, mobile: true, openingBalance: true },
+            }),
+            "Monthly bill summary removed-customer request",
+          )
+        : [];
+
+    const summaryLines = [
+      ...sortedSequenceLines,
+      ...orphanCustomers.map((customer) => ({
+        // No sequence row, so no sequence number — sorted to the end of their
+        // route below by this sentinel.
+        routeId: deliveryRouteByCustomer.get(customer.id) ?? "",
+        customerId: customer.id,
+        sequenceNo: Number.MAX_SAFE_INTEGER,
+        customer: {
+          code: customer.code,
+          name: customer.name,
+          area: customer.area,
+          mobile: customer.mobile,
+          openingBalance: customer.openingBalance,
+        },
+      })),
+    ];
+
     const rowsByRoute = new Map<string, MonthlyBillSummaryCustomerRow[]>();
 
-    sortedSequenceLines.forEach((line) => {
-      const key = `${line.routeId}:${line.customerId}`;
+    summaryLines.forEach((line) => {
+      // One row per customer now, so the customer id alone identifies it — and
+      // both the bill and the accumulated delivery totals are keyed that way.
+      const key = line.customerId;
       const bill = billMap.get(key);
       const daily = dailyMap.get(key);
       const productQuantities = Object.fromEntries(
@@ -653,7 +800,7 @@ export async function getMonthlyBillSummary(input?: {
 
       routeRows.push({
         key,
-        sequenceNo: line.sequenceNo,
+        sequenceNo: line.sequenceNo === Number.MAX_SAFE_INTEGER ? 0 : line.sequenceNo,
         customerId: line.customerId,
         customerCode: line.customer.code,
         customerName: line.customer.name,
@@ -667,6 +814,7 @@ export async function getMonthlyBillSummary(input?: {
         source: bill ? "BILL" : "DAILY_ENTRY",
         billId: bill?.id ?? null,
         status: bill?.status ?? null,
+        inSequence: line.sequenceNo !== Number.MAX_SAFE_INTEGER,
       });
 
       rowsByRoute.set(line.routeId, routeRows);
@@ -706,6 +854,53 @@ export async function getMonthlyBillSummary(input?: {
     const allRows = summaryRoutes.flatMap((route) => route.rows);
     const selectedRoute = routes.find((route) => route.id === selectedRouteId);
 
+    // Customers carrying a balance who have no bill this month at all — off
+    // every route, no deliveries — so none of the route tables above would
+    // list them. The balance is real and still collectable; without this it
+    // just stops being visible after the last month they were served.
+    //
+    // Only meaningful when looking at every route: filtered to one route, "not
+    // on any route" isn't a question this view can answer.
+    const billedThisMonth = new Set(allRows.map((row) => row.customerId));
+    const outstandingIds = selectedRouteId
+      ? []
+      : [...priorClosingMap.entries()]
+          .filter(([customerId, closing]) => {
+            if (billedThisMonth.has(customerId)) {
+              return false;
+            }
+            // Same arithmetic the preview rows use: carried balance less
+            // whatever they've since paid that isn't frozen into a locked bill.
+            const settled = closing - receivedAgainstOpenBill(customerLedger.get(customerId));
+            return Math.round(settled * 100) !== 0;
+          })
+          .map(([customerId]) => customerId);
+
+    const outstandingCustomers =
+      outstandingIds.length > 0
+        ? await withDbTimeout(
+            prisma.customer.findMany({
+              where: { id: { in: outstandingIds } },
+              select: { id: true, code: true, name: true, mobile: true },
+            }),
+            "Monthly bill summary outstanding request",
+          )
+        : [];
+
+    const outstanding: MonthlyBillOutstandingRow[] = outstandingCustomers
+      .map((customer) => ({
+        customerId: customer.id,
+        customerCode: customer.code,
+        customerName: customer.name,
+        customerMobile: customer.mobile,
+        lastBilledMonth: priorMonthMap.get(customer.id) ?? "",
+        outstandingAmount: toMoney(
+          (priorClosingMap.get(customer.id) ?? 0) -
+            receivedAgainstOpenBill(customerLedger.get(customer.id)),
+        ),
+      }))
+      .sort((left, right) => Number(right.outstandingAmount) - Number(left.outstandingAmount));
+
     return {
       dbConnected: true,
       selectedMonth,
@@ -716,6 +911,7 @@ export async function getMonthlyBillSummary(input?: {
       products,
       routes: summaryRoutes,
       grandTotals: buildTotals(allRows),
+      outstanding,
     };
   } catch (error) {
     const message =
@@ -729,6 +925,7 @@ export async function getMonthlyBillSummary(input?: {
       products: [],
       routes: [],
       grandTotals: emptyTotals,
+      outstanding: [],
       error: message,
     };
   }
@@ -815,9 +1012,12 @@ export async function getMonthlyBillDetail(id: string): Promise<MonthlyBillDetai
           },
           select: { sequenceNo: true },
         }),
+        // Every route this customer was delivered on, not just the one the
+        // bill is issued against: the bill's total covers all of them, so the
+        // day-by-day calendar beside it has to as well or the two disagree.
         prisma.dailyRouteEntry.findMany({
           where: {
-            routeId: bill.routeId,
+            route: { cityId: bill.route.cityId },
             entryDate: {
               gte: start,
               lt: end,
@@ -898,8 +1098,12 @@ export async function getMonthlyBillDetail(id: string): Promise<MonthlyBillDetai
       totalAmount: toMoney(item.totalAmount),
     }));
 
-    const dayEntryMap = new Map(
-      deliveryEntries.map((entry) => [entry.entryDate.getUTCDate(), entry.lines[0]]),
+    // Grouped, not `new Map(...)`: a customer delivered on both a morning and
+    // an evening route has TWO entries for the same date, and building the map
+    // directly kept only the last one — the calendar then under-reported that
+    // day against the bill total printed beside it.
+    const dayEntryMap = buildMergedDayEntryMap(
+      deliveryEntries.map((entry) => ({ day: entry.entryDate.getUTCDate(), line: entry.lines[0] })),
     );
     const { calendarDays, calendarTotals } = buildCalendarDays(dayEntryMap, calendarProducts, start);
 
@@ -1049,8 +1253,13 @@ export async function getMonthlyBillsForRoutePrint(
           where: { routeId, sequenceMonth: start },
           select: { customerId: true, sequenceNo: true },
         }),
+        // City-wide for the month, not just this route: a customer billed here
+        // may also have been delivered on their other route, and the printed
+        // calendar has to account for those days too or it won't add up to the
+        // bill total sitting beside it. Lines are narrowed to the printed
+        // customers below.
         prisma.dailyRouteEntry.findMany({
-          where: { routeId, entryDate: { gte: start, lt: end } },
+          where: { route: { cityId: route.cityId }, entryDate: { gte: start, lt: end } },
           select: {
             entryDate: true,
             lines: {
@@ -1075,17 +1284,28 @@ export async function getMonthlyBillsForRoutePrint(
 
     const sequenceMap = new Map(sequenceLines.map((line) => [line.customerId, line.sequenceNo]));
 
-    const entriesByCustomerDay = new Map<string, Map<number, CalendarSourceLine>>();
+    // Collect per customer first, then merge each date — a `set` here dropped
+    // one of the two lines whenever a customer was delivered on both a morning
+    // and an evening route on the same day.
+    const billedCustomerIds = new Set(bills.map((bill) => bill.customerId));
+    const rowsByCustomer = new Map<string, Array<{ day: number; line: CalendarSourceLine | undefined }>>();
     dailyEntries.forEach((entry) => {
       const day = entry.entryDate.getUTCDate();
 
       entry.lines.forEach((line) => {
-        const dayMap = entriesByCustomerDay.get(line.customerId) ?? new Map();
-
-        dayMap.set(day, { skipped: line.skipped, productEntries: line.productEntries });
-        entriesByCustomerDay.set(line.customerId, dayMap);
+        if (!billedCustomerIds.has(line.customerId)) {
+          return;
+        }
+        const rows = rowsByCustomer.get(line.customerId) ?? [];
+        rows.push({ day, line: { skipped: line.skipped, productEntries: line.productEntries } });
+        rowsByCustomer.set(line.customerId, rows);
       });
     });
+
+    const entriesByCustomerDay = new Map<string, Map<number, CalendarSourceLine | undefined>>();
+    for (const [customerId, rows] of rowsByCustomer) {
+      entriesByCustomerDay.set(customerId, buildMergedDayEntryMap(rows));
+    }
 
     const documents: MonthlyBillDetail[] = bills
       .map((bill) => {

@@ -7,7 +7,7 @@ import { getCurrentCityId } from "@/lib/current-city";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
 import { getCityCustomerLedger, receivedAgainstOpenBill } from "@/lib/bill-ledger";
-import { buildBillPairs, computeClosingBalance } from "@/lib/monthly-bills-math";
+import { buildBillPairs, computeClosingBalance, selectStaleDuplicateBills } from "@/lib/monthly-bills-math";
 
 export type MonthlyBillActionState = {
   status: "idle" | "success" | "error";
@@ -150,7 +150,16 @@ export async function generateMonthlyBills(
         sequenceMonth: start,
         status: "ACTIVE",
       },
-      select: { customerId: true, routeId: true },
+      // Oldest-first is REQUIRED, not cosmetic: when a multi-route customer has
+      // no row flagged billsHere (nothing forces one to exist — the partial
+      // unique index only forbids a second), resolveBillingRoutes falls back to
+      // the earliest row. Without this ordering Postgres could hand generation
+      // a different order than the Customer Summary uses, and the two would
+      // disagree about which route the customer is billed on.
+      orderBy: { createdAt: "asc" },
+      // billsHere decides which route a multi-route customer's single combined
+      // bill is issued against — see buildBillPairs.
+      select: { customerId: true, routeId: true, billsHere: true },
     });
 
     const openingBalanceMap = new Map(
@@ -292,12 +301,40 @@ export async function generateMonthlyBills(
           generatedCount += 1;
         }
 
+        // Sweep up bills stranded on a route that no longer bills the customer
+        // — from a billing-route change, or from the route holding it being
+        // removed from the sequence. Without this the customer keeps the old
+        // bill AND gains a new one, which is the duplicate this whole change
+        // exists to remove.
+        //
+        // DRAFT only: a GENERATED or LOCKED bill has been issued to someone and
+        // must never be deleted by a routine regeneration. Those are surfaced
+        // for a human decision instead.
+        const draftBills = await tx.monthlyBill.findMany({
+          where: { route: { cityId }, billingMonth: start, status: "DRAFT" },
+          select: { id: true, customerId: true, routeId: true },
+        });
+        const staleBillIds = selectStaleDuplicateBills(
+          draftBills,
+          new Map([...billPairs.values()].map((bill) => [bill.customerId, bill.routeId])),
+        );
+
+        if (staleBillIds.length > 0) {
+          await tx.monthlyBillItem.deleteMany({ where: { monthlyBillId: { in: staleBillIds } } });
+          await tx.monthlyBill.deleteMany({ where: { id: { in: staleBillIds } } });
+        }
+
         await logAudit(tx, {
           cityId,
           entityType: "MonthlyBillBatch",
           action: "GENERATE",
-          summary: `Generated/refreshed ${generatedCount} monthly bill${generatedCount === 1 ? "" : "s"} for ${parsed.data.billingMonth}${skippedLocked > 0 ? `, ${skippedLocked} locked bill(s) skipped` : ""}.`,
-          after: { billingMonth: parsed.data.billingMonth, generatedCount, skippedLocked },
+          summary: `Generated/refreshed ${generatedCount} monthly bill${generatedCount === 1 ? "" : "s"} for ${parsed.data.billingMonth}${skippedLocked > 0 ? `, ${skippedLocked} locked bill(s) skipped` : ""}${staleBillIds.length > 0 ? `, ${staleBillIds.length} stale duplicate(s) removed` : ""}.`,
+          after: {
+            billingMonth: parsed.data.billingMonth,
+            generatedCount,
+            skippedLocked,
+            staleDuplicatesRemoved: staleBillIds.length,
+          },
         });
       },
       { timeout: 30_000, maxWait: 10_000 },

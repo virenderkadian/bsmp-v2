@@ -28,6 +28,10 @@ export type MonthlySequenceLineRecord = {
   customerMobile: string | null;
   sequenceNo: number;
   status: RouteAssignmentStatus;
+  // Days this customer already has a delivery line recorded on THIS route this
+  // month. Removing them doesn't delete those entries (and they're still
+  // billed), so the removal confirmation warns when this is non-zero.
+  deliveredDays: number;
 };
 
 export type MonthlyRouteSequencePayload = {
@@ -171,6 +175,26 @@ export async function getMonthlyRouteSequencePayload(input?: {
         },
       }), "Monthly route sequence request");
 
+      // How many days each of these customers already has recorded on this
+      // route this month. Removal leaves those entries in place, so the UI
+      // needs to say so before someone assumes it undoes the deliveries.
+      const monthEnd = new Date(sequenceMonth);
+      monthEnd.setUTCMonth(monthEnd.getUTCMonth() + 1);
+      const deliveredLines = await withDbTimeout(
+        prisma.dailyRouteEntryLine.groupBy({
+          by: ["customerId"],
+          where: {
+            entry: { routeId: selectedRouteId, entryDate: { gte: sequenceMonth, lt: monthEnd } },
+            customerId: { in: lines.map((line) => line.customerId) },
+          },
+          _count: { _all: true },
+        }),
+        "Monthly route sequence delivery counts",
+      );
+      const deliveredDaysByCustomer = new Map(
+        deliveredLines.map((row) => [row.customerId, row._count._all]),
+      );
+
       return {
         dbConnected: true,
         routes: routeOptions,
@@ -184,6 +208,7 @@ export async function getMonthlyRouteSequencePayload(input?: {
           customerMobile: line.customer.mobile,
           sequenceNo: line.sequenceNo,
           status: line.status,
+          deliveredDays: deliveredDaysByCustomer.get(line.customerId) ?? 0,
         })),
         selectedRouteId,
         selectedMonth,

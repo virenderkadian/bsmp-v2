@@ -248,6 +248,18 @@ model MonthlyRouteCustomerSequence {
   sequenceMonth DateTime              @db.Date
   sequenceNo    Int
   status        RouteAssignmentStatus @default(ACTIVE)
+  // Which route carries this customer's ONE monthly bill when they run on
+  // more than one route in a month (the normal morning + evening pairing).
+  // Deliveries are still recorded per route; billing is not — a customer gets
+  // a single combined bill, issued against the route flagged here.
+  //
+  // Enforced by a PARTIAL unique index (see the migration): at most one ACTIVE
+  // row per customer+month may have billsHere = true. Prisma can't express a
+  // WHERE clause on an index, so it lives in raw SQL there rather than here.
+  //
+  // Defaults to true so single-route customers need no decision at all; the
+  // add-to-sequence flow asks only when a second route would create a clash.
+  billsHere     Boolean               @default(true)
   createdAt     DateTime              @default(now())
   updatedAt     DateTime              @updatedAt
   route         Route                 @relation(fields: [routeId], references: [id])

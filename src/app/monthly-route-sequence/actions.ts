@@ -7,13 +7,45 @@ import { nextCustomerCode } from "@/lib/customer-code";
 import { monthInputToDate } from "@/lib/monthly-route-sequence";
 import { prisma } from "@/lib/prisma";
 
-export type MonthlySequenceActionState = {
+export type BillingRouteOption = {
+  routeId: string;
+  routeCode: string;
+  routeName: string;
+  shift: string;
+  // True for the route being added right now, so the dialog can label it.
+  isNew: boolean;
+};
+
+export type BillingRouteChoice = {
+  customerId: string;
+  customerName: string;
+  routeId: string;
+  sequenceMonth: string;
+  options: BillingRouteOption[];
+};
+
+// Narrow state for flows that can never need a billing-route decision — a
+// brand-new customer has no other route to clash with. Kept separate so it
+// stays assignable to the shared quick-create dialog's expected state.
+export type MonthlySequenceQuickCreateState = {
   status: "idle" | "success" | "error";
   message?: string;
   customerId?: string;
 };
 
-const idleState: MonthlySequenceActionState = { status: "idle" };
+export type MonthlySequenceActionState = {
+  // "needs-billing-route" means nothing was written: the customer already runs
+  // on another route this month, so exactly one of those routes has to be
+  // chosen to carry their single combined bill before the row is created.
+  status: "idle" | "success" | "error" | "needs-billing-route";
+  message?: string;
+  customerId?: string;
+  billingChoice?: BillingRouteChoice;
+};
+
+// Typed narrow so it can seed BOTH action shapes — the wide one accepts it,
+// the quick-create one requires it.
+const idleState: MonthlySequenceQuickCreateState = { status: "idle" };
 
 function getValue(formData: FormData, key: string) {
   const value = formData.get(key);
@@ -24,6 +56,9 @@ const addSequenceLineSchema = z.object({
   routeId: z.string().trim().min(1, "Select a route first."),
   customerId: z.string().trim().min(1, "Select a customer first."),
   sequenceMonth: z.string().regex(/^\d{4}-\d{2}$/, "Select a valid month."),
+  // Present only on the second submit, once the driver of the UI has answered
+  // "which route bills this customer?". Empty on the first attempt.
+  billingRouteId: z.string().trim().optional(),
 });
 
 const quickCreateCustomerSequenceSchema = addSequenceLineSchema
@@ -136,6 +171,7 @@ export async function addMonthlyRouteSequenceLine(
     routeId: getValue(formData, "routeId"),
     customerId: getValue(formData, "customerId"),
     sequenceMonth: getValue(formData, "sequenceMonth"),
+    billingRouteId: getValue(formData, "billingRouteId"),
   });
 
   if (!parsed.success) {
@@ -143,6 +179,76 @@ export async function addMonthlyRouteSequenceLine(
   }
 
   const sequenceMonth = monthInputToDate(parsed.data.sequenceMonth);
+  const billingRouteId = parsed.data.billingRouteId?.trim() || "";
+
+  // Already on another route this month? Then this add would give them a
+  // second route, and a customer gets exactly ONE combined bill — so which
+  // route carries it has to be answered before anything is written.
+  const otherRoutes = await prisma.monthlyRouteCustomerSequence.findMany({
+    where: {
+      customerId: parsed.data.customerId,
+      sequenceMonth,
+      status: "ACTIVE",
+      NOT: { routeId: parsed.data.routeId },
+    },
+    orderBy: { createdAt: "asc" },
+    select: { routeId: true, route: { select: { code: true, name: true, shift: true } } },
+  });
+
+  if (otherRoutes.length > 0 && !billingRouteId) {
+    const [customer, newRoute] = await Promise.all([
+      prisma.customer.findUnique({
+        where: { id: parsed.data.customerId },
+        select: { name: true },
+      }),
+      prisma.route.findUnique({
+        where: { id: parsed.data.routeId },
+        select: { code: true, name: true, shift: true },
+      }),
+    ]);
+
+    if (!newRoute) {
+      return { status: "error", message: "That route no longer exists. Reload and try again." };
+    }
+
+    return {
+      status: "needs-billing-route",
+      billingChoice: {
+        customerId: parsed.data.customerId,
+        customerName: customer?.name ?? "This customer",
+        routeId: parsed.data.routeId,
+        sequenceMonth: parsed.data.sequenceMonth,
+        options: [
+          ...otherRoutes.map((row) => ({
+            routeId: row.routeId,
+            routeCode: row.route.code,
+            routeName: row.route.name,
+            shift: String(row.route.shift),
+            isNew: false,
+          })),
+          {
+            routeId: parsed.data.routeId,
+            routeCode: newRoute.code,
+            routeName: newRoute.name,
+            shift: String(newRoute.shift),
+            isNew: true,
+          },
+        ],
+      },
+    };
+  }
+
+  if (billingRouteId) {
+    const isKnownRoute =
+      billingRouteId === parsed.data.routeId || otherRoutes.some((row) => row.routeId === billingRouteId);
+
+    if (!isKnownRoute) {
+      return {
+        status: "error",
+        message: "That billing route isn't one of this customer's routes. Reload and try again.",
+      };
+    }
+  }
 
   try {
     await prisma.$transaction(async (tx) => {
@@ -156,6 +262,17 @@ export async function addMonthlyRouteSequenceLine(
         },
       });
 
+      // Clear every existing flag BEFORE setting the chosen one. The partial
+      // unique index allows only one billsHere = true per customer+month and is
+      // checked per statement, so flipping the new one on first would collide
+      // with the old one mid-transaction.
+      if (billingRouteId) {
+        await tx.monthlyRouteCustomerSequence.updateMany({
+          where: { customerId: parsed.data.customerId, sequenceMonth, status: "ACTIVE" },
+          data: { billsHere: false },
+        });
+      }
+
       await tx.monthlyRouteCustomerSequence.create({
         data: {
           routeId: parsed.data.routeId,
@@ -163,14 +280,32 @@ export async function addMonthlyRouteSequenceLine(
           sequenceMonth,
           sequenceNo: (maxSequence._max.sequenceNo ?? 0) + 1,
           status: "ACTIVE",
+          // Their only route unless a choice was made — a single-route customer
+          // never has to be asked anything.
+          billsHere: billingRouteId ? false : true,
         },
       });
+
+      if (billingRouteId) {
+        await tx.monthlyRouteCustomerSequence.updateMany({
+          where: { customerId: parsed.data.customerId, sequenceMonth, status: "ACTIVE", routeId: billingRouteId },
+          data: { billsHere: true },
+        });
+      }
     });
 
     revalidatePath("/monthly-route-sequence");
     revalidatePath("/daily-entry");
+    // The billing route decides which route's summary and bills this customer
+    // shows up under, so that screen's cached data is now stale too.
+    revalidatePath("/monthly-bills");
 
-    return { status: "success", message: "Customer added to monthly sequence." };
+    return {
+      status: "success",
+      message: billingRouteId
+        ? "Customer added. Their bill will be issued on the route you picked."
+        : "Customer added to monthly sequence.",
+    };
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
       const target = Array.isArray(error.meta?.target)
@@ -195,9 +330,9 @@ export async function addMonthlyRouteSequenceLine(
 }
 
 export async function createCustomerAndAddToMonthlyRouteSequence(
-  _prevState: MonthlySequenceActionState = idleState,
+  _prevState: MonthlySequenceQuickCreateState = idleState,
   formData: FormData,
-): Promise<MonthlySequenceActionState> {
+): Promise<MonthlySequenceQuickCreateState> {
   void _prevState;
 
   const parsed = quickCreateCustomerSequenceSchema.safeParse({
@@ -367,6 +502,13 @@ export async function removeMonthlyRouteSequenceLine(
   const sequenceMonth = monthInputToDate(parsed.data.sequenceMonth);
 
   try {
+    // Which customer this row belonged to, and whether it was the one carrying
+    // their bill — both unknowable once it's deleted.
+    const removed = await prisma.monthlyRouteCustomerSequence.findFirst({
+      where: { id: parsed.data.lineId, routeId: parsed.data.routeId, sequenceMonth },
+      select: { customerId: true, billsHere: true },
+    });
+
     await prisma.monthlyRouteCustomerSequence.deleteMany({
       where: {
         id: parsed.data.lineId,
@@ -374,10 +516,31 @@ export async function removeMonthlyRouteSequenceLine(
         sequenceMonth,
       },
     });
+
+    // Removing the billing row would otherwise leave a customer still running
+    // other routes with NO route flagged. That isn't fatal — resolveBillingRoutes
+    // falls back to their earliest row — but it silently drops a deliberate
+    // choice, so promote the earliest remaining route explicitly instead.
+    if (removed?.billsHere) {
+      const remaining = await prisma.monthlyRouteCustomerSequence.findFirst({
+        where: { customerId: removed.customerId, sequenceMonth, status: "ACTIVE" },
+        orderBy: { createdAt: "asc" },
+        select: { id: true },
+      });
+
+      if (remaining) {
+        await prisma.monthlyRouteCustomerSequence.update({
+          where: { id: remaining.id },
+          data: { billsHere: true },
+        });
+      }
+    }
+
     await resequenceLines(parsed.data.routeId, sequenceMonth);
 
     revalidatePath("/monthly-route-sequence");
     revalidatePath("/daily-entry");
+    revalidatePath("/monthly-bills");
 
     return { status: "success", message: "Customer removed from sequence." };
   } catch (error) {

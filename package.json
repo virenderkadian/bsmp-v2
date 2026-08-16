@@ -17,6 +17,7 @@
     "db:seed": "node prisma/seed.mjs",
     "db:clear": "node prisma/clear.mjs",
     "db:clear-billing": "node prisma/clear-billing.mjs",
+    "db:seed-billing-test": "node prisma/seed-billing-test.mjs",
     "prisma:prod:migrate": "dotenv -e .env.production -- prisma migrate deploy",
     "prisma:prod:studio": "dotenv -e .env.production -- prisma studio",
     "prisma:prod:generate": "dotenv -e .env.production -- prisma generate"

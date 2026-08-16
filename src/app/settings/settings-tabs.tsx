@@ -5,13 +5,14 @@ import type { BusinessProfile } from "@prisma/client";
 import { ActivityPanel } from "@/app/settings/activity-panel";
 import { AppearancePanel } from "@/app/settings/appearance-panel";
 import { ArchivePanel } from "@/app/settings/archive-panel";
+import { BillingRoutesPanel } from "@/app/settings/billing-routes-panel";
 import { BusinessProfileForm } from "@/app/settings/business-profile-form";
 import { CitiesPanel } from "@/app/settings/cities-panel";
 import { TeamPanel } from "@/app/settings/team-panel";
 import { MasterTabs } from "@/components/admin/master-tabs";
-import type { ArchivePayload, AuditLogRecord, CityRecord, UserRecord } from "@/lib/settings";
+import type { ArchivePayload, AuditLogRecord, BillingRoutesPayload, CityRecord, UserRecord } from "@/lib/settings";
 
-type SettingsTab = "profile" | "appearance" | "cities" | "team" | "activity" | "archive";
+type SettingsTab = "profile" | "appearance" | "cities" | "team" | "billing-routes" | "activity" | "archive";
 
 export function SettingsTabs({
   profile,
@@ -23,6 +24,7 @@ export function SettingsTabs({
   auditLogsConnected,
   auditLogs,
   archivePayload,
+  billingRoutesPayload,
 }: {
   profile: BusinessProfile | null;
   citiesConnected: boolean;
@@ -33,6 +35,7 @@ export function SettingsTabs({
   auditLogsConnected: boolean;
   auditLogs: AuditLogRecord[];
   archivePayload: ArchivePayload;
+  billingRoutesPayload: BillingRoutesPayload;
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("profile");
 
@@ -45,6 +48,11 @@ export function SettingsTabs({
           { value: "appearance", label: "Appearance" },
           { value: "cities", label: "Cities", count: cities.length },
           { value: "team", label: "Team", count: users.length },
+          {
+            value: "billing-routes",
+            label: "Billing routes",
+            count: billingRoutesPayload.customers.length,
+          },
           { value: "activity", label: "Activity", count: auditLogs.length },
           { value: "archive", label: "Archive", count: archivePayload.candidates.length },
         ]}
@@ -56,6 +64,13 @@ export function SettingsTabs({
       {activeTab === "cities" ? <CitiesPanel dbConnected={citiesConnected} cities={cities} /> : null}
       {activeTab === "team" ? (
         <TeamPanel dbConnected={usersConnected} users={users} cities={cities} currentUserId={currentUserId} />
+      ) : null}
+      {activeTab === "billing-routes" ? (
+        <BillingRoutesPanel
+          dbConnected={billingRoutesPayload.dbConnected}
+          customers={billingRoutesPayload.customers}
+          error={billingRoutesPayload.error}
+        />
       ) : null}
       {activeTab === "activity" ? (
         <ActivityPanel dbConnected={auditLogsConnected} logs={auditLogs} />

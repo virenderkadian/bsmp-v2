@@ -378,6 +378,14 @@ function CustomerSummaryTab({
                       row.sequenceNo,
                       <div key="customer" className="min-w-[200px] truncate">
                         <span className="font-medium text-text-primary">{row.customerName}</span>
+                        {/* Removed from the sequence mid-month but still has
+                            deliveries, so they're still billed for them. Shown
+                            here so that can't happen invisibly. */}
+                        {row.inSequence ? null : (
+                          <span className="ml-2 whitespace-nowrap rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+                            Removed
+                          </span>
+                        )}
                       </div>,
                       ...summaryPayload.products.map((product) => (
                         <span key={product.id} className="block text-right">
@@ -466,6 +474,48 @@ function CustomerSummaryTab({
           </section>
         ))
       )}
+
+      {/* Customers carrying a balance who have no bill this month — off every
+          route, no deliveries. They'd otherwise vanish from this screen while
+          still owing money, so they're listed separately rather than mixed in
+          with the routes they're no longer on. */}
+      {summaryPayload.outstanding.length > 0 ? (
+        <section className="rounded-lg border border-amber-300 bg-surface shadow-sm">
+          <div className="border-b border-amber-300 bg-amber-50 px-4 py-3">
+            <h3 className="text-sm font-semibold text-amber-900">
+              Outstanding · not on any route this month
+            </h3>
+            <p className="mt-0.5 text-xs text-amber-800">
+              {summaryPayload.outstanding.length} customer
+              {summaryPayload.outstanding.length === 1 ? "" : "s"} still carrying a balance from an
+              earlier month. They get no bill this month, so collect against their last one.
+            </p>
+          </div>
+          <ul className="divide-y divide-surface-border">
+            {summaryPayload.outstanding.map((row) => (
+              <li key={row.customerId} className="flex flex-wrap items-baseline justify-between gap-2 px-4 py-2.5">
+                <span className="min-w-0">
+                  <span className="text-sm font-medium text-text-primary">{row.customerName}</span>
+                  <span className="ml-2 text-xs text-text-muted">
+                    {row.customerCode}
+                    {row.customerMobile ? ` · ${row.customerMobile}` : ""}
+                    {row.lastBilledMonth ? ` · last billed ${row.lastBilledMonth}` : ""}
+                  </span>
+                </span>
+                <span
+                  className={
+                    Number(row.outstandingAmount) < 0
+                      ? "text-sm font-semibold text-emerald-700"
+                      : "text-sm font-semibold text-rose-700"
+                  }
+                >
+                  {formatMoney(row.outstandingAmount)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
     </div>
   );
 }
