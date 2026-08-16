@@ -75,20 +75,33 @@ export function MonthlyBillDocument({
         </p>
       </header>
 
-      <div className="mt-1.5 flex flex-wrap items-center justify-between gap-x-4 gap-y-0.5 border-y border-slate-300 py-1.5 print:mt-1 print:py-1">
-        <p className="font-semibold">
-          BILL OF — {formatMonthTitle(bill.billingMonth)}
-          <span className="mx-1.5 font-normal text-slate-400">·</span>
-          <span className="font-normal">SR No: {bill.customerSequenceNo ?? "-"}</span>
-          <span className="mx-1.5 font-normal text-slate-400">·</span>
-          <span className="font-normal">{bill.customerName}</span>
-        </p>
-        {bill.driverName ? (
-          <p className="text-slate-600">
-            Driver: {bill.driverName}
-            {bill.driverPhone ? ` · ${bill.driverPhone}` : ""}
+      {/* Two lines rather than one: identity (SR + customer ID) on top, then
+          what the bill is for (month + customer name). Cramming all four into
+          one row was unreadable once the ID was added.
+
+          Separation is by WEIGHT and CASE, never colour — these print in
+          black and white, so a small uppercase label beside a bold value stays
+          legible where a colour cue would vanish. leading-tight keeps the
+          second line from costing meaningful vertical space on A4. */}
+      <div className="mt-1.5 border-y border-slate-300 py-1 leading-tight print:mt-1">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4">
+          <p className="text-[10px] uppercase tracking-wide text-slate-500">
+            SR No <span className="ml-0.5 text-xs font-bold tracking-normal text-slate-900">{bill.customerSequenceNo ?? "-"}</span>
+            <span className="mx-2 text-slate-400">|</span>
+            Customer ID <span className="ml-0.5 text-xs font-bold tracking-normal text-slate-900">{bill.customerCode}</span>
           </p>
-        ) : null}
+          {bill.driverName ? (
+            <p className="text-[10px] text-slate-600">
+              Driver: {bill.driverName}
+              {bill.driverPhone ? ` · ${bill.driverPhone}` : ""}
+            </p>
+          ) : null}
+        </div>
+        <p className="mt-0.5 text-[10px] uppercase tracking-wide text-slate-500">
+          Bill of <span className="ml-0.5 text-xs font-bold tracking-normal text-slate-900">{formatMonthTitle(bill.billingMonth)}</span>
+          <span className="mx-2 text-slate-400">|</span>
+          <span className="text-xs font-bold uppercase tracking-normal text-slate-900">{bill.customerName}</span>
+        </p>
       </div>
 
       <div className="mt-2 overflow-x-auto print:mt-1">
