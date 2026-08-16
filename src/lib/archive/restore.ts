@@ -2,6 +2,7 @@ import "server-only";
 import { prisma } from "@/lib/prisma";
 import { getArchiveStorage } from "@/lib/archive/storage";
 import { parseArchiveBuffer } from "@/lib/archive/parse";
+import { existingBillingKeys, resolveRestoredSequenceFlags } from "@/lib/archive/restore-sequences";
 
 export type RestoreResult = { ok: true } | { ok: false; reason: string };
 
@@ -58,7 +59,35 @@ export async function restoreArchive(archiveId: string): Promise<RestoreResult> 
       await tx.dailyRouteEntryLineProduct.createMany({ data: parsed.productEntries as never[] });
     }
     if (parsed.sequences.length > 0) {
-      await tx.monthlyRouteCustomerSequence.createMany({ data: parsed.sequences as never[] });
+      // Not createMany: at most one ACTIVE row per customer+month may carry
+      // billsHere (partial unique index), and an archive can easily contain
+      // several routes for one customer — or predate the column entirely, in
+      // which case every row defaults to true. Either would abort the restore.
+      // See resolveRestoredSequenceFlags for why rows are kept rather than
+      // dropped when they can't hold the flag.
+      const customerIds = [
+        ...new Set(
+          parsed.sequences
+            .map((row) => row.customerId)
+            .filter((value): value is string => typeof value === "string"),
+        ),
+      ];
+
+      const alreadyBilling =
+        customerIds.length > 0
+          ? await tx.monthlyRouteCustomerSequence.findMany({
+              where: { customerId: { in: customerIds }, status: "ACTIVE", billsHere: true },
+              select: { customerId: true, sequenceMonth: true },
+            })
+          : [];
+
+      const sequences = resolveRestoredSequenceFlags(parsed.sequences, existingBillingKeys(alreadyBilling));
+
+      // One at a time so each row's resolved flag is applied — createMany
+      // would take the archived values verbatim.
+      for (const sequence of sequences) {
+        await tx.monthlyRouteCustomerSequence.create({ data: sequence as never });
+      }
     }
 
     await tx.dailyEntryArchive.update({
