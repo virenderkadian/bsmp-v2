@@ -82,6 +82,11 @@ export type AuditLogRecord = {
   entityId: string | null;
   action: string;
   summary: string;
+  // Summary with any raw UUIDs swapped for something readable — see
+  // resolveSummaryIds. Kept alongside the original so nothing is lost.
+  summaryLabel: string;
+  before: unknown;
+  after: unknown;
   createdAt: string;
 };
 
@@ -96,6 +101,46 @@ export type AuditLogsPayload = {
 // is enough; no need for server-side pagination for a table nobody scrolls
 // through routinely.
 const AUDIT_LOG_LIMIT = 300;
+
+const UUID_PATTERN = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+// Audit summaries are written as free text and several embed a raw id, e.g.
+// "Saved daily entry for route 2d63fc67-...". Unreadable in the Activity list,
+// and there's no fixing it at the point of writing for entries already stored.
+//
+// So ids are resolved when the log is READ: every UUID appearing in any summary
+// is looked up once across the tables that could own it, and swapped for
+// something recognisable. Unknown ids (deleted rows, ids of other kinds) are
+// left exactly as they are rather than guessed at.
+async function resolveSummaryIds(summaries: string[]): Promise<Map<string, string>> {
+  const ids = new Set<string>();
+  summaries.forEach((summary) => {
+    const matches = summary.match(UUID_PATTERN);
+    matches?.forEach((match) => ids.add(match.toLowerCase()));
+  });
+
+  if (ids.size === 0) {
+    return new Map();
+  }
+
+  const idList = [...ids];
+  const [routes, customers, vehicles] = await Promise.all([
+    prisma.route.findMany({ where: { id: { in: idList } }, select: { id: true, code: true, name: true } }),
+    prisma.customer.findMany({ where: { id: { in: idList } }, select: { id: true, code: true, name: true } }),
+    prisma.vehicle.findMany({ where: { id: { in: idList } }, select: { id: true, code: true, name: true } }),
+  ]);
+
+  const labels = new Map<string, string>();
+  routes.forEach((route) => labels.set(route.id.toLowerCase(), `${route.code} (${route.name})`));
+  customers.forEach((customer) => labels.set(customer.id.toLowerCase(), `${customer.code} (${customer.name})`));
+  vehicles.forEach((vehicle) => labels.set(vehicle.id.toLowerCase(), `${vehicle.code} (${vehicle.name})`));
+
+  return labels;
+}
+
+function applySummaryLabels(summary: string, labels: Map<string, string>): string {
+  return summary.replace(UUID_PATTERN, (match) => labels.get(match.toLowerCase()) ?? match);
+}
 
 export async function getAuditLogsPayload(): Promise<AuditLogsPayload> {
   try {
@@ -113,11 +158,15 @@ export async function getAuditLogsPayload(): Promise<AuditLogsPayload> {
           entityId: true,
           action: true,
           summary: true,
+          before: true,
+          after: true,
           createdAt: true,
         },
       }),
       "Audit log request",
     );
+
+    const labelById = await resolveSummaryIds(logs.map((log) => log.summary));
 
     return {
       dbConnected: true,
@@ -131,6 +180,9 @@ export async function getAuditLogsPayload(): Promise<AuditLogsPayload> {
         entityId: log.entityId,
         action: log.action,
         summary: log.summary,
+        summaryLabel: applySummaryLabels(log.summary, labelById),
+        before: log.before ?? null,
+        after: log.after ?? null,
         createdAt: log.createdAt.toISOString(),
       })),
     };

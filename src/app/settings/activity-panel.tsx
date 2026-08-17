@@ -2,6 +2,9 @@
 
 import { useMemo, useState } from "react";
 import { DataTable } from "@/components/admin/data-table";
+import { Dialog } from "@/components/admin/dialog";
+import { IconButton } from "@/components/admin/icon-button";
+import { ViewIcon } from "@/components/admin/icons";
 import { SearchInput } from "@/components/admin/search-input";
 import { StatusBadge } from "@/components/admin/status-badge";
 import type { AuditLogRecord } from "@/lib/settings";
@@ -25,6 +28,7 @@ function actionTone(action: string): "neutral" | "success" | "warning" | "danger
 }
 
 export function ActivityPanel({ dbConnected, logs }: { dbConnected: boolean; logs: AuditLogRecord[] }) {
+  const [selected, setSelected] = useState<AuditLogRecord | null>(null);
   const [search, setSearch] = useState("");
 
   const entityTypes = useMemo(
@@ -48,7 +52,11 @@ export function ActivityPanel({ dbConnected, logs }: { dbConnected: boolean; log
       return (
         log.actorName.toLowerCase().includes(query) ||
         log.summary.toLowerCase().includes(query) ||
+        log.summaryLabel.toLowerCase().includes(query) ||
         log.entityType.toLowerCase().includes(query) ||
+        // Action is shown as a badge on every row, so it's a natural thing to
+        // search for — it just wasn't included.
+        log.action.toLowerCase().includes(query) ||
         (log.cityName?.toLowerCase().includes(query) ?? false)
       );
     });
@@ -68,7 +76,7 @@ export function ActivityPanel({ dbConnected, logs }: { dbConnected: boolean; log
       <div className="flex flex-wrap items-center gap-3">
         <SearchInput
           name="auditSearch"
-          placeholder="Search by actor, summary, or city"
+          placeholder="Search by actor, action, summary, or city"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
           className="max-w-xs"
@@ -96,6 +104,7 @@ export function ActivityPanel({ dbConnected, logs }: { dbConnected: boolean; log
           { key: "action", label: "Action" },
           { key: "summary", label: "Summary" },
           { key: "city", label: "City" },
+          { key: "view", label: "" },
         ]}
         rows={filteredLogs.map((log) => ({
           key: log.id,
@@ -113,12 +122,27 @@ export function ActivityPanel({ dbConnected, logs }: { dbConnected: boolean; log
             <StatusBadge key="action" tone={actionTone(log.action)}>
               {log.action}
             </StatusBadge>,
-            <span key="summary" className="text-sm text-text-primary">
-              {log.summary}
+            // Clamped to one line: summaries vary from a few words to a
+            // paragraph, and letting the long ones wrap pushed every other
+            // column out of alignment. Full text is one click away.
+            <span
+              key="summary"
+              className="block max-w-[380px] truncate text-sm text-text-primary"
+              title={log.summaryLabel}
+            >
+              {log.summaryLabel}
             </span>,
             <span key="city" className="text-sm text-text-secondary">
               {log.cityName ?? "—"}
             </span>,
+            <IconButton
+              key="view"
+              type="button"
+              onClick={() => setSelected(log)}
+              aria-label="View activity detail"
+            >
+              <ViewIcon className="h-4 w-4" />
+            </IconButton>,
           ],
         }))}
         emptyMessage="No activity matches your search"
@@ -129,6 +153,66 @@ export function ActivityPanel({ dbConnected, logs }: { dbConnected: boolean; log
         rowClassName="align-middle hover:bg-surface-muted/60"
         cellClassName="px-5 py-3.5"
       />
+
+      <Dialog
+        open={selected !== null}
+        onClose={() => setSelected(null)}
+        title="Activity detail"
+        description={selected ? `${selected.action} · ${selected.entityType}` : undefined}
+        footer={null}
+      >
+        {selected ? (
+          <div className="space-y-4 text-sm">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <DetailField label="When" value={formatTimestamp(selected.createdAt)} />
+              <DetailField label="City" value={selected.cityName ?? "—"} />
+              <DetailField label="Actor" value={`${selected.actorName} (${selected.actorRole})`} />
+              <DetailField label="Entity" value={selected.entityType} />
+            </div>
+
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">Summary</p>
+              <p className="mt-1 whitespace-pre-wrap text-text-primary">{selected.summaryLabel}</p>
+            </div>
+
+            {/* Only when it differs — showing the raw form every time would be
+                noise, but it's the only place the underlying id survives. */}
+            {selected.summary !== selected.summaryLabel ? (
+              <details>
+                <summary className="cursor-pointer text-xs text-text-muted">Show raw summary (with ids)</summary>
+                <p className="mt-1 whitespace-pre-wrap break-all text-xs text-text-secondary">{selected.summary}</p>
+              </details>
+            ) : null}
+
+            {selected.before !== null && selected.before !== undefined ? (
+              <DetailJson label="Before" value={selected.before} />
+            ) : null}
+            {selected.after !== null && selected.after !== undefined ? (
+              <DetailJson label="After" value={selected.after} />
+            ) : null}
+          </div>
+        ) : null}
+      </Dialog>
     </section>
+  );
+}
+
+function DetailField({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">{label}</p>
+      <p className="mt-0.5 text-text-primary">{value}</p>
+    </div>
+  );
+}
+
+function DetailJson({ label, value }: { label: string; value: unknown }) {
+  return (
+    <div>
+      <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">{label}</p>
+      <pre className="mt-1 max-h-52 overflow-auto rounded-md bg-surface-muted p-3 text-xs text-text-secondary">
+        {JSON.stringify(value, null, 2)}
+      </pre>
+    </div>
   );
 }
