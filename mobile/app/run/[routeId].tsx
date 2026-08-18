@@ -5,6 +5,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import type { DriverSaveLineRequest, DriverSheetCustomer, DriverSheetResponse } from "@shared/driver-api-types";
 import { useActiveRoute } from "@/active-route";
 import { api, ApiError } from "@/api";
+import { getCashSaleEntries, type CashSaleEntry } from "@/cash-sale";
 import { CashSaleModal } from "@/components/CashSaleModal";
 import { RouteMapModal } from "@/components/RouteMapModal";
 import { SlideToConfirm } from "@/components/SlideToConfirm";
@@ -80,6 +81,10 @@ export default function RunScreen() {
   const [stopsListOpen, setStopsListOpen] = useState(false);
   const [cashSaleOpen, setCashSaleOpen] = useState(false);
   const [mapOpen, setMapOpen] = useState(false);
+  // Today's cash sales for this route, for the round summary. Local-only data
+  // (see cash-sale.ts) — never sent to the server, so it has to be read here
+  // rather than arriving with the sheet.
+  const [cashSales, setCashSales] = useState<CashSaleEntry[]>([]);
 
   const load = useCallback(async () => {
     if (!routeId) return;
@@ -104,6 +109,13 @@ export default function RunScreen() {
     if (!routeId) return;
     isRouteCompleted(routeId, todayStr()).then(setCompleted);
   }, [routeId]);
+
+  // Refreshed whenever the round is finished or the cash sale sheet closes, so
+  // the summary reflects sales entered right up to the end of the round.
+  useEffect(() => {
+    if (!routeId || cashSaleOpen) return;
+    getCashSaleEntries(routeId).then(setCashSales);
+  }, [routeId, cashSaleOpen, completed]);
 
   const refreshQueuedIds = useCallback(async () => {
     if (!routeId) return;
@@ -398,6 +410,22 @@ export default function RunScreen() {
         totals.set(product.productId, current);
       });
     });
+    // Only today's — cash-sale storage keeps two days so the driver can look
+    // back, but this summary is about the round just finished.
+    const today = todayStr();
+    const todaysCashSales = cashSales.filter((entry) => entry.createdAt.slice(0, 10) === today);
+    const cashSaleAmount = todaysCashSales.reduce((sum, entry) => sum + entry.totalAmount, 0);
+    const cashSaleByProduct = new Map<string, { productId: string; label: string; qty: number; unit: string }>();
+    todaysCashSales.forEach((entry) => {
+      entry.items.forEach((item) => {
+        const current =
+          cashSaleByProduct.get(item.productId) ?? { productId: item.productId, label: item.code, qty: 0, unit: item.unit };
+        current.qty += item.quantity;
+        cashSaleByProduct.set(item.productId, current);
+      });
+    });
+    const cashSaleTotals = [...cashSaleByProduct.values()];
+
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: colors.ground }} edges={["top", "left", "right"]}>
         {header}
@@ -413,10 +441,46 @@ export default function RunScreen() {
             <Row label="Delivered" value={String(delivered)} color={colors.delivered} colors={colors} />
             <Row label="Skipped" value={String(skipped)} color={colors.skipped} colors={colors} last />
           </Card>
+          {cashSaleTotals.length > 0 ? (
+            <>
+              <Text style={{ color: colors.inkFaint, fontSize: 11, fontWeight: "700", letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 8, marginLeft: 4 }}>
+                Cash sales today
+              </Text>
+              {/* Deliberately a SEPARATE card from the delivered totals rather
+                  than folded into them. Cash sales never reach the server and
+                  are not part of anyone's bill — merging the two would make the
+                  delivery figures disagree with what actually gets billed. */}
+              <Card style={{ marginBottom: 12 }}>
+                {cashSaleTotals.map((item) => (
+                  <Row
+                    key={item.productId}
+                    label={item.label}
+                    value={`${item.qty} ${item.unit}`}
+                    colors={colors}
+                  />
+                ))}
+                <Row
+                  label="Cash collected"
+                  value={`₹ ${Math.round(cashSaleAmount)}`}
+                  color={colors.delivered}
+                  colors={colors}
+                  last
+                />
+              </Card>
+            </>
+          ) : null}
           {totals.size > 0 ? (
             <Card style={{ marginBottom: 16 }}>
-              {[...totals.entries()].map(([code, info], index, arr) => (
-                <Row key={code} label={code} value={`${info.qty} ${info.unit}`} colors={colors} last={index === arr.length - 1} />
+              {[...totals.entries()].map(([productId, info], index, arr) => (
+                <Row
+                  key={productId}
+                  // info.label, NOT the map key — the key is the product id, so
+                  // rendering it printed a raw uuid instead of the product name.
+                  label={info.label}
+                  value={`${info.qty} ${info.unit}`}
+                  colors={colors}
+                  last={index === arr.length - 1}
+                />
               ))}
             </Card>
           ) : null}

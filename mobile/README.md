@@ -111,6 +111,35 @@ writes an `extra.eas.projectId` into app.json).
 membership is required for TestFlight; Play Store needs a Play Console account.
 Neither is needed for the `preview` profile below.
 
+### If the map is blank
+
+A wrong or over-restricted Maps key produces **no error** — the map area is
+simply empty, everything else works, and nothing appears in the logs. So it's
+worth knowing the checks, in order:
+
+1. **Is this Expo Go or a real build?** Expo Go uses Expo's own key and always
+   works, so a blank map there means something else entirely.
+2. **Did the key reach the build?** The build log prints the environment
+   variables it loaded — look for `GOOGLE_MAPS_API_KEY` in that list. If it's
+   missing, the EAS variable isn't set for that profile's environment.
+3. **Does the restriction still match this build?** In Google Cloud the key is
+   restricted to package `in.bsmp.driver` plus a signing SHA-1. If the keystore
+   changed, the fingerprint no longer matches and the map goes blank.
+
+Read the SHA-1 straight out of any APK — it's the signing certificate, so this
+is always the truth regardless of what the dashboard says:
+
+```bash
+~/Library/Android/sdk/build-tools/*/apksigner verify --print-certs app.apk | grep SHA-1
+```
+
+(`keytool -printcert -jarfile` reports "not a signed jar file" here — EAS signs
+with APK Signature Scheme v2/v3, which keytool can't read. Use apksigner.)
+
+**The fingerprint changes** when EAS regenerates the keystore, when you switch
+to your own, and when you publish through Play Store app signing — Google
+re-signs the app with its own certificate, so that SHA-1 has to be added too.
+
 ### Profiles (`eas.json`)
 
 | Profile | What it produces | Use it for |
