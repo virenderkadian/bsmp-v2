@@ -18,7 +18,10 @@
     "android": {
       "package": "in.bsmp.driver",
       "edgeToEdgeEnabled": true,
-      "permissions": ["ACCESS_COARSE_LOCATION", "ACCESS_FINE_LOCATION"],
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon-foreground.png",
         "backgroundColor": "#0f766e"
@@ -52,6 +55,13 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "ba11a523-3b78-4eae-be86-e3473261d8ac"
+      }
+    },
+    "owner": "viru3396"
   }
 }
