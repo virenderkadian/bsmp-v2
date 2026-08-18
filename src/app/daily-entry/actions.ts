@@ -119,37 +119,57 @@ export async function saveDailyEntry(
     const billingMonthStart = new Date(
       Date.UTC(entryDateValue.getUTCFullYear(), entryDateValue.getUTCMonth(), 1),
     );
+    const guardCityId = await getCurrentCityId();
+
+    // Read what's currently stored BEFORE the guard runs. Saving rebuilds the
+    // whole route+date, so a customer present here and absent from the
+    // submission is about to have their delivery deleted — and they have to be
+    // checked too, not just the ones being written.
+    const stored = await prisma.dailyRouteEntry.findUnique({
+      where: {
+        routeId_entryDate: {
+          routeId: parsed.data.routeId,
+          entryDate: entryDateValue,
+        },
+      },
+      select: {
+        lines: {
+          select: {
+            customerId: true,
+            skipped: true,
+            productEntries: {
+              select: { productId: true, quantity: true, rateSnapshot: true },
+            },
+          },
+        },
+      },
+    });
+
+    // Everyone this save could affect: being written, or being removed.
+    const affectedCustomerIds = [
+      ...new Set([
+        ...parsed.data.lines.map((line) => line.customerId),
+        ...(stored?.lines.map((line) => line.customerId) ?? []),
+      ]),
+    ];
+
+    // Matched by CUSTOMER rather than route. A customer running two routes gets
+    // one combined bill, issued against whichever route is flagged billsHere,
+    // so matching on routeId would miss a frozen bill sitting on their other
+    // route and let this save quietly change the data behind an issued bill.
     const frozenBills = await prisma.monthlyBill.findMany({
       where: {
-        routeId: parsed.data.routeId,
+        customerId: { in: affectedCustomerIds },
         billingMonth: billingMonthStart,
         status: { in: ["GENERATED", "LOCKED"] },
+        route: { cityId: guardCityId },
       },
       select: { customerId: true, status: true },
     });
 
-    // Short-circuit: with nothing frozen on this route+month, the diff is
-    // pointless — take the exact same fast path as a route with no bills.
+    // Short-circuit: with nothing frozen, the diff is pointless — take the
+    // exact same fast path as a route with no bills.
     if (frozenBills.length > 0) {
-      const stored = await prisma.dailyRouteEntry.findUnique({
-        where: {
-          routeId_entryDate: {
-            routeId: parsed.data.routeId,
-            entryDate: entryDateValue,
-          },
-        },
-        select: {
-          lines: {
-            select: {
-              customerId: true,
-              skipped: true,
-              productEntries: {
-                select: { productId: true, quantity: true, rateSnapshot: true },
-              },
-            },
-          },
-        },
-      });
 
       const storedSignature = new Map<string, string>();
       stored?.lines.forEach((line) => {
@@ -181,9 +201,8 @@ export async function saveDailyEntry(
 
       if (changedFrozen.length > 0) {
         const anyLocked = changedFrozen.some((bill) => bill.status === "LOCKED");
-        const cityId = await getCurrentCityId();
         await logAudit(prisma, {
-          cityId,
+          cityId: guardCityId,
           entityType: "DailyRouteEntry",
           action: "BLOCKED",
           summary: `Blocked daily entry save for route ${parsed.data.routeId} on ${parsed.data.entryDate}: ${changedFrozen.length} customer(s) with ${anyLocked ? "Locked" : "Generated"} bills would change.`,

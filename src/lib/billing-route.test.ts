@@ -345,3 +345,74 @@ describe("stale duplicate sweep over real bill rows", () => {
     expect(stale).not.toContain(morningBill.id);
   });
 });
+
+// The bill-lock guard used to match on routeId. Once a customer's single bill
+// moved to whichever route is flagged billsHere, a delivery recorded on their
+// OTHER route stopped matching and slipped straight past — silently changing
+// the data behind a bill that had already been issued.
+describe("bill-lock guard scoped by customer, not route", () => {
+  const prisma2 = new PrismaClient();
+
+  afterAll(async () => {
+    await prisma2.$disconnect();
+  });
+
+  it("finds a frozen bill sitting on the customer's OTHER route", async () => {
+    await prisma2.monthlyBill.deleteMany({ where: { customerId } });
+    await prisma2.monthlyBill.create({
+      data: {
+        customerId,
+        routeId: morningRouteId, // bill lives on morning
+        billingMonth: MONTH,
+        openingBalance: 0,
+        deliveryAmount: 100,
+        paymentAmount: 0,
+        closingBalance: 100,
+        status: "GENERATED",
+        generatedAt: new Date(),
+      },
+    });
+
+    // The old guard: does this route have a frozen bill for the customer?
+    // Delivering on EVENING finds nothing, so the save was allowed.
+    const byRoute = await prisma2.monthlyBill.findFirst({
+      where: {
+        routeId: eveningRouteId,
+        customerId,
+        billingMonth: MONTH,
+        status: { in: ["GENERATED", "LOCKED"] },
+      },
+    });
+    expect(byRoute).toBeNull();
+
+    // The fixed guard: is this CUSTOMER frozen this month, wherever the bill is?
+    const byCustomer = await prisma2.monthlyBill.findFirst({
+      where: {
+        customerId,
+        billingMonth: MONTH,
+        status: { in: ["GENERATED", "LOCKED"] },
+        route: { cityId },
+      },
+      select: { status: true, route: { select: { id: true } } },
+    });
+    expect(byCustomer).not.toBeNull();
+    expect(byCustomer?.route.id).toBe(morningRouteId);
+
+    await prisma2.monthlyBill.deleteMany({ where: { customerId } });
+  });
+
+  it("still lets a customer through when nothing of theirs is frozen", async () => {
+    await prisma2.monthlyBill.deleteMany({ where: { customerId } });
+
+    const frozen = await prisma2.monthlyBill.findFirst({
+      where: {
+        customerId,
+        billingMonth: MONTH,
+        status: { in: ["GENERATED", "LOCKED"] },
+        route: { cityId },
+      },
+    });
+
+    expect(frozen).toBeNull();
+  });
+});

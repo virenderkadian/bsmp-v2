@@ -268,14 +268,26 @@ export async function saveDriverLine(
     return { ok: false, error: "Customer isn't on this route's sequence for the month." };
   }
 
+  // Scoped by CUSTOMER, not by route. A customer running two routes gets one
+  // combined bill issued against whichever route is flagged billsHere, so
+  // matching on routeId here would miss a frozen bill sitting on their OTHER
+  // route — and let a delivery quietly change the data behind a bill that's
+  // already been issued, which is the exact thing this guard exists to stop.
   const frozenBill = await prisma.monthlyBill.findFirst({
-    where: { routeId, customerId, billingMonth: sequenceMonth, status: { in: ["GENERATED", "LOCKED"] } },
-    select: { status: true },
+    where: {
+      customerId,
+      billingMonth: sequenceMonth,
+      status: { in: ["GENERATED", "LOCKED"] },
+      route: { cityId },
+    },
+    select: { status: true, route: { select: { code: true } } },
   });
   if (frozenBill) {
     return {
       ok: false,
-      error: `This customer's bill is already ${frozenBill.status === "LOCKED" ? "locked" : "generated"} for the month — ask the office to reopen it before changing today's delivery.`,
+      error: `This customer's bill for the month is already ${
+        frozenBill.status === "LOCKED" ? "locked" : "generated"
+      } on ${frozenBill.route.code} — ask the office to reopen it before changing today's delivery.`,
     };
   }
 
