@@ -73,7 +73,64 @@ src/
   components/ActiveRoutePill.tsx  floating "route in progress" resume banner
   components/CashSaleModal.tsx    fast local cash-sale entry + 2-day history
   components/RouteMapModal.tsx    route stops on a map, color-coded, tap to jump
+app.config.js        extends app.json to inject the Android Maps key from env
+eas.json             EAS build profiles (development / preview / production)
 ```
+
+## Building for real devices
+
+`npx expo start` + Expo Go is enough for development. Getting the app onto a
+driver's phone needs a real build, which needs three things first.
+
+**1. A Google Maps key (Android only).** `react-native-maps` shows a blank map
+on Android without one — Expo Go works because it ships its own debug key,
+which your build won't have. iOS needs nothing: the app uses Apple Maps there.
+
+Create it in Google Cloud Console (APIs & Services → Credentials) with **Maps
+SDK for Android** enabled, then restrict it to package `in.bsmp.driver` plus
+your signing certificate's SHA-1. The key ships inside the APK and can be
+extracted, so that restriction is the actual protection — not keeping it
+secret.
+
+It is never committed. `app.config.js` reads it from `GOOGLE_MAPS_API_KEY` and
+simply omits the setting when unset, so a build without it fails visibly at the
+map rather than silently shipping a broken one.
+
+```bash
+# local
+echo 'GOOGLE_MAPS_API_KEY=...' >> .env
+
+# for EAS builds
+eas env:create --name GOOGLE_MAPS_API_KEY --scope project
+```
+
+**2. An Expo account.** `eas login`, then `eas init` to link this project (it
+writes an `extra.eas.projectId` into app.json).
+
+**3. Apple/Google accounts for store builds.** A paid Apple Developer
+membership is required for TestFlight; Play Store needs a Play Console account.
+Neither is needed for the `preview` profile below.
+
+### Profiles (`eas.json`)
+
+| Profile | What it produces | Use it for |
+| --- | --- | --- |
+| `development` | dev client, internal | debugging on a device with Metro attached |
+| `preview` | Android APK / internal iOS | **handing a test build to a driver** |
+| `production` | Android App Bundle, auto-incremented | store submission |
+
+```bash
+eas build --profile preview --platform android   # APK you can install directly
+eas build --profile production --platform all    # store builds
+```
+
+Start with `preview --platform android`: it produces an installable APK with no
+Apple account and no store review, which is the fastest way to get this into a
+driver's hands.
+
+Note the app talks to **production** (`https://atmv2.bsmp.in`) unless
+`EXPO_PUBLIC_API_URL` says otherwise, so a build needs no API configuration to
+work against live data.
 
 ## Status / next
 
@@ -113,7 +170,15 @@ tiles. Expo Go's shared debug key covers local testing, but before an EAS
 build (dev client or production) add a real key at
 `expo.android.config.googleMaps.apiKey` in `app.json`.
 
-Next: production readiness — DB migrations on the production database
-(vehicle PIN fields, `DriverLoginAttempt`), a distinct `DRIVER_JWT_SECRET`
-for the Production Vercel env, real PINs for real vehicles, then promoting
-`develop` to `main`.
+Next, to actually get this into drivers' hands:
+
+1. **Set real vehicle PINs** (Routes → edit a vehicle → Driver login PIN).
+   Only the dev `DRV-TEST` vehicle has one, so no real driver can log in yet —
+   this is the single thing standing between "deployed" and "in use".
+2. **Verify the route-completion flow on a phone.** It's built and deployed but
+   has never been run on a device.
+3. **Google Maps key + `eas build --profile preview --platform android`** (see
+   above) to produce an installable APK.
+
+Still missing: no way to correct a customer's location once it's been saved
+wrongly — the only options today are to accept it or edit the database.
