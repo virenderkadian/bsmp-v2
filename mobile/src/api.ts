@@ -61,10 +61,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       },
     });
   } catch (err) {
+    // Wording a driver can act on. A full URL and the name of an env var
+    // meant nothing to the person holding the phone mid-round, and these
+    // messages surface in on-screen alerts. The diagnostic detail still goes
+    // to console.warn below, and the login screen shows the resolved API_BASE.
     const message =
       err instanceof Error && err.name === "AbortError"
-        ? `Timed out reaching ${url} — check the server is running and reachable from this device.`
-        : `Can't reach ${url} — check your connection and EXPO_PUBLIC_API_URL.`;
+        ? "The server took too long to respond. Check your connection and try again."
+        : "No connection to the server. Your work is saved on this phone and will sync automatically.";
     console.warn("[driver-api] request failed", url, err);
     throw new ApiError(message, 0);
   } finally {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal, Pressable, Text, View } from "react-native";
-import MapView, { Marker, Callout, type Region } from "react-native-maps";
+import MapView, { Marker, type Region } from "react-native-maps";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { DriverSheetCustomer } from "@shared/driver-api-types";
 import { ensureForegroundLocationPermission } from "@/location";
@@ -118,19 +118,26 @@ export function RouteMapModal({
                   key={pin.customer.customerId}
                   coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
                   pinColor={pinColor(pin)}
-                  onPress={() => onSelect(pin.index)}
-                >
-                  <Callout onPress={() => onSelect(pin.index)}>
-                    <View style={{ padding: 4, maxWidth: 200 }}>
-                      <Text style={{ fontWeight: "700", fontSize: 13 }}>
-                        {pin.customer.sequenceNo}. {pin.customer.name}
-                      </Text>
-                      <Text style={{ fontSize: 12, color: "#666", marginTop: 2 }}>
-                        {pin.index === currentIndex ? "Current stop" : pin.status.label}
-                      </Text>
-                    </View>
-                  </Callout>
-                </Marker>
+                  // Native callout via title/description rather than a custom
+                  // <Callout> child. On Android react-native-maps renders
+                  // custom callout content as a bitmap snapshot, and a
+                  // container without an explicit width collapses to nothing —
+                  // which is exactly what happened: the bubble appeared with no
+                  // customer name in it. The native one always renders.
+                  //
+                  // Marker has no onPress on purpose: it used to navigate
+                  // immediately, firing before any callout could open, so a tap
+                  // meaning "who is this?" closed the map instead.
+                  title={`${pin.customer.sequenceNo}. ${pin.customer.name}`}
+                  description={[
+                    pin.customer.area,
+                    pin.index === currentIndex ? "Current stop" : pin.status.label,
+                    "Tap to open",
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                  onCalloutPress={() => onSelect(pin.index)}
+                />
               ))}
             </MapView>
           )}
@@ -141,6 +148,9 @@ export function RouteMapModal({
           <Legend color={colors.delivered} label="Delivered" colors={colors} />
           <Legend color={colors.skipped} label="Skipped" colors={colors} />
           <Legend color={colors.pending} label="Pending" colors={colors} />
+          <Text style={{ width: "100%", color: colors.inkFaint, fontSize: 11 }}>
+            Tap a pin to see who it is, then tap the label to open that stop.
+          </Text>
         </View>
       </SafeAreaView>
     </Modal>

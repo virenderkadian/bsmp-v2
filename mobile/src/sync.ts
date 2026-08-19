@@ -2,9 +2,17 @@ import NetInfo from "@react-native-community/netinfo";
 import { api, ApiError } from "@/api";
 import { getAllQueued, markAttemptFailed, removeFromQueue } from "@/offline-queue";
 
+type FailedSave = { id: string; routeId: string; customerId: string; error: string };
+
 export type SyncResult = {
   synced: string[];
-  failed: Array<{ id: string; routeId: string; customerId: string; error: string }>;
+  // The server responded and refused (a locked bill, a stale product). Retrying
+  // will never succeed, so these need a person to look at them.
+  rejected: FailedSave[];
+  // Never reached the server. Still queued and will go again by itself, so
+  // these must NOT be reported as failures — on a route with patchy signal
+  // that's the normal case, and alerting on it buries the real rejections.
+  retrying: FailedSave[];
 };
 
 // `isInternetReachable` is `null` ("unknown") on some platforms/timings —
@@ -27,7 +35,7 @@ export async function flushOfflineQueue(): Promise<SyncResult> {
   }
   flushInFlight = (async () => {
     const items = await getAllQueued();
-    const result: SyncResult = { synced: [], failed: [] };
+    const result: SyncResult = { synced: [], rejected: [], retrying: [] };
     for (const item of items) {
       try {
         await api.saveLine(item.routeId, item.customerId, item.request);
@@ -41,12 +49,14 @@ export async function flushOfflineQueue(): Promise<SyncResult> {
         // bill got locked before this synced); retrying won't change that
         // outcome, so drop it instead of retrying forever and silently.
         const isPermanentRejection = err instanceof ApiError && err.status !== 0;
+        const failure = { id: item.id, routeId: item.routeId, customerId: item.customerId, error: message };
         if (isPermanentRejection) {
           await removeFromQueue(item.id);
+          result.rejected.push(failure);
         } else {
           await markAttemptFailed(item.id, message);
+          result.retrying.push(failure);
         }
-        result.failed.push({ id: item.id, routeId: item.routeId, customerId: item.customerId, error: message });
       }
     }
     return result;

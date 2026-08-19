@@ -1,7 +1,7 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import type { DriverSaveLineRequest, DriverSheetCustomer, DriverSheetResponse } from "@shared/driver-api-types";
 import { useActiveRoute } from "@/active-route";
 import { api, ApiError } from "@/api";
@@ -52,6 +52,12 @@ function buildOptimisticCustomer(
 export default function RunScreen() {
   const colors = useColors();
   const router = useRouter();
+  // android edgeToEdgeEnabled draws content under the system navigation bar, and
+  // this screen's SafeAreaView deliberately excludes the bottom edge so the
+  // save/undo overlays can sit flush. That left the slide-to-deliver controls
+  // partly behind the nav buttons, so the inset is applied to the scroll
+  // content and the overlays instead.
+  const insets = useSafeAreaInsets();
   const { routeId } = useLocalSearchParams<{ routeId: string }>();
   const { refresh: refreshActiveRoute } = useActiveRoute();
   const { pendingCount, isOnline: online, syncing, syncNow } = useOfflineSync();
@@ -62,6 +68,10 @@ export default function RunScreen() {
   const [draftQty, setDraftQty] = useState<Record<string, number>>({});
   const [remarks, setRemarks] = useState("");
   const [saving, setSaving] = useState(false);
+  // What the save is currently waiting on. A delivery can take several seconds
+  // — GPS fix, then the network round-trip — and previously nothing on screen
+  // said so, which reads as the app having frozen.
+  const [savingStage, setSavingStage] = useState<"location" | "saving" | null>(null);
   const [snackbar, setSnackbar] = useState<{ index: number; label: string } | null>(null);
   // Which of THIS route's customers have a save sitting in the local offline
   // queue right now — display-only (sheet state is already the optimistic
@@ -114,7 +124,7 @@ export default function RunScreen() {
   // the summary reflects sales entered right up to the end of the round.
   useEffect(() => {
     if (!routeId || cashSaleOpen) return;
-    getCashSaleEntries(routeId).then(setCashSales);
+    getCashSaleEntries(routeId, todayStr()).then(setCashSales);
   }, [routeId, cashSaleOpen, completed]);
 
   const refreshQueuedIds = useCallback(async () => {
@@ -215,6 +225,7 @@ export default function RunScreen() {
   const doSave = async (skipped: boolean) => {
     if (!customer || !sheet || !routeId || saving) return;
     setSaving(true);
+    setSavingStage(skipped ? "saving" : "location");
     try {
       // A skip carries no deliverables — the backend already discards
       // products when skipped is true, so send none rather than whatever
@@ -232,6 +243,7 @@ export default function RunScreen() {
       // do and this fix is >12m off, prompts the driver before agreeing to
       // move it. Skipped visits never touch location at all.
       const locationFields = skipped ? {} : await resolveLocationForSave(customer.latitude, customer.longitude);
+      setSavingStage("saving");
       const request: DriverSaveLineRequest = {
         date: todayStr(),
         skipped,
@@ -292,6 +304,7 @@ export default function RunScreen() {
       setError(err instanceof ApiError ? err.message : "Couldn't save. Try again.");
     } finally {
       setSaving(false);
+      setSavingStage(null);
     }
   };
 
@@ -318,7 +331,10 @@ export default function RunScreen() {
             </Text>
           ) : null}
         </View>
-        {sheet ? (
+        {/* Only while a round is actually in progress. A cash sale belongs to
+            a run, so offering it before starting or after finishing would file
+            it against a session that isn't happening. */}
+        {sheet && total > 0 && !completed ? (
           <Pressable
             onPress={() => setCashSaleOpen(true)}
             style={{ width: 36, height: 36, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
@@ -410,10 +426,10 @@ export default function RunScreen() {
         totals.set(product.productId, current);
       });
     });
-    // Only today's — cash-sale storage keeps two days so the driver can look
-    // back, but this summary is about the round just finished.
-    const today = todayStr();
-    const todaysCashSales = cashSales.filter((entry) => entry.createdAt.slice(0, 10) === today);
+    // Already scoped to this session by getCashSaleEntries — no date filter
+    // here, which would also have wrongly dropped a sale recorded just after
+    // midnight on a round that started the previous day.
+    const todaysCashSales = cashSales;
     const cashSaleAmount = todaysCashSales.reduce((sum, entry) => sum + entry.totalAmount, 0);
     const cashSaleByProduct = new Map<string, { productId: string; label: string; qty: number; unit: string }>();
     todaysCashSales.forEach((entry) => {
@@ -429,7 +445,7 @@ export default function RunScreen() {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: colors.ground }} edges={["top", "left", "right"]}>
         {header}
-        <ScrollView contentContainerStyle={{ padding: 18 }}>
+        <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 18 + insets.bottom }}>
           <View style={{ alignItems: "center", paddingVertical: 12 }}>
             <View style={{ width: 60, height: 60, borderRadius: 30, backgroundColor: colors.deliveredTint, alignItems: "center", justifyContent: "center", marginBottom: 12 }}>
               <Text style={{ color: colors.delivered, fontSize: 30, fontWeight: "800" }}>✓</Text>
@@ -497,6 +513,7 @@ export default function RunScreen() {
           visible={cashSaleOpen}
           onClose={() => setCashSaleOpen(false)}
           routeId={sheet.route.id}
+          sessionDate={todayStr()}
           products={sheet.customers[0]?.products ?? []}
         />
 
@@ -527,7 +544,10 @@ export default function RunScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.ground }} edges={["top", "left", "right"]}>
       {header}
-      <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 30 }} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={{ padding: 18, paddingBottom: 30 + insets.bottom }}
+        keyboardShouldPersistTaps="handled"
+      >
         <Card>
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
             <View style={{ flex: 1, paddingRight: 10 }}>
@@ -712,8 +732,34 @@ export default function RunScreen() {
         {error ? <Text style={{ color: colors.danger, fontSize: 13, marginTop: 12, textAlign: "center" }}>{error}</Text> : null}
       </ScrollView>
 
+      {/* A delivery can take several seconds — GPS fix, then the network
+          round-trip. Without this the controls simply stop responding and the
+          screen reads as frozen, which is what drivers reported. */}
+      {savingStage ? (
+        <View
+          style={{
+            position: "absolute",
+            left: 18,
+            right: 18,
+            bottom: 24 + insets.bottom,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 12,
+            backgroundColor: colors.ink,
+            borderRadius: radius.md,
+            paddingVertical: 14,
+            paddingHorizontal: 16,
+          }}
+        >
+          <ActivityIndicator color={colors.ground} />
+          <Text style={{ flex: 1, color: colors.ground, fontSize: 14, fontWeight: "600" }}>
+            {savingStage === "location" ? "Getting location…" : "Saving delivery…"}
+          </Text>
+        </View>
+      ) : null}
+
       {snackbar ? (
-        <View style={{ position: "absolute", left: 18, right: 18, bottom: 24, flexDirection: "row", alignItems: "center", backgroundColor: colors.ink, borderRadius: radius.md, paddingVertical: 13, paddingHorizontal: 16 }}>
+        <View style={{ position: "absolute", left: 18, right: 18, bottom: 24 + insets.bottom, flexDirection: "row", alignItems: "center", backgroundColor: colors.ink, borderRadius: radius.md, paddingVertical: 13, paddingHorizontal: 16 }}>
           <Text style={{ flex: 1, color: colors.ground, fontSize: 14, fontWeight: "600" }}>{snackbar.label} · stop {snackbar.index + 1}</Text>
           <Pressable
             onPress={() => {
@@ -742,6 +788,7 @@ export default function RunScreen() {
         visible={cashSaleOpen}
         onClose={() => setCashSaleOpen(false)}
         routeId={sheet.route.id}
+        sessionDate={todayStr()}
         products={sheet.customers[0]?.products ?? []}
       />
 

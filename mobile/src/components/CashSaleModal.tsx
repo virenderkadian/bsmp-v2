@@ -2,7 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { DriverSheetProduct } from "@shared/driver-api-types";
-import { addCashSaleEntry, deleteCashSaleEntry, getCashSaleEntries, type CashSaleEntry, type CashSaleItem } from "@/cash-sale";
+import {
+  addCashSaleEntry,
+  deleteCashSaleEntry,
+  getCashSaleEntries,
+  summariseCashSales,
+  type CashSaleEntry,
+  type CashSaleItem,
+} from "@/cash-sale";
 import { radius } from "@/theme";
 import { Card, GhostButton, PrimaryButton, useColors } from "@/ui";
 
@@ -27,11 +34,15 @@ export function CashSaleModal({
   visible,
   onClose,
   routeId,
+  sessionDate,
   products,
 }: {
   visible: boolean;
   onClose: () => void;
   routeId: string;
+  // Which round these sales belong to (YYYY-MM-DD). Entries are scoped to it,
+  // so the totals shown are this run's, not a rolling multi-day mixture.
+  sessionDate: string;
   products: DriverSheetProduct[];
 }) {
   const colors = useColors();
@@ -41,9 +52,9 @@ export function CashSaleModal({
   const [entries, setEntries] = useState<CashSaleEntry[]>([]);
 
   const loadEntries = useCallback(async () => {
-    const result = await getCashSaleEntries(routeId);
+    const result = await getCashSaleEntries(routeId, sessionDate);
     setEntries(result);
-  }, [routeId]);
+  }, [routeId, sessionDate]);
 
   useEffect(() => {
     if (visible) {
@@ -88,7 +99,7 @@ export function CashSaleModal({
         quantity: Number(row.quantity) || 0,
         amount: Number(row.amount) || 0,
       }));
-      await addCashSaleEntry(routeId, items);
+      await addCashSaleEntry(routeId, sessionDate, items);
       setDraft({});
       await loadEntries();
       setMode("history");
@@ -111,7 +122,7 @@ export function CashSaleModal({
     ]);
   };
 
-  const historyTotal = entries.reduce((sum, entry) => sum + entry.totalAmount, 0);
+  const sessionTotals = summariseCashSales(entries);
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
@@ -144,7 +155,7 @@ export function CashSaleModal({
                 }}
               >
                 <Text style={{ color: active ? colors.onBrand : colors.inkSoft, fontSize: 13.5, fontWeight: "700" }}>
-                  {tab === "entry" ? "New entry" : `History (${entries.length})`}
+                  {tab === "entry" ? "New entry" : `This round (${entries.length})`}
                 </Text>
               </Pressable>
             );
@@ -243,16 +254,41 @@ export function CashSaleModal({
           </>
         ) : (
           <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 24 }}>
+            {/* This round's figures, product by product — what the driver
+                reads off at the end of a run. Previously a single two-day
+                total, which mixed this round with a previous one. */}
             <Card style={{ marginBottom: 12 }}>
-              <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                <Text style={{ color: colors.inkSoft, fontSize: 13 }}>Last 2 days total</Text>
-                <Text style={{ color: colors.delivered, fontSize: 16, fontWeight: "800" }}>₹ {historyTotal.toFixed(2)}</Text>
+              {sessionTotals.products.map((product) => (
+                <View
+                  key={product.productId}
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    paddingVertical: 7,
+                    borderBottomWidth: 1,
+                    borderBottomColor: colors.border,
+                  }}
+                >
+                  <Text style={{ color: colors.ink, fontSize: 13.5, fontWeight: "700" }}>{product.code}</Text>
+                  <Text style={{ color: colors.inkSoft, fontSize: 13 }}>
+                    {product.quantity} {product.unit} · ₹ {product.amount.toFixed(2)}
+                  </Text>
+                </View>
+              ))}
+              <View style={{ flexDirection: "row", justifyContent: "space-between", paddingTop: 10 }}>
+                <Text style={{ color: colors.inkSoft, fontSize: 13, fontWeight: "700" }}>
+                  This round&apos;s cash sale
+                </Text>
+                <Text style={{ color: colors.delivered, fontSize: 16, fontWeight: "800" }}>
+                  ₹ {sessionTotals.totalAmount.toFixed(2)}
+                </Text>
               </View>
             </Card>
 
             {entries.length === 0 ? (
               <Text style={{ color: colors.inkFaint, fontSize: 14, textAlign: "center", marginTop: 20 }}>
-                No cash sale entries in the last 2 days.
+                No cash sales on this round yet.
               </Text>
             ) : (
               entries.map((entry) => (

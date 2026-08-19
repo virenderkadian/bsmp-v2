@@ -45,14 +45,17 @@ export function OfflineSyncProvider({ children }: { children: ReactNode }) {
     try {
       const result = await flushOfflineQueue();
       refreshPendingCount();
-      if (result.failed.length > 0) {
-        // Surfaced here (app-wide) rather than only on the run screen — a
-        // permanent rejection (bill locked, etc.) can be discovered by a
-        // background sync while the driver is on any screen, and needs their
-        // attention regardless of what they're looking at.
+      // ONLY permanent rejections interrupt the driver. A save that simply
+      // couldn't reach the server stays queued and goes again by itself, so
+      // alerting on it was wrong: mid-round on patchy signal it fired
+      // repeatedly with a message about connectivity the driver could do
+      // nothing about, and it buried the rejections that do need attention.
+      // Those still show as a pending count on the run screen.
+      if (result.rejected.length > 0) {
+        const count = result.rejected.length;
         Alert.alert(
-          "Some deliveries couldn't sync",
-          result.failed.map((failure) => `• ${failure.error}`).join("\n"),
+          count === 1 ? "A delivery was rejected" : `${count} deliveries were rejected`,
+          `${result.rejected.map((failure) => `• ${failure.error}`).join("\n")}\n\nThese won't be retried — the office needs to fix the cause, then re-enter them.`,
         );
       }
       return result;

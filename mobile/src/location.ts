@@ -1,7 +1,14 @@
 import * as Location from "expo-location";
 import { Alert, Linking, Platform } from "react-native";
 
-const FIX_TIMEOUT_MS = 8000;
+// 8s was too long in practice: on a round the driver stares at an unresponsive
+// screen while it runs. Location is a bonus, not a requirement — the delivery
+// saves either way — so give up sooner and let them get on.
+//
+// Deliberately NOT served from getLastKnownPositionAsync: a cached fix taken a
+// minute earlier can be hundreds of metres back down the road on a moving
+// vehicle, and this value gets written to the customer's saved address.
+const FIX_TIMEOUT_MS = 4000;
 
 // Best-effort GPS fix for backfilling a customer's location on delivery (see
 // saveDriverLine on the backend). Never throws and never blocks a save for
