@@ -13,6 +13,7 @@ import { FormInput } from "@/components/admin/form-input";
 import { PencilSquareIcon, PlusIcon } from "@/components/admin/icons";
 import { KeyboardForm } from "@/components/admin/keyboard-form";
 import { usePageMetric } from "@/components/admin/page-metric";
+import { PageActions } from "@/components/admin/page-actions";
 import { Pagination } from "@/components/admin/pagination";
 import { PillToggle } from "@/components/admin/pill-toggle";
 import { SearchInput } from "@/components/admin/search-input";
@@ -335,9 +336,32 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
 
   return (
     <>
+      <PageActions>
+        <Link
+          href="/customers/map"
+          className="inline-flex h-10 shrink-0 items-center justify-center rounded-md border border-surface-border-strong bg-surface px-4 text-sm font-semibold text-text-secondary transition hover:bg-surface-muted"
+        >
+          Map
+        </Link>
+        <Link
+          href="/customers/bulk-add"
+          className="inline-flex h-10 shrink-0 items-center justify-center rounded-md border border-surface-border-strong bg-surface px-4 text-sm font-semibold text-text-secondary transition hover:bg-surface-muted"
+        >
+          Bulk add
+        </Link>
+        <PrimaryButton
+          type="button"
+          onClick={openCreateDialog}
+          icon={<PlusIcon className="h-4 w-4" />}
+          className="h-10 shrink-0 rounded-md px-5 text-sm font-semibold"
+        >
+          Add Customer
+        </PrimaryButton>
+      </PageActions>
+
       <section className="space-y-4">
         <div className="sticky top-[65px] z-10 -mx-4 flex flex-col gap-3 border-b border-surface-border bg-app-bg/95 px-4 py-3 backdrop-blur transition-colors duration-200 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 xl:flex-row xl:items-center xl:justify-between">
-          <div className="grid w-full gap-3 md:grid-cols-[minmax(240px,1fr)_200px_160px] xl:max-w-[820px]">
+          <div className="grid w-full gap-3 md:grid-cols-[minmax(220px,1fr)_200px_170px] xl:max-w-[760px]">
             <SearchInput
               name="search"
               placeholder="Search by name or area"
@@ -364,28 +388,21 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
               className="h-10 rounded-md bg-surface text-sm"
             />
           </div>
-          <div className="flex items-center gap-2">
-            {dbConnected ? null : <StatusBadge tone="warning">Offline fallback</StatusBadge>}
-            {hasActiveFilters ? (
-              <SecondaryButton type="button" onClick={resetFilters} className="h-10 px-4 text-sm font-medium">
-                Clear
-              </SecondaryButton>
-            ) : null}
-            <Link
-              href="/customers/bulk-add"
-              className="inline-flex h-10 shrink-0 items-center justify-center rounded-md border border-surface-border-strong bg-surface px-4 text-sm font-semibold text-text-secondary transition hover:bg-surface-muted"
-            >
-              Bulk add
-            </Link>
-            <PrimaryButton
-              type="button"
-              onClick={openCreateDialog}
-              icon={<PlusIcon className="h-4 w-4" />}
-              className="h-10 shrink-0 rounded-md px-4 text-sm font-semibold"
-            >
-              Add Customer
-            </PrimaryButton>
-          </div>
+          {/* Only filter-scoped controls live here. The page-level actions moved
+              to PageActions above — cramming both into one row made the primary
+              action wrap onto its own line once a fourth button appeared.
+              Rendered conditionally because an empty flex child still consumes
+              the parent's gap and leaves a dead band under the filters. */}
+          {!dbConnected || hasActiveFilters ? (
+            <div className="flex shrink-0 items-center gap-2">
+              {dbConnected ? null : <StatusBadge tone="warning">Offline fallback</StatusBadge>}
+              {hasActiveFilters ? (
+                <SecondaryButton type="button" onClick={resetFilters} className="h-10 shrink-0 px-4 text-sm font-medium">
+                  Clear
+                </SecondaryButton>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <DataTable
@@ -420,7 +437,7 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
             ],
           }))}
           emptyMessage="No customers match the selected filters"
-          minWidth="min-w-[760px]"
+          minWidth="min-w-[640px]"
           className="rounded-md border-surface-border shadow-none"
           headClassName="bg-surface-muted/70"
           headerCellClassName="px-5 py-3"

@@ -25,6 +25,12 @@ const EXTRA_PAGES: ExtraPage[] = [
     backHref: "/payments",
   },
   {
+    path: "/customers/map",
+    title: "Customer Map",
+    subtitle: "See where customers are, fix wrongly captured pins, and place ones with no location.",
+    backHref: "/customers",
+  },
+  {
     path: "/customers/bulk-add",
     title: "Bulk Add Customers",
     subtitle: "Add many customers at once — codes are generated automatically on save.",
