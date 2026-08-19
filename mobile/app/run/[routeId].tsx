@@ -20,6 +20,14 @@ import { isOnline } from "@/sync";
 import { radius } from "@/theme";
 import { Card, Chip, PrimaryButton, ProgressBar, useColors } from "@/ui";
 
+// Tall enough for the worst case — area line plus the unpaid pill — so the
+// card is the same height for every stop regardless of which are present.
+const CUSTOMER_META_SLOT_HEIGHT = 52;
+
+// Navigate + Call, plus the gap. Held constant whether either is shown.
+const ACTION_BUTTON_SIZE = 42;
+const ACTION_SLOT_WIDTH = ACTION_BUTTON_SIZE * 2 + 8;
+
 // "2026-12" -> "Dec" — the driver only needs to know which month, and the
 // card has no room for more.
 function formatBillMonth(month: string): string {
@@ -572,51 +580,65 @@ export default function RunScreen() {
               <Text style={{ color: colors.ink, fontSize: 20, fontWeight: "800", marginTop: 9 }}>
                 {customer.sequenceNo}. {customer.name}
               </Text>
-              {customer.area ? <Text style={{ color: colors.inkSoft, fontSize: 13.5, marginTop: 2 }}>{customer.area}</Text> : null}
-              {/* Only rendered when last month's issued bill is still unpaid,
-                  so the card gains nothing for the customers who have paid —
-                  which is most of them. A driver seeing this line means: they
-                  have the bill in hand and haven't settled it. */}
-              {customer.previousBill ? (
-                <View
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    gap: 6,
-                    alignSelf: "flex-start",
-                    marginTop: 8,
-                    paddingVertical: 4,
-                    paddingHorizontal: 9,
-                    borderRadius: radius.pill,
-                    backgroundColor: colors.skippedTint,
-                  }}
-                >
-                  <Text style={{ color: colors.skipped, fontSize: 12.5, fontWeight: "800" }}>
-                    ₹ {Math.round(Number(customer.previousBill.outstanding))} unpaid
-                  </Text>
-                  <Text style={{ color: colors.skipped, fontSize: 11.5 }}>
-                    {formatBillMonth(customer.previousBill.month)} bill
-                  </Text>
-                </View>
-              ) : null}
+              {/* Fixed-height slot. Area and the unpaid pill are both
+                  conditional, and letting the card grow/shrink as you move
+                  between stops shifted the slide controls under the driver's
+                  thumb — the thing they aim at without looking. The space is
+                  reserved whether it's filled or not. */}
+              <View style={{ minHeight: CUSTOMER_META_SLOT_HEIGHT, justifyContent: "flex-start" }}>
+                {customer.area ? (
+                  <Text style={{ color: colors.inkSoft, fontSize: 13.5, marginTop: 2 }}>{customer.area}</Text>
+                ) : null}
+                {customer.previousBill ? (
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 6,
+                      alignSelf: "flex-start",
+                      marginTop: 6,
+                      paddingVertical: 4,
+                      paddingHorizontal: 9,
+                      borderRadius: radius.pill,
+                      backgroundColor: colors.skippedTint,
+                    }}
+                  >
+                    <Text style={{ color: colors.skipped, fontSize: 12.5, fontWeight: "800" }}>
+                      ₹ {Math.round(Number(customer.previousBill.outstanding))} unpaid
+                    </Text>
+                    <Text style={{ color: colors.skipped, fontSize: 11.5 }}>
+                      {formatBillMonth(customer.previousBill.month)} bill
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
             </View>
-            <View style={{ flexDirection: "row", gap: 8 }}>
+            {/* Both actions are conditional — Navigate needs a saved location,
+                Call needs a number. Reserving both slots keeps the row a fixed
+                size, which matters twice over: the card height stays put, and
+                so does the width left for the customer name, which would
+                otherwise wrap differently between stops. */}
+            <View style={{ flexDirection: "row", gap: 8, width: ACTION_SLOT_WIDTH, justifyContent: "flex-end" }}>
               {customer.latitude && customer.longitude ? (
                 <Pressable
                   onPress={() => openNavigation(Number(customer.latitude), Number(customer.longitude))}
-                  style={{ width: 42, height: 42, borderRadius: 13, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
+                  style={{ width: ACTION_BUTTON_SIZE, height: ACTION_BUTTON_SIZE, borderRadius: 13, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
                 >
                   <Text style={{ fontSize: 18 }}>🧭</Text>
                 </Pressable>
-              ) : null}
+              ) : (
+                <View style={{ width: ACTION_BUTTON_SIZE, height: ACTION_BUTTON_SIZE }} />
+              )}
               {customer.mobile ? (
                 <Pressable
                   onPress={() => Linking.openURL(`tel:${customer.mobile}`)}
-                  style={{ width: 42, height: 42, borderRadius: 13, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
+                  style={{ width: ACTION_BUTTON_SIZE, height: ACTION_BUTTON_SIZE, borderRadius: 13, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
                 >
                   <Text style={{ color: colors.brand, fontSize: 18 }}>📞</Text>
                 </Pressable>
-              ) : null}
+              ) : (
+                <View style={{ width: ACTION_BUTTON_SIZE, height: ACTION_BUTTON_SIZE }} />
+              )}
             </View>
           </View>
 
