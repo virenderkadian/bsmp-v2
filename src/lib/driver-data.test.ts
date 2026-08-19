@@ -243,3 +243,82 @@ describe("saveDriverLine location backfill (dev DB)", () => {
     }
   });
 });
+
+// Last month's issued-but-unpaid bill, surfaced on the driver's customer card
+// so they can nudge at the door.
+//
+// GENERATED only: bills are generated at month end and handed out on the 1st,
+// so GENERATED means the customer physically has it. DRAFT was never issued —
+// asking for payment on it would be asking against a bill they've never seen.
+// LOCKED means the office already collected.
+describe("driver sheet previous-month bill (dev DB)", () => {
+  const previousMonth = new Date(Date.UTC(2026, 11, 1)); // Dec 2026
+  const sheetDate = "2027-01-15"; // so previous month is Dec 2026
+
+  async function setBill(status: "DRAFT" | "GENERATED" | "LOCKED", closing: number) {
+    await rawPrisma.monthlyBill.deleteMany({ where: { customerId, billingMonth: previousMonth } });
+    await rawPrisma.monthlyBill.create({
+      data: {
+        customerId,
+        routeId,
+        billingMonth: previousMonth,
+        openingBalance: 0,
+        deliveryAmount: closing,
+        paymentAmount: 0,
+        closingBalance: closing,
+        status,
+        generatedAt: status === "DRAFT" ? null : new Date(),
+      },
+    });
+  }
+
+  afterAll(async () => {
+    await rawPrisma.monthlyBill.deleteMany({ where: { customerId, billingMonth: previousMonth } });
+  });
+
+  it("shows an unpaid GENERATED bill from the previous month", async () => {
+    await setBill("GENERATED", 450);
+
+    const sheet = await getDriverSheet(vehicleId, cityId, routeId, sheetDate);
+    const customer = sheet!.customers.find((entry) => entry.customerId === customerId);
+
+    expect(customer?.previousBill).not.toBeNull();
+    expect(customer?.previousBill?.outstanding).toBe("450");
+    expect(customer?.previousBill?.month).toBe("2026-12");
+  });
+
+  it("hides a LOCKED bill — the office already collected it", async () => {
+    await setBill("LOCKED", 450);
+
+    const sheet = await getDriverSheet(vehicleId, cityId, routeId, sheetDate);
+    expect(sheet!.customers.find((entry) => entry.customerId === customerId)?.previousBill).toBeNull();
+  });
+
+  it("hides a DRAFT bill — it was never issued to the customer", async () => {
+    await setBill("DRAFT", 450);
+
+    const sheet = await getDriverSheet(vehicleId, cityId, routeId, sheetDate);
+    expect(sheet!.customers.find((entry) => entry.customerId === customerId)?.previousBill).toBeNull();
+  });
+
+  it("hides a fully-paid bill even when still GENERATED", async () => {
+    await setBill("GENERATED", 0);
+
+    const sheet = await getDriverSheet(vehicleId, cityId, routeId, sheetDate);
+    expect(sheet!.customers.find((entry) => entry.customerId === customerId)?.previousBill).toBeNull();
+  });
+
+  it("does not disturb the recent-order prefill", async () => {
+    // Regression guard: the bill query sits in the same Promise.all as the
+    // delivery-history query, and getting that order wrong silently swapped the
+    // two — dues broke AND every quantity suggestion did.
+    await setBill("GENERATED", 450);
+
+    const sheet = await getDriverSheet(vehicleId, cityId, routeId, "2027-01-16");
+    const product = sheet!.customers
+      .find((entry) => entry.customerId === customerId)
+      ?.products.find((entry) => entry.productId === productId);
+
+    expect(product?.defaultQty).toBe("5");
+  });
+});

@@ -73,6 +73,21 @@ export type DriverSheetCustomer = {
   remarks: string | null;
   // True once a line has been saved for this customer on this date.
   saved: boolean;
+  // The PREVIOUS month's bill when it's been issued and is still unpaid, so a
+  // driver can nudge the customer at the door. Null when there's nothing to
+  // chase — which is most customers, and what keeps the card uncluttered.
+  //
+  // GENERATED only, deliberately. The office generates and prints at month end
+  // and hands bills out on the 1st, so GENERATED means "the customer has this
+  // bill in hand". A DRAFT bill was never issued, so asking for payment on it
+  // would be asking for money against a bill they've never seen. And LOCKED
+  // means the office has already collected — chasing those is the "showing it
+  // again and again" problem this is meant to avoid.
+  previousBill: {
+    billId: string;
+    month: string; // YYYY-MM
+    outstanding: string; // Decimal serialized as string
+  } | null;
   // Captured once, from the first delivery that includes a device location
   // (see DriverSaveLineRequest.location) — never overwritten after that. Null
   // until then; the app shows the Navigate button only once both are set.

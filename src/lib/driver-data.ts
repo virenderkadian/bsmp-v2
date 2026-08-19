@@ -26,6 +26,14 @@ function toMonthStart(dateInput: string): Date {
   return new Date(`${month}-01T00:00:00.000Z`);
 }
 
+// Start of the month BEFORE the sheet's date. Derived from the requested date
+// rather than "now", so opening yesterday's sheet still resolves the month that
+// was previous *then*.
+function toPreviousMonthStart(dateInput: string): Date {
+  const monthStart = toMonthStart(dateInput);
+  return new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() - 1, 1));
+}
+
 function toDay(dateInput: string): Date {
   const day = /^\d{4}-\d{2}-\d{2}$/.test(dateInput) ? dateInput : new Date().toISOString().slice(0, 10);
   return new Date(`${day}T00:00:00.000Z`);
@@ -90,7 +98,10 @@ export async function getDriverSheet(
   const recentSince = new Date(entryDate);
   recentSince.setUTCDate(recentSince.getUTCDate() - RECENT_ORDER_LOOKBACK_DAYS);
 
-  const [route, products, recentEntries] = await Promise.all([
+  const previousMonth = toPreviousMonthStart(dateInput);
+
+  // Order matters — must match the array below: route, products, bills, entries.
+  const [route, products, previousBills, recentEntries] = await Promise.all([
     prisma.route.findFirst({
       where: { id: routeId, cityId, vehicleId, isActive: true },
       select: {
@@ -132,6 +143,19 @@ export async function getDriverSheet(
       orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
       select: { id: true, code: true, shortName: true, unit: true, defaultRate: true },
     }),
+    // Last month's ISSUED bills that still owe something. GENERATED only —
+    // see previousBill on DriverSheetCustomer for why DRAFT and LOCKED are both
+    // excluded. Explicitly city-scoped: MonthlyBill isn't covered by the Prisma
+    // city guard.
+    prisma.monthlyBill.findMany({
+      where: {
+        route: { cityId },
+        billingMonth: previousMonth,
+        status: "GENERATED",
+        closingBalance: { gt: 0 },
+      },
+      select: { id: true, customerId: true, closingBalance: true },
+    }),
     // One bounded query for the whole route, not per customer: every prior
     // day's non-skipped lines, newest first, so we can pick each customer's
     // most recent delivery in a single pass below.
@@ -152,6 +176,8 @@ export async function getDriverSheet(
   }
 
   const lineByCustomer = new Map((route.entries[0]?.lines ?? []).map((line) => [line.customerId, line]));
+  const previousBillByCustomer = new Map(previousBills.map((bill) => [bill.customerId, bill]));
+  const previousMonthLabel = previousMonth.toISOString().slice(0, 7);
 
   // First non-empty delivery found per customer, walking newest-to-oldest —
   // that's their most recent "usual order".
@@ -211,6 +237,12 @@ export async function getDriverSheet(
       saved: Boolean(savedLine),
       latitude: seq.customer.latitude !== null ? String(seq.customer.latitude) : null,
       longitude: seq.customer.longitude !== null ? String(seq.customer.longitude) : null,
+      previousBill: (() => {
+        const bill = previousBillByCustomer.get(seq.customerId);
+        return bill
+          ? { billId: bill.id, month: previousMonthLabel, outstanding: String(bill.closingBalance) }
+          : null;
+      })(),
     };
   });
 

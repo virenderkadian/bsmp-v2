@@ -20,6 +20,16 @@ import { isOnline } from "@/sync";
 import { radius } from "@/theme";
 import { Card, Chip, PrimaryButton, ProgressBar, useColors } from "@/ui";
 
+// "2026-12" -> "Dec" — the driver only needs to know which month, and the
+// card has no room for more.
+function formatBillMonth(month: string): string {
+  const [year, monthPart] = month.split("-");
+  return new Date(Date.UTC(Number(year), Number(monthPart) - 1, 1)).toLocaleDateString("en-IN", {
+    month: "short",
+    timeZone: "UTC",
+  });
+}
+
 function statusOf(customer: DriverSheetCustomer, isQueued: boolean): { tone: "delivered" | "skipped" | "pending"; label: string } {
   if (!customer.saved) return { tone: "pending", label: "Pending" };
   if (isQueued) return { tone: "pending", label: customer.skipped ? "Skipped · queued" : "Delivered · queued" };
@@ -563,6 +573,32 @@ export default function RunScreen() {
                 {customer.sequenceNo}. {customer.name}
               </Text>
               {customer.area ? <Text style={{ color: colors.inkSoft, fontSize: 13.5, marginTop: 2 }}>{customer.area}</Text> : null}
+              {/* Only rendered when last month's issued bill is still unpaid,
+                  so the card gains nothing for the customers who have paid —
+                  which is most of them. A driver seeing this line means: they
+                  have the bill in hand and haven't settled it. */}
+              {customer.previousBill ? (
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 6,
+                    alignSelf: "flex-start",
+                    marginTop: 8,
+                    paddingVertical: 4,
+                    paddingHorizontal: 9,
+                    borderRadius: radius.pill,
+                    backgroundColor: colors.skippedTint,
+                  }}
+                >
+                  <Text style={{ color: colors.skipped, fontSize: 12.5, fontWeight: "800" }}>
+                    ₹ {Math.round(Number(customer.previousBill.outstanding))} unpaid
+                  </Text>
+                  <Text style={{ color: colors.skipped, fontSize: 11.5 }}>
+                    {formatBillMonth(customer.previousBill.month)} bill
+                  </Text>
+                </View>
+              ) : null}
             </View>
             <View style={{ flexDirection: "row", gap: 8 }}>
               {customer.latitude && customer.longitude ? (
