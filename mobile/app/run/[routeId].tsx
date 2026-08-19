@@ -759,7 +759,33 @@ export default function RunScreen() {
                 }}
                 style={{ width: ACTION_BUTTON_SIZE, height: ACTION_BUTTON_SIZE, borderRadius: 13, borderWidth: 1, borderColor: customer.mobile ? colors.borderStrong : colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
               >
-                <Text style={{ color: colors.brand, fontSize: 18 }}>{customer.mobile ? "📞" : "＋"}</Text>
+                {customer.mobile ? (
+                  <Text style={{ color: colors.brand, fontSize: 18 }}>📞</Text>
+                ) : (
+                  // A bare "+" said nothing about WHAT it adds. Same button
+                  // size, but a phone with a plus badge, so the purpose reads
+                  // at a glance instead of needing a long-press to discover.
+                  <View style={{ alignItems: "center", justifyContent: "center" }}>
+                    <Text style={{ fontSize: 18, opacity: 0.55 }}>📞</Text>
+                    <View
+                      style={{
+                        position: "absolute",
+                        right: -7,
+                        bottom: -5,
+                        width: 16,
+                        height: 16,
+                        borderRadius: 8,
+                        backgroundColor: colors.brand,
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Text style={{ color: colors.onBrand, fontSize: 12, fontWeight: "900", lineHeight: 14 }}>
+                        +
+                      </Text>
+                    </View>
+                  </View>
+                )}
               </Pressable>
             </View>
           </View>
