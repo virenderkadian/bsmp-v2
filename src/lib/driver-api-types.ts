@@ -99,6 +99,47 @@ export type DriverSheetResponse = {
   route: DriverRoute;
   date: string; // YYYY-MM-DD
   customers: DriverSheetCustomer[];
+  // The city's UPI payee, for building a payment QR on the device. Sent with
+  // the sheet so the QR can be produced with no connectivity — only the payee
+  // is needed from the server; the amount and note are known locally.
+  // Null when the city has no UPI id configured, in which case only cash can
+  // be recorded.
+  upi: { upiId: string; payeeName: string } | null;
+};
+
+// ---- Collecting payment at the door ----
+
+export type DriverPaymentRequest = {
+  // Client-generated UUID, used as the payment's primary key. This is what
+  // makes the request idempotent: a retry (offline replay, a tapped-twice
+  // button) upserts the same row instead of taking the customer's money twice.
+  // Deliveries can be re-sent harmlessly because they upsert on entry+customer;
+  // a payment has no such natural key, so the client supplies one.
+  paymentId: string;
+  customerId: string;
+  amount: number;
+  mode: "CASH" | "UPI";
+  // YYYY-MM-DD. Sent by the client so a payment queued offline keeps the date
+  // it was actually collected, not the date it eventually synced.
+  paidOn: string;
+};
+
+export type DriverPaymentResponse = {
+  ok: true;
+  payment: { id: string; amount: string; mode: string; status: string; paidOn: string };
+};
+
+// ---- Customer details a driver can correct ----
+
+export type DriverUpdateCustomerRequest = {
+  // Null clears it. Drivers are the ones who discover a wrong or missing
+  // number, so they can fix it at the door.
+  mobile: string | null;
+};
+
+export type DriverUpdateCustomerResponse = {
+  ok: true;
+  customer: { customerId: string; mobile: string | null };
 };
 
 // ---- Per-customer save ----

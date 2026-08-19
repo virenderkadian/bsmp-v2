@@ -100,8 +100,8 @@ export async function getDriverSheet(
 
   const previousMonth = toPreviousMonthStart(dateInput);
 
-  // Order matters — must match the array below: route, products, bills, entries.
-  const [route, products, previousBills, recentEntries] = await Promise.all([
+  // Order matters — must match the array below.
+  const [route, products, profile, previousBills, recentEntries] = await Promise.all([
     prisma.route.findFirst({
       where: { id: routeId, cityId, vehicleId, isActive: true },
       select: {
@@ -142,6 +142,11 @@ export async function getDriverSheet(
       where: { cityId, isActive: true, showInDailyEntry: true },
       orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
       select: { id: true, code: true, shortName: true, unit: true, defaultRate: true },
+    }),
+    // The city's UPI payee for the on-device payment QR. One row per city.
+    prisma.businessProfile.findUnique({
+      where: { cityId },
+      select: { businessName: true, upiId: true },
     }),
     // Last month's ISSUED bills that still owe something. GENERATED only —
     // see previousBill on DriverSheetCustomer for why DRAFT and LOCKED are both
@@ -250,6 +255,7 @@ export async function getDriverSheet(
     route: { id: route.id, code: route.code, name: route.name, shift: route.shift },
     date: dateInput,
     customers,
+    upi: profile?.upiId ? { upiId: profile.upiId, payeeName: profile.businessName } : null,
   };
 }
 
@@ -419,4 +425,118 @@ export async function saveDriverLine(
     return { ok: false, error: "Saved, but could not reload the customer." };
   }
   return { ok: true, customer };
+}
+
+export type RecordDriverPaymentInput = {
+  paymentId: string;
+  customerId: string;
+  amount: number;
+  mode: "CASH" | "UPI";
+  paidOn: string;
+};
+
+export type RecordDriverPaymentResult =
+  | { ok: true; payment: { id: string; amount: string; mode: string; status: string; paidOn: string } }
+  | { ok: false; error: string };
+
+// Records money collected at the door.
+//
+// ALWAYS status PENDING. This is a driver's claim that they were handed money,
+// not a confirmed receipt — the office verifies it afterwards. That distinction
+// is load-bearing rather than cosmetic: getCityCustomerLedger counts only
+// VERIFIED payments, so a driver-entered payment must not reduce anyone's
+// outstanding balance until someone in the office confirms it.
+//
+// Idempotent on the client-supplied id, so an offline replay or a double tap
+// cannot record the same money twice.
+export async function recordDriverPayment(
+  vehicleId: string,
+  cityId: string,
+  routeId: string,
+  input: RecordDriverPaymentInput,
+): Promise<RecordDriverPaymentResult> {
+  const route = await prisma.route.findFirst({
+    where: { id: routeId, cityId, vehicleId, isActive: true },
+    select: { id: true },
+  });
+  if (!route) {
+    return { ok: false, error: "Route not found for this vehicle." };
+  }
+
+  // The customer must belong to this city — a driver can only collect from
+  // people they actually serve.
+  const customer = await prisma.customer.findFirst({
+    where: { id: input.customerId, cityId },
+    select: { id: true, code: true },
+  });
+  if (!customer) {
+    return { ok: false, error: "Customer not found." };
+  }
+
+  if (!(input.amount > 0)) {
+    return { ok: false, error: "Enter an amount greater than zero." };
+  }
+
+  const paidOn = toDay(input.paidOn);
+
+  const payment = await prisma.payment.upsert({
+    where: { id: input.paymentId },
+    // Empty on purpose: a retry must not be able to change an amount or a mode
+    // after the fact, only confirm the row already exists.
+    update: {},
+    create: {
+      id: input.paymentId,
+      customerId: customer.id,
+      routeId,
+      amount: input.amount,
+      paymentDate: paidOn,
+      mode: input.mode,
+      status: "PENDING",
+      notes: `${customer.code} paid the bill (collected by driver)`,
+    },
+    select: { id: true, amount: true, mode: true, status: true, paymentDate: true },
+  });
+
+  return {
+    ok: true,
+    payment: {
+      id: payment.id,
+      amount: String(payment.amount),
+      mode: String(payment.mode),
+      status: String(payment.status),
+      paidOn: payment.paymentDate.toISOString().slice(0, 10),
+    },
+  };
+}
+
+export type UpdateDriverCustomerResult =
+  | { ok: true; customer: { customerId: string; mobile: string | null } }
+  | { ok: false; error: string };
+
+// Drivers are the ones who discover a wrong or missing phone number, so they
+// can correct it at the door. City-scoped like everything else here, and it
+// only ever touches `mobile` — no other customer field is reachable from a
+// driver-authenticated request.
+export async function updateDriverCustomerMobile(
+  cityId: string,
+  customerId: string,
+  mobile: string | null,
+): Promise<UpdateDriverCustomerResult> {
+  const existing = await prisma.customer.findFirst({
+    where: { id: customerId, cityId },
+    select: { id: true, mobile: true },
+  });
+  if (!existing) {
+    return { ok: false, error: "Customer not found." };
+  }
+
+  const next = mobile?.trim() ? mobile.trim() : null;
+
+  const updated = await prisma.customer.update({
+    where: { id: existing.id },
+    data: { mobile: next },
+    select: { id: true, mobile: true },
+  });
+
+  return { ok: true, customer: { customerId: updated.id, mobile: updated.mobile } };
 }

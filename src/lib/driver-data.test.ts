@@ -1,6 +1,11 @@
 import { PrismaClient } from "@prisma/client";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { getDriverSheet, saveDriverLine } from "@/lib/driver-data";
+import {
+  getDriverSheet,
+  recordDriverPayment,
+  saveDriverLine,
+  updateDriverCustomerMobile,
+} from "@/lib/driver-data";
 
 // Self-contained fixture proving the deliveredQty leak is fixed: a customer
 // delivered 5 yesterday (becomes their recent-order suggestion), is SKIPPED
@@ -320,5 +325,98 @@ describe("driver sheet previous-month bill (dev DB)", () => {
       ?.products.find((entry) => entry.productId === productId);
 
     expect(product?.defaultQty).toBe("5");
+  });
+});
+
+// Money collected at the door.
+describe("recordDriverPayment (dev DB)", () => {
+  afterAll(async () => {
+    await rawPrisma.payment.deleteMany({ where: { customerId } });
+  });
+
+  it("records as PENDING — a driver's claim, never a confirmed receipt", async () => {
+    await rawPrisma.payment.deleteMany({ where: { customerId } });
+    const paymentId = crypto.randomUUID();
+
+    const result = await recordDriverPayment(vehicleId, cityId, routeId, {
+      paymentId,
+      customerId,
+      amount: 250,
+      mode: "CASH",
+      paidOn: "2027-01-15",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payment.status).toBe("PENDING");
+    }
+
+    // PENDING matters beyond the label: the collection ledger counts only
+    // VERIFIED payments, so this must not reduce what the customer owes until
+    // the office confirms it.
+    const stored = await rawPrisma.payment.findUnique({ where: { id: paymentId } });
+    expect(stored?.status).toBe("PENDING");
+    expect(Number(stored?.amount)).toBe(250);
+  });
+
+  it("is idempotent — replaying the same payment id does not take the money twice", async () => {
+    await rawPrisma.payment.deleteMany({ where: { customerId } });
+    const paymentId = crypto.randomUUID();
+    const input = { paymentId, customerId, amount: 100, mode: "UPI" as const, paidOn: "2027-01-15" };
+
+    await recordDriverPayment(vehicleId, cityId, routeId, input);
+    await recordDriverPayment(vehicleId, cityId, routeId, input);
+    await recordDriverPayment(vehicleId, cityId, routeId, input);
+
+    const all = await rawPrisma.payment.findMany({ where: { customerId } });
+    expect(all).toHaveLength(1);
+    expect(Number(all[0].amount)).toBe(100);
+  });
+
+  it("a replay cannot alter the amount after the fact", async () => {
+    await rawPrisma.payment.deleteMany({ where: { customerId } });
+    const paymentId = crypto.randomUUID();
+
+    await recordDriverPayment(vehicleId, cityId, routeId, {
+      paymentId, customerId, amount: 100, mode: "CASH", paidOn: "2027-01-15",
+    });
+    await recordDriverPayment(vehicleId, cityId, routeId, {
+      paymentId, customerId, amount: 9999, mode: "CASH", paidOn: "2027-01-15",
+    });
+
+    const stored = await rawPrisma.payment.findUnique({ where: { id: paymentId } });
+    expect(Number(stored?.amount)).toBe(100);
+  });
+
+  it("refuses a customer from another city", async () => {
+    const result = await recordDriverPayment(vehicleId, otherCityId, routeId, {
+      paymentId: crypto.randomUUID(), customerId, amount: 50, mode: "CASH", paidOn: "2027-01-15",
+    });
+
+    expect(result.ok).toBe(false);
+  });
+
+  it("refuses a zero or negative amount", async () => {
+    const result = await recordDriverPayment(vehicleId, cityId, routeId, {
+      paymentId: crypto.randomUUID(), customerId, amount: 0, mode: "CASH", paidOn: "2027-01-15",
+    });
+
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe("updateDriverCustomerMobile (dev DB)", () => {
+  it("updates the number and can clear it", async () => {
+    const set = await updateDriverCustomerMobile(cityId, customerId, " 9876543210 ");
+    expect(set.ok).toBe(true);
+    if (set.ok) expect(set.customer.mobile).toBe("9876543210");
+
+    const cleared = await updateDriverCustomerMobile(cityId, customerId, null);
+    if (cleared.ok) expect(cleared.customer.mobile).toBeNull();
+  });
+
+  it("refuses a customer from another city", async () => {
+    const result = await updateDriverCustomerMobile(otherCityId, customerId, "9876543210");
+    expect(result.ok).toBe(false);
   });
 });
