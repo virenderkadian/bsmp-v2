@@ -64,6 +64,10 @@ export type DriverSheetProduct = {
 // pre-filled deliverables and any marks already recorded for the date.
 export type DriverSheetCustomer = {
   customerId: string;
+  // The office-facing code (e.g. BHCID0051). Carried so a payment QR can put it
+  // in the UPI note, which is how the office matches a receipt back to a
+  // customer.
+  customerCode: string;
   sequenceNo: number;
   name: string;
   area: string | null;

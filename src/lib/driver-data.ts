@@ -115,7 +115,7 @@ export async function getDriverSheet(
           select: {
             customerId: true,
             sequenceNo: true,
-            customer: { select: { name: true, area: true, mobile: true, latitude: true, longitude: true } },
+            customer: { select: { code: true, name: true, area: true, mobile: true, latitude: true, longitude: true } },
           },
         },
         entries: {
@@ -232,6 +232,7 @@ export async function getDriverSheet(
 
     return {
       customerId: seq.customerId,
+      customerCode: seq.customer.code,
       sequenceNo: seq.sequenceNo,
       name: seq.customer.name,
       area: seq.customer.area,

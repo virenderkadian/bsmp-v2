@@ -4,6 +4,10 @@ import type {
   DriverSaveLineRequest,
   DriverSaveLineResponse,
   DriverSheetResponse,
+  DriverPaymentRequest,
+  DriverPaymentResponse,
+  DriverUpdateCustomerRequest,
+  DriverUpdateCustomerResponse,
 } from "@shared/driver-api-types";
 
 // Base URL of the web app that serves /api/driver/*. Point this at your machine's
@@ -99,6 +103,18 @@ export const api = {
   saveLine: (routeId: string, customerId: string, body: DriverSaveLineRequest) =>
     request<DriverSaveLineResponse>(`/api/driver/routes/${routeId}/lines/${customerId}`, {
       method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  recordPayment: (routeId: string, body: DriverPaymentRequest) =>
+    request<DriverPaymentResponse>(`/api/driver/routes/${routeId}/payments`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  updateCustomerMobile: (customerId: string, body: DriverUpdateCustomerRequest) =>
+    request<DriverUpdateCustomerResponse>(`/api/driver/customers/${customerId}`, {
+      method: "PATCH",
       body: JSON.stringify(body),
     }),
 };

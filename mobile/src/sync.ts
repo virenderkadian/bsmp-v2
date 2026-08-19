@@ -1,6 +1,11 @@
 import NetInfo from "@react-native-community/netinfo";
 import { api, ApiError } from "@/api";
 import { getAllQueued, markAttemptFailed, removeFromQueue } from "@/offline-queue";
+import {
+  getQueuedPayments,
+  markPaymentAttemptFailed,
+  removeQueuedPayment,
+} from "@/payment-queue";
 
 type FailedSave = { id: string; routeId: string; customerId: string; error: string };
 
@@ -59,6 +64,38 @@ export async function flushOfflineQueue(): Promise<SyncResult> {
         }
       }
     }
+    // Payments replay the same way, but the stakes differ: sending twice is
+    // safe (the server upserts on the client-supplied payment id), recording
+    // twice would not be. Nothing is removed from the queue until the server
+    // has confirmed that id.
+    const payments = await getQueuedPayments();
+    for (const item of payments) {
+      try {
+        await api.recordPayment(item.routeId, item.request);
+        await removeQueuedPayment(item.request.paymentId);
+        result.synced.push(item.request.paymentId);
+      } catch (err) {
+        const message = err instanceof ApiError ? err.message : "Sync failed.";
+        const isPermanentRejection = err instanceof ApiError && err.status !== 0;
+        const failure = {
+          id: item.request.paymentId,
+          routeId: item.routeId,
+          customerId: item.request.customerId,
+          error: `${item.customerName}: ${message}`,
+        };
+        if (isPermanentRejection) {
+          // The server refused it outright. Retrying can't help, and leaving it
+          // queued would mean a payment silently never lands — so drop it and
+          // tell someone, since real money was collected.
+          await removeQueuedPayment(item.request.paymentId);
+          result.rejected.push(failure);
+        } else {
+          await markPaymentAttemptFailed(item.request.paymentId, message);
+          result.retrying.push(failure);
+        }
+      }
+    }
+
     return result;
   })();
   try {

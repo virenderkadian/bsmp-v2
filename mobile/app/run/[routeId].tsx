@@ -1,18 +1,20 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Linking, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, Linking, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import type { DriverSaveLineRequest, DriverSheetCustomer, DriverSheetResponse } from "@shared/driver-api-types";
 import { useActiveRoute } from "@/active-route";
 import { api, ApiError } from "@/api";
 import { getCashSaleEntries, type CashSaleEntry } from "@/cash-sale";
 import { CashSaleModal } from "@/components/CashSaleModal";
+import { CollectPaymentModal } from "@/components/CollectPaymentModal";
 import { RouteMapModal } from "@/components/RouteMapModal";
 import { SlideToConfirm } from "@/components/SlideToConfirm";
 import { Stepper } from "@/components/Stepper";
 import { StopsListModal } from "@/components/StopsListModal";
 import { openNavigation, resolveLocationForSave } from "@/location";
 import { enqueueSave, getQueueForRoute } from "@/offline-queue";
+import { enqueuePayment, newPaymentId } from "@/payment-queue";
 import { useOfflineSync } from "@/offline-sync-context";
 import { isRouteCompleted, markRouteCompleted, reopenRoute } from "@/route-completion";
 import { todayStr } from "@/route-progress";
@@ -113,6 +115,18 @@ export default function RunScreen() {
   // (see cash-sale.ts) — never sent to the server, so it has to be read here
   // rather than arriving with the sheet.
   const [cashSales, setCashSales] = useState<CashSaleEntry[]>([]);
+  const [collectOpen, setCollectOpen] = useState(false);
+  const [collecting, setCollecting] = useState(false);
+  // Customers paid on THIS run, so the card can say so — the pill alone would
+  // otherwise still read "unpaid" right after collecting, and a driver would
+  // reasonably ask again on the next visit.
+  const [paidNow, setPaidNow] = useState<Set<string>>(new Set());
+  // Drivers are the ones who find a wrong or missing number, so they can fix it
+  // where they notice it. Held locally so the card updates without refetching
+  // the whole sheet.
+  const [mobileEditOpen, setMobileEditOpen] = useState(false);
+  const [mobileDraft, setMobileDraft] = useState("");
+  const [savingMobile, setSavingMobile] = useState(false);
 
   const load = useCallback(async () => {
     if (!routeId) return;
@@ -227,6 +241,80 @@ export default function RunScreen() {
   const reopen = async () => {
     const firstPending = sheet?.customers.findIndex((entry) => !entry.saved) ?? -1;
     await reopenAt(firstPending >= 0 ? firstPending : 0);
+  };
+
+  const collectPayment = async (amount: number, mode: "CASH" | "UPI") => {
+    if (!customer || !routeId || collecting) return;
+    setCollecting(true);
+    try {
+      const request = {
+        // Generated here, and it becomes the payment's primary key server-side.
+        // That is what makes a retry safe: sending twice is fine, recording
+        // twice is not.
+        paymentId: newPaymentId(),
+        customerId: customer.customerId,
+        amount,
+        mode,
+        paidOn: todayStr(),
+      };
+
+      let queued = false;
+      if (await isOnline()) {
+        try {
+          await api.recordPayment(routeId, request);
+        } catch (err) {
+          if (err instanceof ApiError && err.status !== 0) {
+            throw err;
+          }
+          queued = true;
+        }
+      } else {
+        queued = true;
+      }
+
+      if (queued) {
+        await enqueuePayment(routeId, customer.name, request);
+      }
+
+      setPaidNow((prev) => new Set(prev).add(customer.customerId));
+      setCollectOpen(false);
+      setSnackbar({
+        index: cursor,
+        label: `₹${Math.round(amount)} ${mode === "CASH" ? "cash" : "UPI"}${queued ? " (offline, will sync)" : ""}`,
+      });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't record the payment.");
+    } finally {
+      setCollecting(false);
+    }
+  };
+
+  const saveMobile = async () => {
+    if (!customer || savingMobile) return;
+    setSavingMobile(true);
+    try {
+      const next = mobileDraft.trim() ? mobileDraft.trim() : null;
+      const result = await api.updateCustomerMobile(customer.customerId, { mobile: next });
+      setSheet((prev) =>
+        prev
+          ? {
+              ...prev,
+              customers: prev.customers.map((entry) =>
+                entry.customerId === customer.customerId ? { ...entry, mobile: result.customer.mobile } : entry,
+              ),
+            }
+          : prev,
+      );
+      setMobileEditOpen(false);
+    } catch (err) {
+      // Deliberately not queued offline. A phone number is a correction, not a
+      // record of something that happened — losing it costs nothing, whereas a
+      // queued edit could silently overwrite a better number entered elsewhere
+      // in the meantime.
+      setError(err instanceof ApiError ? err.message : "Couldn't save the number. Try again when online.");
+    } finally {
+      setSavingMobile(false);
+    }
   };
 
   const advance = () => {
@@ -589,7 +677,7 @@ export default function RunScreen() {
                 {customer.area ? (
                   <Text style={{ color: colors.inkSoft, fontSize: 13.5, marginTop: 2 }}>{customer.area}</Text>
                 ) : null}
-                {customer.previousBill ? (
+                {paidNow.has(customer.customerId) ? (
                   <View
                     style={{
                       flexDirection: "row",
@@ -600,16 +688,39 @@ export default function RunScreen() {
                       paddingVertical: 4,
                       paddingHorizontal: 9,
                       borderRadius: radius.pill,
-                      backgroundColor: colors.skippedTint,
+                      backgroundColor: colors.deliveredTint,
                     }}
+                  >
+                    <Text style={{ color: colors.delivered, fontSize: 12.5, fontWeight: "800" }}>
+                      Payment recorded
+                    </Text>
+                  </View>
+                ) : customer.previousBill ? (
+                  // Tappable: the driver is already looking at the amount when
+                  // they decide to ask for it, so the ask and the action are the
+                  // same target.
+                  <Pressable
+                    onPress={() => setCollectOpen(true)}
+                    style={({ pressed }) => ({
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 6,
+                      alignSelf: "flex-start",
+                      marginTop: 6,
+                      paddingVertical: 4,
+                      paddingHorizontal: 9,
+                      borderRadius: radius.pill,
+                      backgroundColor: colors.skippedTint,
+                      opacity: pressed ? 0.7 : 1,
+                    })}
                   >
                     <Text style={{ color: colors.skipped, fontSize: 12.5, fontWeight: "800" }}>
                       ₹ {Math.round(Number(customer.previousBill.outstanding))} unpaid
                     </Text>
                     <Text style={{ color: colors.skipped, fontSize: 11.5 }}>
-                      {formatBillMonth(customer.previousBill.month)} bill
+                      {formatBillMonth(customer.previousBill.month)} · Collect ›
                     </Text>
-                  </View>
+                  </Pressable>
                 ) : null}
               </View>
             </View>
@@ -629,16 +740,27 @@ export default function RunScreen() {
               ) : (
                 <View style={{ width: ACTION_BUTTON_SIZE, height: ACTION_BUTTON_SIZE }} />
               )}
-              {customer.mobile ? (
-                <Pressable
-                  onPress={() => Linking.openURL(`tel:${customer.mobile}`)}
-                  style={{ width: ACTION_BUTTON_SIZE, height: ACTION_BUTTON_SIZE, borderRadius: 13, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
-                >
-                  <Text style={{ color: colors.brand, fontSize: 18 }}>📞</Text>
-                </Pressable>
-              ) : (
-                <View style={{ width: ACTION_BUTTON_SIZE, height: ACTION_BUTTON_SIZE }} />
-              )}
+              {/* Tap calls; long-press edits. When there's no number at all the
+                  same slot becomes an add button, so a missing number is
+                  fixable from where the driver notices it rather than being a
+                  dead space. */}
+              <Pressable
+                onPress={() => {
+                  if (customer.mobile) {
+                    Linking.openURL(`tel:${customer.mobile}`);
+                  } else {
+                    setMobileDraft("");
+                    setMobileEditOpen(true);
+                  }
+                }}
+                onLongPress={() => {
+                  setMobileDraft(customer.mobile ?? "");
+                  setMobileEditOpen(true);
+                }}
+                style={{ width: ACTION_BUTTON_SIZE, height: ACTION_BUTTON_SIZE, borderRadius: 13, borderWidth: 1, borderColor: customer.mobile ? colors.borderStrong : colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
+              >
+                <Text style={{ color: colors.brand, fontSize: 18 }}>{customer.mobile ? "📞" : "＋"}</Text>
+              </Pressable>
             </View>
           </View>
 
@@ -848,6 +970,72 @@ export default function RunScreen() {
         routeId={sheet.route.id}
         sessionDate={todayStr()}
         products={sheet.customers[0]?.products ?? []}
+      />
+
+      <Modal visible={mobileEditOpen} transparent animationType="fade" onRequestClose={() => setMobileEditOpen(false)}>
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "center", padding: 24 }}>
+          <View style={{ backgroundColor: colors.surface, borderRadius: radius.lg, padding: 18 }}>
+            <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800" }}>
+              {customer.mobile ? "Update phone number" : "Add phone number"}
+            </Text>
+            <Text style={{ color: colors.inkFaint, fontSize: 12.5, marginTop: 2 }} numberOfLines={1}>
+              {customer.name}
+            </Text>
+            <TextInput
+              value={mobileDraft}
+              onChangeText={setMobileDraft}
+              keyboardType="phone-pad"
+              autoFocus
+              placeholder="Phone number"
+              placeholderTextColor={colors.inkFaint}
+              style={{
+                marginTop: 14,
+                backgroundColor: colors.surface2,
+                borderColor: colors.border,
+                borderWidth: 1,
+                borderRadius: radius.md,
+                paddingHorizontal: 14,
+                paddingVertical: 12,
+                color: colors.ink,
+                fontSize: 16,
+              }}
+            />
+            <View style={{ flexDirection: "row", gap: 10, marginTop: 16 }}>
+              <View style={{ flex: 1 }}>
+                <Pressable
+                  onPress={() => setMobileEditOpen(false)}
+                  disabled={savingMobile}
+                  style={({ pressed }) => ({
+                    paddingVertical: 13,
+                    borderRadius: radius.md,
+                    borderWidth: 1,
+                    borderColor: colors.borderStrong,
+                    alignItems: "center",
+                    opacity: pressed ? 0.7 : 1,
+                  })}
+                >
+                  <Text style={{ color: colors.inkSoft, fontSize: 14, fontWeight: "700" }}>Cancel</Text>
+                </Pressable>
+              </View>
+              <View style={{ flex: 1 }}>
+                <PrimaryButton
+                  label={savingMobile ? "Saving…" : "Save"}
+                  onPress={() => void saveMobile()}
+                  loading={savingMobile}
+                />
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <CollectPaymentModal
+        visible={collectOpen}
+        onClose={() => setCollectOpen(false)}
+        customer={customer}
+        upi={sheet.upi}
+        saving={collecting}
+        onCollect={(amount, mode) => void collectPayment(amount, mode)}
       />
 
       <RouteMapModal
