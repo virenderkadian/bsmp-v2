@@ -28,6 +28,10 @@ const CUSTOMER_META_SLOT_HEIGHT = 52;
 
 // Navigate + Call, plus the gap. Held constant whether either is shown.
 const ACTION_BUTTON_SIZE = 42;
+
+// Two SlideToConfirm controls (54 each) plus the 10 gap between them — the
+// tallest this zone ever gets.
+const ACTION_ZONE_HEIGHT = 118;
 const ACTION_SLOT_WIDTH = ACTION_BUTTON_SIZE * 2 + 8;
 
 // "2026-12" -> "Dec" — the driver only needs to know which month, and the
@@ -889,8 +893,11 @@ export default function RunScreen() {
           </Pressable>
         ) : null}
 
-        {canEdit || remarks.trim() ? (
-          <TextInput
+        {/* Always rendered. Hiding it on a saved stop with no note changed the
+            card height, which moved everything under it. Read-only when the
+            stop is locked, so it still communicates "no note" rather than
+            vanishing. */}
+        <TextInput
             value={remarks}
             onChangeText={setRemarks}
             editable={canEdit}
@@ -908,32 +915,36 @@ export default function RunScreen() {
               fontSize: 14,
             }}
           />
-        ) : null}
 
-        {canEdit ? (
-          <View key={customer.customerId} style={{ marginTop: 14, gap: 10 }}>
-            <SlideToConfirm direction="right" tone="delivered" label="Slide to deliver" disabled={saving} onConfirm={() => doSave(false)} />
-            <SlideToConfirm direction="left" tone="skipped" label="Slide to skip" disabled={saving} onConfirm={() => doSave(true)} />
-          </View>
-        ) : (
-          <Pressable
-            onPress={() => setEditMode(true)}
-            style={({ pressed }) => ({
-              marginTop: 14,
-              paddingVertical: 14,
-              borderRadius: radius.md,
-              backgroundColor: colors.surface2,
-              borderWidth: 1,
-              borderColor: colors.border,
-              alignItems: "center",
-              opacity: pressed ? 0.7 : 1,
-            })}
-          >
-            <Text style={{ color: colors.inkSoft, fontSize: 13.5, fontWeight: "700" }}>
-              Recorded as {status.label.toLowerCase()} · tap to edit
-            </Text>
-          </Pressable>
-        )}
+        {/* Fixed height. Two 54px slide controls become one small button once
+            the stop is saved, and that ~70px collapse moved the whole lower
+            half of the card — including the controls a driver reaches for
+            without looking. The zone keeps its size either way. */}
+        <View style={{ marginTop: 14, minHeight: ACTION_ZONE_HEIGHT, justifyContent: "center" }}>
+          {canEdit ? (
+            <View key={customer.customerId} style={{ gap: 10 }}>
+              <SlideToConfirm direction="right" tone="delivered" label="Slide to deliver" disabled={saving} onConfirm={() => doSave(false)} />
+              <SlideToConfirm direction="left" tone="skipped" label="Slide to skip" disabled={saving} onConfirm={() => doSave(true)} />
+            </View>
+          ) : (
+            <Pressable
+              onPress={() => setEditMode(true)}
+              style={({ pressed }) => ({
+                paddingVertical: 14,
+                borderRadius: radius.md,
+                backgroundColor: colors.surface2,
+                borderWidth: 1,
+                borderColor: colors.border,
+                alignItems: "center",
+                opacity: pressed ? 0.7 : 1,
+              })}
+            >
+              <Text style={{ color: colors.inkSoft, fontSize: 13.5, fontWeight: "700" }}>
+                Recorded as {status.label.toLowerCase()} · tap to edit
+              </Text>
+            </Pressable>
+          )}
+        </View>
 
         {error ? <Text style={{ color: colors.danger, fontSize: 13, marginTop: 12, textAlign: "center" }}>{error}</Text> : null}
       </ScrollView>
