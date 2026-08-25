@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import type { DriverSheetCustomer } from "@shared/driver-api-types";
+import { productShortLabel } from "@/product-label";
 import { radius } from "@/theme";
 import { Chip, useColors } from "@/ui";
 
@@ -83,7 +84,7 @@ export function StopsListModal({
               const status = statusOf(customer);
               const summary = customer.products
                 .filter((product) => Number(product.deliveredQty) > 0)
-                .map((product) => `${product.shortName ?? product.code} ${product.deliveredQty}`)
+                .map((product) => `${productShortLabel(product)} ${product.deliveredQty}`)
                 .join(" · ");
 
               return (

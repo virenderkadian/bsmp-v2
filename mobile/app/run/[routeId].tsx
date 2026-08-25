@@ -13,6 +13,8 @@ import { SlideToConfirm } from "@/components/SlideToConfirm";
 import { Stepper } from "@/components/Stepper";
 import { StopsListModal } from "@/components/StopsListModal";
 import { openNavigation, resolveLocationForSave } from "@/location";
+import { productShortLabel } from "@/product-label";
+import { summariseRound, summariseRoundCashSales } from "@/round-summary";
 import { enqueueSave, getQueueForRoute } from "@/offline-queue";
 import { enqueuePayment, newPaymentId } from "@/payment-queue";
 import { useOfflineSync } from "@/offline-sync-context";
@@ -137,8 +139,27 @@ export default function RunScreen() {
     try {
       setError(null);
       const result = await api.sheet(routeId, todayStr());
-      setSheet(result);
-      const firstPending = result.customers.findIndex((customer) => !customer.saved);
+      // A queued save hasn't reached the server, so the fetched sheet shows
+      // that stop as untouched — its quantities would fall back to the
+      // prefill and it would look undelivered after an app restart. Re-apply
+      // the queue over the response so a round reads the same either side of
+      // a restart, and so the end-of-round summary counts work the driver
+      // has actually done rather than only what has synced.
+      const queued = await getQueueForRoute(routeId);
+      const queuedByCustomer = new Map(queued.map((item) => [item.customerId, item]));
+      const customers = result.customers.map((customer) => {
+        const pending = queuedByCustomer.get(customer.customerId);
+        return pending
+          ? buildOptimisticCustomer(
+              customer,
+              pending.request.skipped,
+              pending.request.remarks ?? "",
+              pending.request.products,
+            )
+          : customer;
+      });
+      setSheet({ ...result, customers });
+      const firstPending = customers.findIndex((customer) => !customer.saved);
       setCursor(firstPending >= 0 ? firstPending : 0);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't load this route.");
@@ -518,39 +539,11 @@ export default function RunScreen() {
   // Round complete — ONLY when the driver explicitly finished it. Reaching
   // done === total no longer ends the round on its own (see `completed`).
   if (completed || !customer) {
-    const delivered = sheet.customers.filter((entry) => entry.saved && !entry.skipped).length;
-    const skipped = sheet.customers.filter((entry) => entry.saved && entry.skipped).length;
-    // Keyed by productId (not code/shortName) so the same product can never
-    // split into two rows — the label shown is shortName ?? code, matching
-    // every other product label in this app (delivery card, All stops list),
-    // so a driver never sees the same product under two different names.
-    const totals = new Map<string, { label: string; qty: number; unit: string }>();
-    sheet.customers.forEach((entry) => {
-      if (entry.skipped) return;
-      entry.products.forEach((product) => {
-        const qty = Number(product.deliveredQty) || 0;
-        if (qty <= 0) return;
-        const label = product.shortName ?? product.code;
-        const current = totals.get(product.productId) ?? { label, qty: 0, unit: product.unit };
-        current.qty += qty;
-        totals.set(product.productId, current);
-      });
-    });
+    const { delivered, skipped, notVisited, products: totals } = summariseRound(sheet.customers);
     // Already scoped to this session by getCashSaleEntries — no date filter
     // here, which would also have wrongly dropped a sale recorded just after
     // midnight on a round that started the previous day.
-    const todaysCashSales = cashSales;
-    const cashSaleAmount = todaysCashSales.reduce((sum, entry) => sum + entry.totalAmount, 0);
-    const cashSaleByProduct = new Map<string, { productId: string; label: string; qty: number; unit: string }>();
-    todaysCashSales.forEach((entry) => {
-      entry.items.forEach((item) => {
-        const current =
-          cashSaleByProduct.get(item.productId) ?? { productId: item.productId, label: item.code, qty: 0, unit: item.unit };
-        current.qty += item.quantity;
-        cashSaleByProduct.set(item.productId, current);
-      });
-    });
-    const cashSaleTotals = [...cashSaleByProduct.values()];
+    const { totalAmount: cashSaleAmount, products: cashSaleTotals } = summariseRoundCashSales(cashSales);
 
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: colors.ground }} edges={["top", "left", "right"]}>
@@ -565,7 +558,19 @@ export default function RunScreen() {
           </View>
           <Card style={{ marginBottom: 12 }}>
             <Row label="Delivered" value={String(delivered)} color={colors.delivered} colors={colors} />
-            <Row label="Skipped" value={String(skipped)} color={colors.skipped} colors={colors} last />
+            <Row
+              label="Skipped"
+              value={String(skipped)}
+              color={colors.skipped}
+              colors={colors}
+              last={notVisited === 0}
+            />
+            {/* Shown only when there are any. The totals below count saved
+                stops only, so a round finished early would otherwise just
+                read low with nothing saying why. */}
+            {notVisited > 0 ? (
+              <Row label="Not visited" value={String(notVisited)} color={colors.inkSoft} colors={colors} last />
+            ) : null}
           </Card>
           {cashSaleTotals.length > 0 ? (
             <>
@@ -595,13 +600,13 @@ export default function RunScreen() {
               </Card>
             </>
           ) : null}
-          {totals.size > 0 ? (
+          {totals.length > 0 ? (
             <Card style={{ marginBottom: 16 }}>
-              {[...totals.entries()].map(([productId, info], index, arr) => (
+              {totals.map((info, index, arr) => (
                 <Row
-                  key={productId}
-                  // info.label, NOT the map key — the key is the product id, so
-                  // rendering it printed a raw uuid instead of the product name.
+                  key={info.productId}
+                  // info.label, NOT the product id — rendering the key printed
+                  // a raw uuid instead of the product name.
                   label={info.label}
                   value={`${info.qty} ${info.unit}`}
                   colors={colors}
@@ -812,7 +817,7 @@ export default function RunScreen() {
                 }}
               >
                 <View>
-                  <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "700" }}>{product.shortName ?? product.code}</Text>
+                  <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "700" }}>{productShortLabel(product)}</Text>
                   <Text style={{ color: colors.inkFaint, fontSize: 12.5 }}>₹ {product.rate} / {product.unit}</Text>
                 </View>
                 {canEdit ? (

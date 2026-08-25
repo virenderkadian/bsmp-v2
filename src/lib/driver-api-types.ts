@@ -46,6 +46,11 @@ export type DriverRoutesResponse = {
 export type DriverSheetProduct = {
   productId: string;
   code: string;
+  // The full product name. Sent because `code` and `shortName` are both a
+  // single letter in some cities (Rohtak's Buffalo Milk is code "B",
+  // shortName "B"), so anywhere the app has room it should say what the
+  // product actually is rather than render a bare letter.
+  name: string;
   shortName: string | null;
   unit: string;
   // Rate to apply for this delivery (snapshot). Decimal serialized as string.

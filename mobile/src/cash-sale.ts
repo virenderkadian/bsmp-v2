@@ -1,4 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { localDateStr } from "./local-date";
+import type { CashSaleEntry, CashSaleItem, CashSaleSessionTotals } from "./cash-sale-types";
+
+export type { CashSaleEntry, CashSaleItem, CashSaleSessionTotals } from "./cash-sale-types";
 
 // Cash sale is deliberately NOT part of the server API — no DailyRouteEntry,
 // no billing, nothing in the web app's database. It's a fast local scratchpad
@@ -11,41 +15,24 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 //
 // Retention keeps the most recent RETENTION_SESSIONS sessions rather than a
 // fixed number of days. A driver who doesn't run for three days would lose
-// everything under a date cutoff; under this they still have their last two
+// everything under a date cutoff; under this they still have their recent
 // rounds, and storage still can't grow without bound.
+//
+// Six, not two. Every vehicle in service runs exactly two routes a day
+// (a morning and an evening round), so a retention of two spent the entire
+// budget on a single normal day. The moment a third session existed — the
+// driver opening yesterday's round to check a figure, or a round straddling
+// midnight — a LIVE session was evicted mid-round. Six leaves the last three
+// days of rounds intact, so eviction can never reach the day being worked.
 
 const STORAGE_KEY = "bsmp.driver.cashSales";
-const RETENTION_SESSIONS = 2;
-
-export type CashSaleItem = {
-  productId: string;
-  code: string;
-  unit: string;
-  rate: number;
-  quantity: number;
-  amount: number;
-};
-
-export type CashSaleEntry = {
-  id: string;
-  routeId: string;
-  // YYYY-MM-DD. Which round this sale belongs to, alongside routeId. Entries
-  // written before sessions existed have no value here, so readers derive it
-  // from createdAt — see sessionDateOf.
-  sessionDate?: string;
-  createdAt: string; // ISO timestamp
-  items: CashSaleItem[];
-  totalAmount: number;
-};
-
-export type CashSaleSessionTotals = {
-  entryCount: number;
-  totalAmount: number;
-  products: Array<{ productId: string; code: string; unit: string; quantity: number; amount: number }>;
-};
+const RETENTION_SESSIONS = 6;
 
 function sessionDateOf(entry: CashSaleEntry): string {
-  return entry.sessionDate ?? entry.createdAt.slice(0, 10);
+  // The fallback reads createdAt in LOCAL time, matching todayStr(). Slicing
+  // the ISO string instead would read it as UTC and misfile any sale recorded
+  // before 05:30 local under the previous day.
+  return entry.sessionDate ?? localDateStr(new Date(entry.createdAt));
 }
 
 function sessionKeyOf(entry: CashSaleEntry): string {
@@ -67,19 +54,45 @@ async function writeAll(entries: CashSaleEntry[]): Promise<void> {
   await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
 }
 
+// Every read-modify-write of the store runs through here, one at a time.
+//
+// AsyncStorage has no transactions, so two overlapping read-modify-writes
+// race: the loser writes back a snapshot taken before the winner's change and
+// silently erases it. That is how a cash sale could vanish moments after being
+// saved — the run screen and the sale sheet both touch this store, and the run
+// screen re-reads exactly when the sheet closes, right after a save.
+let tail: Promise<unknown> = Promise.resolve();
+
+function exclusive<T>(operation: () => Promise<T>): Promise<T> {
+  // Chained off the previous operation's settlement, so one failure can't
+  // wedge the queue for everything after it.
+  const next = tail.then(operation, operation);
+  tail = next.catch(() => undefined);
+  return next;
+}
+
 // Keeps the newest RETENTION_SESSIONS sessions and drops the rest, so old
 // rounds can't accumulate on the device indefinitely.
+//
+// "Newest" means the round's own DATE, not when the sale happened to be typed
+// in. Ranking by createdAt let a sale entered late for an earlier round make
+// that round look newer than the one being worked, and evict it. createdAt
+// only breaks ties between two rounds on the same date.
 function pruneExpired(entries: CashSaleEntry[]): CashSaleEntry[] {
-  const newestBySession = new Map<string, number>();
+  const sessions = new Map<string, { date: string; at: number }>();
   entries.forEach((entry) => {
-    const at = new Date(entry.createdAt).getTime();
     const key = sessionKeyOf(entry);
-    newestBySession.set(key, Math.max(newestBySession.get(key) ?? 0, at));
+    const at = new Date(entry.createdAt).getTime();
+    const current = sessions.get(key);
+    sessions.set(key, {
+      date: sessionDateOf(entry),
+      at: Math.max(current?.at ?? 0, Number.isNaN(at) ? 0 : at),
+    });
   });
 
   const keep = new Set(
-    [...newestBySession.entries()]
-      .sort((left, right) => right[1] - left[1])
+    [...sessions.entries()]
+      .sort(([, left], [, right]) => (left.date === right.date ? right.at - left.at : right.date.localeCompare(left.date)))
       .slice(0, RETENTION_SESSIONS)
       .map(([key]) => key),
   );
@@ -92,43 +105,53 @@ export async function addCashSaleEntry(
   sessionDate: string,
   items: CashSaleItem[],
 ): Promise<CashSaleEntry> {
-  const entries = pruneExpired(await readAll());
-  const entry: CashSaleEntry = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    routeId,
-    sessionDate,
-    createdAt: new Date().toISOString(),
-    items,
-    totalAmount: items.reduce((sum, item) => sum + item.amount, 0),
-  };
-  entries.push(entry);
-  await writeAll(entries);
-  return entry;
+  return exclusive(async () => {
+    const entries = pruneExpired(await readAll());
+    const entry: CashSaleEntry = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      routeId,
+      sessionDate,
+      createdAt: new Date().toISOString(),
+      items,
+      totalAmount: items.reduce((sum, item) => sum + item.amount, 0),
+    };
+    entries.push(entry);
+    await writeAll(entries);
+    return entry;
+  });
 }
 
 // Sales for ONE session (this route, this date), newest first.
 //
-// Also persists the pruned list back, so storage doesn't quietly keep expired
-// rows around between reads — pruning only on write would leave them sitting
-// there whenever nothing new gets added.
+// Reading NEVER writes. It used to persist the pruned list back on every
+// read, which made a plain read a destructive operation: it both raced with
+// concurrent saves and permanently deleted evicted sessions rather than just
+// hiding them. Expired sessions are dropped from the returned view here and
+// removed from storage on the next write, which is enough to bound growth.
 export async function getCashSaleEntries(routeId: string, sessionDate: string): Promise<CashSaleEntry[]> {
   const entries = pruneExpired(await readAll());
-  await writeAll(entries);
   return entries
-    .filter((entry) => entry.routeId === routeId && sessionDateOf(entry) === sessionDate)
-    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    .map((entry, index) => ({ entry, index }))
+    .filter(({ entry }) => entry.routeId === routeId && sessionDateOf(entry) === sessionDate)
+    // Newest first. Two sales can share a timestamp, so stored order breaks
+    // the tie — later in the file means recorded later.
+    .sort((left, right) => right.entry.createdAt.localeCompare(left.entry.createdAt) || right.index - left.index)
+    .map(({ entry }) => entry);
 }
 
 // Product-wise quantity and amount for one session, plus its overall total —
 // what the driver reads off at the end of a round.
 export function summariseCashSales(entries: CashSaleEntry[]): CashSaleSessionTotals {
-  const products = new Map<string, { productId: string; code: string; unit: string; quantity: number; amount: number }>();
+  const products = new Map<
+    string,
+    { productId: string; code: string; name?: string; unit: string; quantity: number; amount: number }
+  >();
 
   entries.forEach((entry) => {
     entry.items.forEach((item) => {
       const current =
         products.get(item.productId) ??
-        { productId: item.productId, code: item.code, unit: item.unit, quantity: 0, amount: 0 };
+        { productId: item.productId, code: item.code, name: item.name, unit: item.unit, quantity: 0, amount: 0 };
       current.quantity += item.quantity;
       current.amount += item.amount;
       products.set(item.productId, current);
@@ -143,6 +166,8 @@ export function summariseCashSales(entries: CashSaleEntry[]): CashSaleSessionTot
 }
 
 export async function deleteCashSaleEntry(id: string): Promise<void> {
-  const entries = await readAll();
-  await writeAll(entries.filter((entry) => entry.id !== id));
+  return exclusive(async () => {
+    const entries = await readAll();
+    await writeAll(entries.filter((entry) => entry.id !== id));
+  });
 }

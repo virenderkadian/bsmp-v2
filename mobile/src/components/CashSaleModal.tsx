@@ -10,6 +10,7 @@ import {
   type CashSaleEntry,
   type CashSaleItem,
 } from "@/cash-sale";
+import { productLabel, productShortLabel } from "@/product-label";
 import { radius } from "@/theme";
 import { Card, GhostButton, PrimaryButton, useColors } from "@/ui";
 
@@ -94,6 +95,7 @@ export function CashSaleModal({
       const items: CashSaleItem[] = draftRows.map(({ product, row }) => ({
         productId: product.productId,
         code: product.code,
+        name: productLabel(product),
         unit: product.unit,
         rate: Number(product.rate),
         quantity: Number(row.quantity) || 0,
@@ -195,7 +197,7 @@ export function CashSaleModal({
                     }}
                   >
                     <View style={{ flex: 1 }}>
-                      <Text style={{ color: colors.ink, fontSize: 14, fontWeight: "700" }}>{product.shortName ?? product.code}</Text>
+                      <Text style={{ color: colors.ink, fontSize: 14, fontWeight: "700" }}>{productLabel(product)}</Text>
                       <Text style={{ color: colors.inkFaint, fontSize: 12 }}>₹ {product.rate} / {product.unit}</Text>
                     </View>
                     <TextInput
@@ -270,7 +272,7 @@ export function CashSaleModal({
                     borderBottomColor: colors.border,
                   }}
                 >
-                  <Text style={{ color: colors.ink, fontSize: 13.5, fontWeight: "700" }}>{product.code}</Text>
+                  <Text style={{ color: colors.ink, fontSize: 13.5, fontWeight: "700" }}>{productLabel(product)}</Text>
                   <Text style={{ color: colors.inkSoft, fontSize: 13 }}>
                     {product.quantity} {product.unit} · ₹ {product.amount.toFixed(2)}
                   </Text>
@@ -297,7 +299,7 @@ export function CashSaleModal({
                     <View style={{ flex: 1, paddingRight: 10 }}>
                       <Text style={{ color: colors.inkFaint, fontSize: 12 }}>{formatDateTime(entry.createdAt)}</Text>
                       <Text style={{ color: colors.ink, fontSize: 13.5, marginTop: 4 }}>
-                        {entry.items.map((item) => `${item.code} ${item.quantity}${item.unit}`).join(" · ")}
+                        {entry.items.map((item) => `${productShortLabel(item)} ${item.quantity}${item.unit}`).join(" · ")}
                       </Text>
                     </View>
                     <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "800" }}>₹ {entry.totalAmount.toFixed(2)}</Text>

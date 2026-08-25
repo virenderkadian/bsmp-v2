@@ -151,6 +151,19 @@ describe("driver sheet city isolation (dev DB)", () => {
     expect(productIds).not.toContain(otherCityProductId);
   });
 
+  // The app has nowhere else to get a readable product name from: in some
+  // cities the code AND the shortName are both a single letter, so a sheet
+  // without `name` left the driver reading a column of bare letters.
+  it("sends a full product name, not just the code", async () => {
+    const sheet = await getDriverSheet(vehicleId, cityId, routeId, "2027-01-16");
+    const product = sheet!.customers
+      .find((c) => c.customerId === customerId)!
+      .products.find((p) => p.productId === productId);
+
+    expect(product!.name).toBeTruthy();
+    expect(product!.name.trim().length).toBeGreaterThan(0);
+  });
+
   it("returns no sheet when the route is asked for under the wrong city", async () => {
     const sheet = await getDriverSheet(vehicleId, otherCityId, routeId, "2027-01-16");
     expect(sheet).toBeNull();

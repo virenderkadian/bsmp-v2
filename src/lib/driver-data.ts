@@ -141,7 +141,7 @@ export async function getDriverSheet(
     prisma.product.findMany({
       where: { cityId, isActive: true, showInDailyEntry: true },
       orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
-      select: { id: true, code: true, shortName: true, unit: true, defaultRate: true },
+      select: { id: true, code: true, name: true, shortName: true, unit: true, defaultRate: true },
     }),
     // The city's UPI payee for the on-device payment QR. One row per city.
     prisma.businessProfile.findUnique({
@@ -222,6 +222,7 @@ export async function getDriverSheet(
       return {
         productId: product.id,
         code: product.code,
+        name: product.name,
         shortName: product.shortName,
         unit: product.unit,
         rate: String(saved?.rateSnapshot ?? product.defaultRate),

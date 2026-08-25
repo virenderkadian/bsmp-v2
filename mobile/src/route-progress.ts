@@ -1,9 +1,8 @@
 import { api } from "@/api";
 import type { DriverRoute } from "@shared/driver-api-types";
 
-export function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
-}
+// Re-exported so the many callers that already reach for it here keep working.
+export { todayStr, localDateStr } from "@/local-date";
 
 export type RouteProgress = { done: number; total: number };
 

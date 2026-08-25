@@ -19,7 +19,11 @@
       }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      // The driver app imports the shared API types under this specifier
+      // (see mobile/tsconfig.json). Declared here too so the unit tests in
+      // tests/unit can typecheck the mobile modules they cover.
+      "@shared/*": ["./src/lib/*"]
     }
   },
   "include": [
