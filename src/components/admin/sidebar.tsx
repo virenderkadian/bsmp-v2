@@ -6,7 +6,7 @@ import { usePathname } from "next/navigation";
 import { signOut } from "@/app/login/actions";
 import { LogoutIcon, SidebarPanelIcon } from "@/components/admin/icons";
 import { LoadingSpinner } from "@/components/admin/loading-spinner";
-import { appNavigation } from "@/lib/navigation";
+import { visibleNavigationFor } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 import type { CurrentUser } from "@/lib/current-user";
 
@@ -48,6 +48,11 @@ export function Sidebar({
 }) {
   const pathname = usePathname();
 
+  // Role-restricted items are hidden from anyone who doesn't hold the role. The
+  // screens behind these links check the role themselves; this only keeps the
+  // nav honest. See visibleNavigationFor for the rule and its tests.
+  const visibleNavigation = visibleNavigationFor(user?.role);
+
   return (
     <aside
       className={cn(
@@ -77,7 +82,7 @@ export function Sidebar({
 
       <nav className="sidebar-nav-scroll mt-8 min-h-0 flex-1 overflow-y-auto pr-1">
         <div className="flex flex-col gap-1">
-          {appNavigation.map((item) => {
+          {visibleNavigation.map((item) => {
             // Keep the parent nav item highlighted on its sub-routes too
             // (e.g. Payments stays active on /payments/bulk-entry, Monthly
             // Bills on /monthly-bills/<id>). Dashboard "/" only matches

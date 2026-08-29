@@ -1,5 +1,7 @@
+import type { UserRole } from "@prisma/client";
 import {
   BillIcon,
+  ChatIcon,
   CheckIcon,
   DashboardIcon,
   ProductIcon,
@@ -12,7 +14,17 @@ import {
 // `subtitle` is the descriptive line shown in the top bar's info-icon
 // tooltip (see src/components/admin/top-bar.tsx), replacing the old
 // per-screen PageHeader subtitle block so screens keep more vertical space.
-export const appNavigation = [
+//
+// `roles`, where present, limits which roles see the item at all. Absent means
+// everyone signed in. This only hides the link — each restricted screen still
+// checks the role itself, since a hidden link is a convenience, not a control.
+export const appNavigation: ReadonlyArray<{
+  title: string;
+  href: string;
+  subtitle: string;
+  icon: (props: { className?: string }) => React.ReactElement;
+  roles?: readonly UserRole[];
+}> = [
   {
     title: "Dashboard",
     href: "/",
@@ -69,9 +81,31 @@ export const appNavigation = [
     icon: CheckIcon,
   },
   {
+    // City-wide outbound messaging: one action here reaches every customer in
+    // the city at once, so it is restricted to the roles that already own
+    // money-affecting decisions. A USER runs the day's operations and does not
+    // decide that two thousand customers get a message.
+    title: "WhatsApp",
+    href: "/whatsapp",
+    subtitle:
+      "Send monthly bills and notices to customers on WhatsApp, track what has been sent, and manage consent.",
+    icon: ChatIcon,
+    roles: ["ADMIN", "SUPERADMIN"],
+  },
+  {
     title: "Settings",
     href: "/settings",
     subtitle: "Workspace notes, configuration references, and rollout guidance.",
     icon: SettingsIcon,
   },
-] as const;
+];
+
+// Which nav items a given role may see. Extracted from the sidebar so it can be
+// unit-tested: this decides what appears on *every* screen for *every* user, so
+// a mistake here is not confined to one feature.
+//
+// Fails closed on a null user (a session still resolving) rather than briefly
+// flashing a restricted link.
+export function visibleNavigationFor(role: UserRole | null | undefined) {
+  return appNavigation.filter((item) => !item.roles || (role != null && item.roles.includes(role)));
+}
