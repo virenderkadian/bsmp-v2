@@ -49,8 +49,23 @@ internet — the machine holds your accounting data.
 
 ## 2. Pair the WhatsApp number
 
-Open the dashboard at `http://localhost:2785`, create a session called `bsmp`,
-start it, and scan the QR code with the phone holding the number.
+Open the dashboard and create a session — the payload is `{"name": "bsmp"}`;
+the name is 3-50 characters, letters/numbers/hyphens only, and there is no `id`
+field (the server assigns one). Start it, then scan the QR with the phone
+holding the number.
+
+**Note the session's `id` from the response.** OpenWA looks sessions up by id
+only, never by name, so the id — not `bsmp` — is what goes in `.env` as
+`OPENWA_SESSION_ID`.
+
+If the dashboard errors while creating a session, the API works directly:
+
+```
+curl -X POST http://localhost:2785/api/sessions -H "X-API-Key: KEY" ^
+  -H "Content-Type: application/json" -d "{\"name\":\"bsmp\"}"
+curl -X POST http://localhost:2785/api/sessions/<id>/start -H "X-API-Key: KEY"
+curl http://localhost:2785/api/sessions/<id>/qr -H "X-API-Key: KEY"
+```
 
 Use a **spare number**, not your main business line. If WhatsApp ever restricts
 it, you do not want that to be the number printed on your bills.
