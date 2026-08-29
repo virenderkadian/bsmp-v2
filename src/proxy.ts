@@ -11,7 +11,18 @@ import { type NextRequest, NextResponse } from "next/server";
 // the Supabase gate here must not intercept it — without this exemption every
 // driver call gets 307-redirected to /login and the app can never talk to a
 // deployed environment.
-const PUBLIC_PATHS = ["/login", "/forgot-password", "/reset-password", "/api/driver"];
+// /api/notifications is the office-PC sender agent (see
+// src/lib/notifications/agent-auth.ts): it authenticates with its own Bearer
+// shared secret, never Supabase cookies, so — exactly as with /api/driver — the
+// gate below must not intercept it or the agent can only ever receive a 307 to
+// /login and no message is ever sent.
+const PUBLIC_PATHS = [
+  "/login",
+  "/forgot-password",
+  "/reset-password",
+  "/api/driver",
+  "/api/notifications",
+];
 
 export async function proxy(request: NextRequest) {
   let supabaseResponse = NextResponse.next({ request });
