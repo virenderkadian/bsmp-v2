@@ -96,6 +96,26 @@ node index.js
 You should see the session confirmed, then either `queue empty — waiting` or
 messages going out one at a time.
 
+## Everyday use: the two buttons
+
+`agent\windows\` holds two double-clickable files. They are deliberately
+separate — see the note below.
+
+**`START WHATSAPP.bat`** — brings the connection up. Starts OpenWA, waits for
+it, starts the WhatsApp session, opens the dashboard. Safe to run any time: it
+sends nothing. Use it to pair a number, rescan an expired QR, or just check the
+session is healthy.
+
+**`START SENDING.bat`** — starts the agent, which drains the queue and sends
+real messages to real customers. Requires the first one to be running already.
+
+They are two buttons rather than one on purpose: bringing WhatsApp up is
+harmless and routine, while sending is neither. Bundling them would mean that
+checking the connection also starts messaging customers.
+
+Both keep their window open. Closing the sending window stops sending; nothing
+is lost, because unsent messages stay queued and resume next time.
+
 ## 5. Run it as a Windows service
 
 Running it in a window means someone eventually closes it, and it will not come

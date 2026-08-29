@@ -113,9 +113,16 @@ export async function checkSession(config) {
   }
 
   const session = await response.json();
-  const status = String(session.status ?? session.data?.status ?? "unknown");
+  const status = String(session.status ?? session.data?.status ?? "unknown").toLowerCase();
 
-  return /connected|authenticated|ready/i.test(status)
+  // Exact match, not a substring test. OpenWA's SessionStatus values are
+  // created / initializing / qr_ready / authenticating / ready / disconnected /
+  // failed, and only `ready` can send. A substring check is actively dangerous
+  // here: "disconnected" contains "connected" and "qr_ready" contains "ready",
+  // so a loose test reports a dead session as healthy — the agent then fails
+  // every send and trips the circuit breaker, which is exactly the "looks like a
+  // ban but is really an unpaired phone" confusion this function exists to stop.
+  return status === "ready"
     ? { state: "connected", detail: status }
     : { state: "disconnected", detail: status };
 }
