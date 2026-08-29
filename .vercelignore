@@ -2,3 +2,9 @@
 # node_modules and is shipped via Expo EAS, not Vercel. Keep it out of the web
 # build entirely so it can never affect Next.js installs or builds.
 mobile/
+
+# The WhatsApp sender agent runs on the office PC, not on Vercel — it is a
+# long-lived process that talks to a WhatsApp gateway on localhost, which is
+# the one thing a serverless deploy cannot host. Excluded for the same reason
+# as mobile/: it has no business in the web build.
+agent/

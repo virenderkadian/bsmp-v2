@@ -1,0 +1,13 @@
+{
+  "name": "bsmpops-whatsapp-agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sends queued customer messages from the office PC via OpenWA. Deliberately dependency-free so it runs on a bare Node install.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node index.js"
+  }
+}

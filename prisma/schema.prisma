@@ -199,6 +199,12 @@ model Customer {
   longitude        Decimal?                       @db.Decimal(9, 6)
   openingBalance   Decimal                        @default(0) @db.Decimal(12, 2)
   isActive         Boolean                        @default(true)
+  // When this customer agreed to receive bills/notices on WhatsApp. Null means
+  // never contacted — nothing is queued for them (see src/lib/notifications/).
+  // A timestamp rather than a boolean because consent is a dated fact: WhatsApp's
+  // Business Messaging Policy and India's DPDP Act both care *when* it was given,
+  // and a bare `true` answers neither question.
+  whatsappOptInAt  DateTime?
   createdAt        DateTime                       @default(now())
   updatedAt        DateTime                       @updatedAt
   city             City                           @relation(fields: [cityId], references: [id])
@@ -207,6 +213,7 @@ model Customer {
   entryLines       DailyRouteEntryLine[]
   payments         Payment[]
   monthlyBills     MonthlyBill[]
+  notifications    NotificationOutbox[]
 
   @@unique([cityId, code])
 }
@@ -543,4 +550,110 @@ model DriverLoginAttempt {
 
   @@index([vehicleCode, createdAt])
   @@index([ipAddress, createdAt])
+}
+
+// ---- Customer notifications (src/lib/notifications/) ----
+//
+// A self-contained, opt-in feature. With NOTIFICATIONS_ENABLED unset the whole
+// module is dormant and nothing below is ever written, so the tables can sit
+// unused (or be dropped) without touching anything else in the app.
+//
+// Deliberately channel-agnostic: replacing WhatsApp with SMS or email later is
+// a new adapter, not a new table.
+
+enum NotificationChannel {
+  WHATSAPP
+  SMS
+  EMAIL
+}
+
+// How the message body is delivered. v1 sends TEXT only; IMAGE/DOCUMENT exist
+// so that adding a rendered bill copy (or any other image) later is a renderer
+// change rather than a migration.
+enum NotificationFormat {
+  TEXT
+  IMAGE
+  DOCUMENT
+}
+
+enum NotificationStatus {
+  // Queued, waiting for a sender agent to pick it up.
+  PENDING
+  // Claimed by an agent. Rows stuck here past their lease are returned to
+  // PENDING — the office PC being switched off mid-run is the expected case,
+  // not an exceptional one.
+  SENDING
+  // Handed to the provider successfully. NOT a delivery receipt: WhatsApp
+  // accepting a message is not the same as the customer receiving it.
+  SENT
+  // Provider rejected it, or attempts ran out. lastError carries why.
+  FAILED
+  // Withdrawn before sending. Terminal, never retried.
+  CANCELLED
+}
+
+// One row per message we intend to send. Written by the web app — which can
+// never reach the office PC directly — and drained by a sender agent running
+// beside the WhatsApp gateway. A transactional outbox, chosen because Vercel
+// and the sending machine share nothing except this database.
+//
+// Sending ~2000 bills is paced over 1.5-2 days (deliberately slow, to avoid
+// WhatsApp's bulk-sender heuristics), so a run routinely spans overnight
+// shutdowns. Durable rows make that a normal resume rather than a restart.
+model NotificationOutbox {
+  id          String              @id @default(uuid()) @db.Uuid
+  customerId  String              @db.Uuid
+  channel     NotificationChannel @default(WHATSAPP)
+  format      NotificationFormat  @default(TEXT)
+  status      NotificationStatus  @default(PENDING)
+  // Recipient snapshotted at queue time rather than joined live from
+  // Customer.mobile: if someone edits the number midway through a two-day run,
+  // the message still goes where it was reviewed to go, and afterwards the log
+  // honestly records where it actually went.
+  recipient   String
+  // Template key (e.g. "monthly_bill_v1") + its named variables, never a
+  // rendered string. WhatsApp's official Cloud API only accepts pre-approved
+  // templates with named slots, so storing finished prose here would turn a
+  // future migration into a reverse-engineering job. Rendering happens at send
+  // time in src/lib/notifications/templates.ts.
+  template    String
+  variables   Json
+  // Optional attachment recipe — a reference, never bytes. Two shapes:
+  //   { kind: "RENDER", target: "MONTHLY_BILL", billId }  generated on demand
+  //   { kind: "ASSET",  key: "notices/..." }              a stored R2 object
+  // Bills are regenerated from data we already keep permanently, so they are
+  // never stored; 2000 bills/month of PDFs would exhaust the free-tier storage
+  // runway in months. Null for every v1 (text-only) row.
+  media       Json?
+  // Business key for idempotency — the bill id for a monthly bill. Clicking
+  // "send" twice, or an agent retrying after a crash, must not produce two
+  // WhatsApps to the same customer. The unique index below makes that
+  // structural rather than something every call site has to remember.
+  dedupeKey   String
+  // Groups the rows queued by one action, so progress can be reported as
+  // "1,340 of 2,000" across a multi-day run.
+  batchId     String?             @db.Uuid
+  // Earliest this may be sent. Powers retry backoff and quiet hours; the
+  // agent's claim query filters on it.
+  notBefore   DateTime            @default(now())
+  attempts    Int                 @default(0)
+  lastError   String?
+  // Lease timestamp — how a dead agent's claimed rows get recovered.
+  claimedAt   DateTime?
+  sentAt      DateTime?
+  // The provider's own id for the sent message, kept for support questions
+  // ("did Ramesh actually get it?"). Format varies by provider.
+  providerRef String?
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+  customer    Customer            @relation(fields: [customerId], references: [id])
+
+  // No direct cityId: this inherits its city through customer, matching how
+  // entries, sequences, payments, and bills already work in this schema.
+
+  @@unique([customerId, template, dedupeKey])
+  // Drives the agent's claim query: oldest ready row first, per channel.
+  @@index([status, channel, notBefore])
+  @@index([batchId])
+  @@index([customerId, createdAt])
 }
