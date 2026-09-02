@@ -10,20 +10,30 @@ import {
   type KeyboardEvent,
   type RefObject,
 } from "react";
-import { createBulkRoutePayments, type PaymentActionState } from "@/app/payments/actions";
+import {
+  createBulkRoutePayments,
+  fetchBillQuickView,
+  type PaymentActionState,
+} from "@/app/payments/actions";
 import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { DataTable } from "@/components/admin/data-table";
 import { EmptyState } from "@/components/admin/empty-state";
 import { IconButton } from "@/components/admin/icon-button";
-import { PlusIcon, SearchIcon, XIcon } from "@/components/admin/icons";
+import { EyeIcon, PlusIcon, SearchIcon, XIcon } from "@/components/admin/icons";
 import { LoadingSpinner } from "@/components/admin/loading-spinner";
 import { usePageMetric } from "@/components/admin/page-metric";
 import { SelectInput } from "@/components/admin/select-input";
+import { Dialog } from "@/components/admin/dialog";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { StatusChip } from "@/components/admin/status-chip";
 import { StickyActionBar } from "@/components/admin/sticky-action-bar";
 import { Toast, type ToastTone } from "@/components/admin/toast";
-import type { BulkPaymentCustomerRow, BulkPaymentPayload } from "@/lib/payments";
+import type {
+  BillQuickView,
+  BulkPaymentCustomerRow,
+  BulkPaymentPayload,
+  OffRoundCustomerOption,
+} from "@/lib/payments";
 import { cn } from "@/lib/utils";
 
 const initialState: PaymentActionState = { status: "idle" };
@@ -43,10 +53,6 @@ function formatMoney(value: string | number) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
-}
-
-function formatRouteOption(route: BulkPaymentPayload["routes"][number]) {
-  return `${route.code} - ${route.name} ${route.shift === "MORNING" ? "Morning" : "Evening"}`;
 }
 
 function formatCustomerMeta(customer: BulkPaymentCustomerRow) {
@@ -123,28 +129,32 @@ function CustomerSuggestionRow({
   );
 }
 
-function RouteMonthToolbar({
+function VehicleRoundToolbar({
   payload,
-  routeId,
+  vehicleId,
+  shift,
   month,
   paymentDate,
   mode,
   status,
   dirty,
-  onRouteIdChange,
+  onVehicleIdChange,
+  onShiftChange,
   onMonthChange,
   onPaymentDateChange,
   onModeChange,
   onStatusChange,
 }: {
   payload: BulkPaymentPayload;
-  routeId: string;
+  vehicleId: string;
+  shift: string;
   month: string;
   paymentDate: string;
   mode: string;
   status: string;
   dirty: boolean;
-  onRouteIdChange: (value: string) => void;
+  onVehicleIdChange: (value: string) => void;
+  onShiftChange: (value: string) => void;
   onMonthChange: (value: string) => void;
   onPaymentDateChange: (value: string) => void;
   onModeChange: (value: string) => void;
@@ -154,18 +164,34 @@ function RouteMonthToolbar({
     <div className="space-y-2">
       <form
         action="/payments/bulk-entry"
-        className="grid gap-3 lg:grid-cols-[minmax(260px,1.4fr)_170px_170px_150px_150px_auto] lg:items-end"
+        className="grid gap-3 lg:grid-cols-[minmax(220px,1.2fr)_140px_160px_160px_140px_140px_auto] lg:items-end"
       >
+        {/* Vehicle, not route. One vehicle runs a morning and an evening
+            round; a customer on both is billed on only one of them, so a
+            route-scoped sheet hid them from the round they are visited on.
+            Shift narrows to a single trip when that is what you want. */}
         <SelectInput
-          label="Route"
-          name="routeId"
-          value={routeId}
-          onChange={(event) => onRouteIdChange(event.target.value)}
-          placeholder="Select route"
-          options={payload.routes.map((route) => ({
-            value: route.id,
-            label: formatRouteOption(route),
+          label="Vehicle"
+          name="vehicleId"
+          value={vehicleId}
+          onChange={(event) => onVehicleIdChange(event.target.value)}
+          placeholder="Select vehicle"
+          options={payload.vehicles.map((vehicle) => ({
+            value: vehicle.id,
+            label: `${vehicle.code} - ${vehicle.name}`,
           }))}
+          className="h-10 rounded-md bg-surface text-sm"
+        />
+        <SelectInput
+          label="Round"
+          name="shift"
+          value={shift}
+          onChange={(event) => onShiftChange(event.target.value)}
+          options={[
+            { value: "ALL", label: "Both rounds" },
+            { value: "MORNING", label: "Morning" },
+            { value: "EVENING", label: "Evening" },
+          ]}
           className="h-10 rounded-md bg-surface text-sm"
         />
         <label className="flex flex-col gap-1.5">
@@ -209,7 +235,7 @@ function RouteMonthToolbar({
 
       {dirty ? (
         <div className="flex flex-wrap items-center gap-2">
-          <StatusChip tone="warning">Load changed route/month</StatusChip>
+          <StatusChip tone="warning">Load changed vehicle/round/month</StatusChip>
         </div>
       ) : null}
       {payload.error ? <p className="text-sm font-medium text-rose-700">{payload.error}</p> : null}
@@ -233,6 +259,8 @@ function AddCustomerBar({
   onSuggestionsOpenChange,
   onHighlightedIndexChange,
   onSelectCustomer,
+  onSelectOffRoundCustomer,
+  offRoundMatches,
   onAddSelected,
   onClearDraft,
   canClearDraft,
@@ -254,6 +282,8 @@ function AddCustomerBar({
   onSuggestionsOpenChange: (open: boolean) => void;
   onHighlightedIndexChange: (index: number | ((index: number) => number)) => void;
   onSelectCustomer: (customer: BulkPaymentCustomerRow) => void;
+  onSelectOffRoundCustomer: (customer: OffRoundCustomerOption) => void;
+  offRoundMatches: OffRoundCustomerOption[];
   onAddSelected: () => void;
   onClearDraft: () => void;
   canClearDraft: boolean;
@@ -345,8 +375,49 @@ function AddCustomerBar({
                   />
                 ))
               ) : (
-                <div className="px-3 py-3 text-sm text-text-secondary">No matching route customer found.</div>
+                <div className="px-3 py-3 text-sm text-text-secondary">
+                  Not on this round.
+                  {offRoundMatches.length > 0 ? (
+                    <span className="mt-0.5 block text-xs text-text-muted">
+                      {offRoundMatches.length} customer{offRoundMatches.length === 1 ? "" : "s"} elsewhere
+                      still owe money:
+                    </span>
+                  ) : (
+                    <span className="mt-0.5 block text-xs text-text-muted">
+                      No one outside this round owes money under that name either.
+                    </span>
+                  )}
+                </div>
               )}
+
+              {/* The escalation from a dead end to a payable customer. Shown
+                  only once the round itself has nothing, and limited to people
+                  who still owe — the only ones who can hand you money. */}
+              {suggestions.length === 0
+                ? offRoundMatches.map((customer) => (
+                    <button
+                      key={customer.customerId}
+                      type="button"
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => onSelectOffRoundCustomer(customer)}
+                      className="flex w-full items-start justify-between gap-3 border-t border-surface-border px-3 py-2.5 text-left transition hover:bg-surface-muted"
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm font-semibold text-text-primary">
+                          {customer.customerName}
+                        </span>
+                        <span className="block truncate text-xs text-text-secondary">
+                          {customer.customerCode}
+                          {customer.customerArea ? ` · ${customer.customerArea}` : ""}
+                          {customer.routeLabel ? ` · bills on ${customer.routeLabel}` : " · not on a round"}
+                        </span>
+                      </span>
+                      <span className="shrink-0 text-xs font-semibold text-text-primary">
+                        ₹ {customer.outstanding}
+                      </span>
+                    </button>
+                  ))
+                : null}
             </div>
           ) : null}
         </div>
@@ -424,7 +495,13 @@ function AddCustomerBar({
 }
 
 export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayload }) {
-  const [routeId, setRouteId] = useState(payload.selectedRouteId);
+  // Rows pulled in by search rather than listed on the sheet.
+  const [offRoundRows, setOffRoundRows] = useState<BulkPaymentCustomerRow[]>([]);
+  const [billView, setBillView] = useState<BillQuickView | null>(null);
+  const [billViewFor, setBillViewFor] = useState<string | null>(null);
+  const [billViewLoading, setBillViewLoading] = useState(false);
+  const [vehicleId, setVehicleId] = useState(payload.selectedVehicleId);
+  const [shift, setShift] = useState<string>(payload.selectedShift);
   const [month, setMonth] = useState(payload.selectedMonth);
   const [paymentDate, setPaymentDate] = useState(payload.selectedPaymentDate);
   const [mode, setMode] = useState("CASH");
@@ -444,18 +521,28 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
   const [state, formAction, pending] = useActionState(createBulkRoutePayments, initialState);
 
   const customerById = useMemo(
-    () => new Map(payload.customers.map((customer) => [customer.customerId, customer])),
-    [payload.customers],
+    () =>
+      new Map(
+        [...payload.customers, ...offRoundRows].map((customer) => [customer.customerId, customer]),
+      ),
+    [payload.customers, offRoundRows],
   );
   const draftCustomerIds = useMemo(
     () => new Set(draftRows.map((row) => row.customerId)),
     [draftRows],
   );
   const selectedCustomer = selectedCustomerId ? customerById.get(selectedCustomerId) : undefined;
-  const selectionDirty = routeId !== payload.selectedRouteId || month !== payload.selectedMonth;
+  const selectionDirty =
+    vehicleId !== payload.selectedVehicleId ||
+    shift !== payload.selectedShift ||
+    month !== payload.selectedMonth;
 
+  // Search stays on THIS sheet by default. Widening to the whole city is a
+  // deliberate second step (see offRoundMatches) rather than the default,
+  // because a bigger candidate list makes picking the wrong similarly-named
+  // customer easier, and most collections are from people on the round.
   const suggestions = useMemo(() => {
-    if (!payload.selectedRouteId || selectionDirty) {
+    if (!payload.selectedVehicleId || selectionDirty) {
       return [];
     }
 
@@ -465,7 +552,25 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
       : payload.customers;
 
     return matches.slice(0, 12);
-  }, [payload.customers, payload.selectedRouteId, query, selectionDirty]);
+  }, [payload.customers, payload.selectedVehicleId, query, selectionDirty]);
+
+  // The escalation. Only people who still OWE something — you cannot collect
+  // from someone with no balance, and it keeps the widened set far smaller and
+  // sharper than "every customer".
+  const offRoundMatches = useMemo(() => {
+    const cleanQuery = query.trim();
+    if (!cleanQuery) {
+      return [];
+    }
+    return payload.offRoundCustomers
+      .filter(
+        (customer) =>
+          customer.customerName.toLowerCase().includes(cleanQuery.toLowerCase()) ||
+          customer.customerCode.toLowerCase().includes(cleanQuery.toLowerCase()) ||
+          (customer.customerArea?.toLowerCase().includes(cleanQuery.toLowerCase()) ?? false),
+      )
+      .slice(0, 12);
+  }, [payload.offRoundCustomers, query]);
 
   const tableRows = useMemo(() => {
     return draftRows
@@ -476,16 +581,30 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
       .filter((row): row is { row: DraftPaymentRow; customer: BulkPaymentCustomerRow } =>
         Boolean(row.customer),
       )
-      .sort((left, right) => left.customer.sequenceNo - right.customer.sequenceNo);
+      // Morning round, then evening, each in walking order; anything pulled in
+      // by search sits at the end, since it belongs to no round here.
+      .sort((left, right) => {
+        const rank = (row: { customer: BulkPaymentCustomerRow }) =>
+          row.customer.offRound ? 2 : row.customer.shift === "MORNING" ? 0 : 1;
+        const leftRank = rank(left);
+        const rightRank = rank(right);
+        return leftRank === rightRank
+          ? left.customer.sequenceNo - right.customer.sequenceNo
+          : leftRank - rightRank;
+      });
   }, [customerById, draftRows]);
 
   const hasInvalidRows = draftRows.some((row) => getPositiveAmount(row.amount) <= 0);
-  const saveRows = tableRows.map(({ row }) => ({
+  // routeId travels per row, not per batch: the sheet spans a vehicle's two
+  // rounds, and an off-round row belongs to neither, so the batch route would
+  // be the wrong answer for at least one of them.
+  const saveRows = tableRows.map(({ row, customer }) => ({
     customerId: row.customerId,
     amount: Number(row.amount),
+    routeId: customer.routeId,
   }));
   const draftTotal = saveRows.reduce((sum, row) => sum + getPositiveAmount(String(row.amount)), 0);
-  const canUseEntry = payload.dbConnected && !payload.error && !selectionDirty && payload.selectedRouteId !== "";
+  const canUseEntry = payload.dbConnected && !payload.error && !selectionDirty && payload.selectedVehicleId !== "";
   const canSave = canUseEntry && draftRows.length > 0 && !hasInvalidRows && !pending;
 
   usePageMetric(
@@ -501,11 +620,12 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
   // Sync local editing state to a freshly (re)loaded route/month/date payload,
   // during render (React's "adjust state while rendering" pattern), keyed on
   // the loaded selection so it only runs when the server payload changes.
-  const loadedSelectionKey = `${payload.selectedRouteId}|${payload.selectedMonth}|${payload.selectedPaymentDate}`;
+  const loadedSelectionKey = `${payload.selectedVehicleId}|${payload.selectedShift}|${payload.selectedMonth}|${payload.selectedPaymentDate}`;
   const [lastLoadedSelectionKey, setLastLoadedSelectionKey] = useState(loadedSelectionKey);
   if (loadedSelectionKey !== lastLoadedSelectionKey) {
     setLastLoadedSelectionKey(loadedSelectionKey);
-    setRouteId(payload.selectedRouteId);
+    setVehicleId(payload.selectedVehicleId);
+    setShift(payload.selectedShift);
     setMonth(payload.selectedMonth);
     setPaymentDate(payload.selectedPaymentDate);
     setQuery("");
@@ -561,6 +681,47 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
       });
     }, 40);
     window.setTimeout(() => setHighlightedCustomerId(null), 1800);
+  };
+
+  // Promotes a searched, off-sheet customer into a real row.
+  //
+  // The stamped route is the sheet's own — the round the money was collected
+  // on — NOT the round that bills them. Per-driver cash reconciliation needs
+  // who took it; the bill link is unaffected either way, since the ledger
+  // matches payments to bills by customer alone.
+  const openBillView = async (customer: BulkPaymentCustomerRow) => {
+    setBillViewFor(customer.customerName);
+    setBillViewLoading(true);
+    setBillView(null);
+    try {
+      setBillView(await fetchBillQuickView(customer.customerId, payload.selectedMonth));
+    } finally {
+      setBillViewLoading(false);
+    }
+  };
+
+  const selectOffRoundCustomer = (customer: OffRoundCustomerOption) => {
+    const row: BulkPaymentCustomerRow = {
+      customerId: customer.customerId,
+      customerCode: customer.customerCode,
+      customerName: customer.customerName,
+      customerArea: customer.customerArea,
+      customerMobile: null,
+      sequenceNo: 0,
+      routeId: payload.selectedRouteId,
+      routeCode: customer.routeLabel ?? "",
+      shift: "MORNING",
+      openingOutstanding: "0.00",
+      monthlyBillAmount: "0.00",
+      alreadyPaid: "0.00",
+      pendingAmount: customer.outstanding,
+      source: customer.source,
+      offRound: true,
+    };
+    setOffRoundRows((current) =>
+      current.some((entry) => entry.customerId === row.customerId) ? current : [...current, row],
+    );
+    selectCustomer(row);
   };
 
   const selectCustomer = (customer: BulkPaymentCustomerRow) => {
@@ -676,15 +837,17 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
   return (
     <>
       <section className="space-y-4 pb-20">
-        <RouteMonthToolbar
+        <VehicleRoundToolbar
           payload={payload}
-          routeId={routeId}
+          vehicleId={vehicleId}
+          shift={shift}
           month={month}
           paymentDate={paymentDate}
           mode={mode}
           status={status}
           dirty={selectionDirty}
-          onRouteIdChange={setRouteId}
+          onVehicleIdChange={setVehicleId}
+          onShiftChange={setShift}
           onMonthChange={setMonth}
           onPaymentDateChange={setPaymentDate}
           onModeChange={setMode}
@@ -710,6 +873,8 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
           onSuggestionsOpenChange={setSuggestionsOpen}
           onHighlightedIndexChange={setHighlightedIndex}
           onSelectCustomer={selectCustomer}
+          onSelectOffRoundCustomer={selectOffRoundCustomer}
+          offRoundMatches={offRoundMatches}
           onAddSelected={addSelectedCustomer}
           onClearDraft={clearDraftRows}
           canClearDraft={draftRows.length > 0 && !pending}
@@ -749,9 +914,38 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
                     <p className="mt-0.5 text-xs font-medium uppercase tracking-[0.1em] text-text-secondary">
                       {formatCustomerMeta(customer) || "-"}
                     </p>
+                    {/* Which round this stop belongs to. The sheet merges a
+                        vehicle's morning and evening rounds, and both number
+                        their customers from 1, so the row has to say. */}
+                    <span
+                      className={cn(
+                        "mt-1 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em]",
+                        customer.offRound
+                          ? "bg-status-warning-bg text-status-warning-text"
+                          : "bg-surface-muted text-text-secondary",
+                      )}
+                    >
+                      {customer.offRound
+                        ? "Off round"
+                        : `${customer.routeCode} · ${customer.shift === "MORNING" ? "Morning" : "Evening"}`}
+                    </span>
                   </div>,
-                  <span key="pending" className="block text-right font-semibold text-text-primary">
-                    {formatMoney(customer.pendingAmount)}
+                  <span key="pending" className="block text-right">
+                    <span className="block font-semibold text-text-primary">
+                      {formatMoney(customer.pendingAmount)}
+                    </span>
+                    {/* Says where the figure came from. An estimate is what
+                        you get before the month has been generated — it is
+                        computed from deliveries so far, not from an issued
+                        bill, so it is worth a second look before collecting. */}
+                    <span
+                      className={cn(
+                        "mt-0.5 block text-[10px] font-semibold uppercase tracking-[0.08em]",
+                        customer.source === "BILL" ? "text-text-muted" : "text-status-warning-text",
+                      )}
+                    >
+                      {customer.source === "BILL" ? "Bill" : "Estimate"}
+                    </span>
                   </span>,
                   <input
                     key="amount"
@@ -777,7 +971,18 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
                   >
                     {formatMoney(balanceAfter)}
                   </span>,
-                  <div key="action" className="flex justify-end">
+                  <div key="action" className="flex justify-end gap-1">
+                    {/* Verify before you take the money — opens the actual
+                        bill behind this row's figure. */}
+                    <IconButton
+                      type="button"
+                      disabled={pending}
+                      aria-label={`View bill for ${customer.customerName}`}
+                      title="View bill"
+                      onClick={() => openBillView(customer)}
+                    >
+                      <EyeIcon className="h-5 w-5" />
+                    </IconButton>
                     <IconButton
                       type="button"
                       tone="danger"
@@ -813,6 +1018,69 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
         <input type="hidden" name="notes" value={notes} readOnly />
         <input type="hidden" name="entriesJson" value={JSON.stringify(saveRows)} readOnly />
       </form>
+
+      <Dialog
+        open={billViewFor !== null}
+        onClose={() => {
+          setBillViewFor(null);
+          setBillView(null);
+        }}
+        title={billViewFor ?? "Bill"}
+        description={`Billing month ${payload.selectedMonth}`}
+      >
+        {billViewLoading ? (
+          <p className="text-sm text-text-secondary">Loading bill…</p>
+        ) : billView === null ? null : (
+          <div className="space-y-3">
+            {billView.message ? (
+              <p className="rounded-md bg-status-warning-bg px-3 py-2 text-sm text-status-warning-text">
+                {billView.message}
+              </p>
+            ) : null}
+
+            {billView.found ? (
+              <>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-text-secondary">
+                  <StatusBadge tone={billView.status === "LOCKED" ? "success" : "info"}>
+                    {billView.status}
+                  </StatusBadge>
+                  {billView.routeCode ? <span>Billed on {billView.routeCode}</span> : null}
+                </div>
+
+                <div className="overflow-x-auto rounded-md border border-surface-border">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-surface-muted text-xs uppercase tracking-wide text-text-secondary">
+                      <tr>
+                        <th className="px-3 py-2 text-left font-semibold">Product</th>
+                        <th className="px-3 py-2 text-right font-semibold">Qty</th>
+                        <th className="px-3 py-2 text-right font-semibold">Rate</th>
+                        <th className="px-3 py-2 text-right font-semibold">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-surface-border">
+                      {billView.items.map((item) => (
+                        <tr key={item.productId}>
+                          <td className="px-3 py-2 text-text-primary">{item.product}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{item.qty}</td>
+                          <td className="px-3 py-2 text-right tabular-nums">{item.rate}</td>
+                          <td className="px-3 py-2 text-right font-semibold tabular-nums">{item.amount}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <dl className="grid grid-cols-2 gap-2 text-sm">
+                  <BillLine label="Opening" value={billView.openingBalance} />
+                  <BillLine label="This month" value={billView.deliveryAmount} />
+                  <BillLine label="Paid" value={billView.paymentAmount} />
+                  <BillLine label="Closing" value={billView.closingBalance} strong />
+                </dl>
+              </>
+            ) : null}
+          </div>
+        )}
+      </Dialog>
 
       {draftRows.length > 0 ? (
         <StickyActionBar>
@@ -859,5 +1127,16 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
 
       {toast ? <Toast tone={toast.tone}>{toast.message}</Toast> : null}
     </>
+  );
+}
+
+function BillLine({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
+  return (
+    <div className="flex items-center justify-between rounded-md bg-surface-muted px-3 py-2">
+      <dt className="text-xs uppercase tracking-wide text-text-secondary">{label}</dt>
+      <dd className={strong ? "font-bold text-text-primary tabular-nums" : "font-semibold text-text-primary tabular-nums"}>
+        {value}
+      </dd>
+    </div>
   );
 }

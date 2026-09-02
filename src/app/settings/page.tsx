@@ -16,6 +16,9 @@ import {
 const emptyBillingRoutesPayload: BillingRoutesPayload = {
   dbConnected: true,
   customers: [],
+  selectedMonth: new Date().toISOString().slice(0, 7),
+  availableMonths: [],
+  readOnly: false,
 };
 
 const emptyArchivePayload: ArchivePayload = {
@@ -25,7 +28,12 @@ const emptyArchivePayload: ArchivePayload = {
   records: [],
 };
 
-export default async function SettingsPage() {
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<{ billingMonth?: string }>;
+}) {
+  const params = await searchParams;
   const cityId = await getCurrentCityId();
   const [{ profile }, currentUser] = await Promise.all([getBusinessProfile(cityId), getCurrentUser()]);
   const isSuperadmin = currentUser?.role === "SUPERADMIN";
@@ -42,7 +50,7 @@ export default async function SettingsPage() {
         getUsersPayload(),
         getAuditLogsPayload(),
         getArchivePayload(),
-        getBillingRoutesPayload(),
+        getBillingRoutesPayload({ month: params?.billingMonth }),
       ])
     : [
         { dbConnected: true, cities: [] },

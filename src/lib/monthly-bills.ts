@@ -37,6 +37,11 @@ export type MonthlyBillPayload = {
   customers: Array<{ id: string; code: string; name: string }>;
   routes: Array<{ id: string; code: string; name: string }>;
   bills: MonthlyBillRecord[];
+  // The month whose bills are loaded, and every month that has any. Bills are
+  // fetched one month at a time, so the picker can no longer derive its
+  // options from the rows on screen.
+  selectedMonth: string;
+  availableMonths: string[];
   statuses: Array<{ value: BillingStatus; label: string }>;
   error?: string;
 };
@@ -218,12 +223,15 @@ const statuses: MonthlyBillPayload["statuses"] = [
   { value: "CANCELLED", label: "Cancelled" },
 ];
 
-function fallbackPayload(error?: string): MonthlyBillPayload {
+function fallbackPayload(error?: string, month?: string): MonthlyBillPayload {
+  const fallbackMonth = month ?? new Date().toISOString().slice(0, 7);
   return {
     dbConnected: false,
     customers: [],
     routes: [],
     bills: [],
+    selectedMonth: fallbackMonth,
+    availableMonths: [fallbackMonth],
     statuses,
     error,
   };
@@ -379,10 +387,23 @@ function buildCalendarDays(
   return { calendarDays, calendarTotals };
 }
 
-export async function getMonthlyBillsPayload(): Promise<MonthlyBillPayload> {
+// Bills for ONE month, not every bill ever written.
+//
+// This used to load the whole city's history on every page load and filter it
+// in the browser. That grows without bound — roughly 620 bills a month at
+// current volume — and the page was already shipping a month of deliveries
+// alongside it. The month is now a server round trip, the same way the
+// Customer Summary tab has always worked.
+export async function getMonthlyBillsPayload(input?: {
+  month?: string;
+}): Promise<MonthlyBillPayload> {
+  const selectedMonth =
+    input?.month && /^\d{4}-\d{2}$/.test(input.month) ? input.month : new Date().toISOString().slice(0, 7);
+  const billingMonth = monthInputToDate(selectedMonth);
+
   try {
     const cityId = await getCurrentCityId();
-    const [customers, routes, bills] = await withDbTimeout(Promise.all([
+    const [customers, routes, bills, monthRows] = await withDbTimeout(Promise.all([
       prisma.customer.findMany({
         where: { cityId, isActive: true },
         orderBy: { code: "asc" },
@@ -402,7 +423,7 @@ export async function getMonthlyBillsPayload(): Promise<MonthlyBillPayload> {
         },
       }),
       prisma.monthlyBill.findMany({
-        where: { route: { cityId } },
+        where: { route: { cityId }, billingMonth },
         orderBy: [{ billingMonth: "desc" }, { createdAt: "desc" }],
         select: {
           id: true,
@@ -446,12 +467,28 @@ export async function getMonthlyBillsPayload(): Promise<MonthlyBillPayload> {
           },
         },
       }),
+      prisma.monthlyBill.groupBy({
+        by: ["billingMonth"],
+        where: { route: { cityId } },
+        orderBy: { billingMonth: "desc" },
+      }),
     ]), "Monthly bill data request");
+
+    // Which months exist at all. The dropdown used to build itself from the
+    // loaded bills, which stops working once only one month is loaded.
+    const availableMonths = [
+      ...new Set([
+        selectedMonth,
+        ...monthRows.map((row) => row.billingMonth.toISOString().slice(0, 7)),
+      ]),
+    ].sort((left, right) => right.localeCompare(left));
 
     return {
       dbConnected: true,
       customers,
       routes,
+      selectedMonth,
+      availableMonths,
       bills: bills.map((bill) => ({
         id: bill.id,
         customerId: bill.customerId,
@@ -487,7 +524,7 @@ export async function getMonthlyBillsPayload(): Promise<MonthlyBillPayload> {
     const message =
       error instanceof Error ? error.message : "Unable to load monthly bill data.";
 
-    return fallbackPayload(message);
+    return fallbackPayload(message, selectedMonth);
   }
 }
 

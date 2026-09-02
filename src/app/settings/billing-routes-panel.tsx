@@ -3,6 +3,7 @@
 import { useActionState } from "react";
 import { setBillingRoute, type BillingRouteActionState } from "@/app/settings/billing-route-actions";
 import { EmptyState } from "@/components/admin/empty-state";
+import { StatusBadge } from "@/components/admin/status-badge";
 import { StatusChip } from "@/components/admin/status-chip";
 import type { BillingRouteCustomer } from "@/lib/settings";
 
@@ -23,13 +24,45 @@ function formatMonth(month: string) {
 export function BillingRoutesPanel({
   dbConnected,
   customers,
+  selectedMonth,
+  availableMonths,
+  readOnly,
   error,
 }: {
   dbConnected: boolean;
   customers: BillingRouteCustomer[];
+  selectedMonth: string;
+  availableMonths: string[];
+  readOnly: boolean;
   error?: string;
 }) {
   const [state, formAction, pending] = useActionState(setBillingRoute, initialState);
+
+  const monthPicker = (
+    <form action="/settings" className="flex flex-wrap items-end gap-2">
+      <label className="flex flex-col gap-1.5">
+        <span className="text-xs font-medium text-text-secondary">Month</span>
+        <select
+          name="billingMonth"
+          defaultValue={selectedMonth}
+          className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
+        >
+          {availableMonths.map((month) => (
+            <option key={month} value={month}>
+              {month}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        type="submit"
+        className="h-10 rounded-md border border-surface-border-strong bg-surface px-4 text-sm font-semibold text-text-secondary transition hover:bg-surface-muted"
+      >
+        Show
+      </button>
+      {readOnly ? <StatusBadge tone="neutral">Read only — already billed</StatusBadge> : null}
+    </form>
+  );
 
   if (!dbConnected) {
     return <EmptyState message={error ?? "Unable to load billing routes."} />;
@@ -37,7 +70,10 @@ export function BillingRoutesPanel({
 
   if (customers.length === 0) {
     return (
-      <EmptyState message="No customer runs more than one route this month, so every bill already has exactly one home." />
+      <div className="space-y-4">
+        {monthPicker}
+        <EmptyState message="No customer runs more than one route in this month, so every bill already has exactly one home." />
+      </div>
     );
   }
 
@@ -45,6 +81,7 @@ export function BillingRoutesPanel({
 
   return (
     <div className="space-y-4">
+      {monthPicker}
       <div className="rounded-lg border border-surface-border bg-surface p-4">
         <p className="text-sm text-text-secondary">
           These customers run more than one route in a month. Each gets a{" "}
@@ -89,7 +126,7 @@ export function BillingRoutesPanel({
                   <input type="hidden" name="routeId" value={route.routeId} readOnly />
                   <button
                     type="submit"
-                    disabled={pending || route.billsHere}
+                    disabled={pending || route.billsHere || readOnly}
                     className={`rounded-md border px-3 py-2 text-left text-xs transition disabled:cursor-default ${
                       route.billsHere
                         ? "border-accent bg-accent/10 text-text-primary"

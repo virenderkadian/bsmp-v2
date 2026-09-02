@@ -8,7 +8,7 @@ export default async function MonthlyBillsPage({
 }) {
   const params = await searchParams;
   const [payload, summaryPayload] = await Promise.all([
-    getMonthlyBillsPayload(),
+    getMonthlyBillsPayload({ month: params.month }),
     getMonthlyBillSummary({ month: params.month, routeId: params.routeId }),
   ]);
 

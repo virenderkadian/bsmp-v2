@@ -156,7 +156,9 @@ export async function getAnalyticsPayload(input?: {
         }),
         prisma.dailyRouteEntry.findMany({
           where: {
-            route: { cityId, vehicleId: { not: null } },
+            // Every route has a vehicle now (see the route_vehicle_required
+            // migration), so there is nothing left to filter out here.
+            route: { cityId },
             entryDate: { gte: new Date(queryFrom), lte: new Date(to) },
           },
           select: {
@@ -190,7 +192,6 @@ export async function getAnalyticsPayload(input?: {
 
     for (const entry of entries) {
       const vehicleId = entry.route.vehicleId;
-      if (!vehicleId) continue;
       const date = toDateInput(entry.entryDate);
 
       let vehicleDates = qtyByVehicleDate.get(vehicleId);

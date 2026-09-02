@@ -6,6 +6,7 @@ const prisma = new PrismaClient();
 const suffix = Date.now().toString().slice(-8);
 
 let cityId: string;
+let vehicleId: string;
 let customerId: string;
 let customer2Id: string;
 
@@ -23,7 +24,7 @@ const EMPTY_MONTH = new Date("2020-04-01T00:00:00.000Z");
 
 async function makeRoute(code: string) {
   const route = await prisma.route.create({
-    data: { cityId, code: `${code}${suffix}`, name: `Eligibility Test ${code}`, shift: "MORNING" },
+    data: { cityId, code: `${code}${suffix}`, name: `Eligibility Test ${code}`, shift: "MORNING", vehicleId },
   });
   return route.id;
 }
@@ -72,6 +73,13 @@ beforeAll(async () => {
   const city = await prisma.city.create({ data: { code: `EL${suffix}`, name: `Eligibility Test City ${suffix}` } });
   cityId = city.id;
 
+  // A route requires a vehicle now — the collections sheet is organised
+  // by vehicle, so a route without one has nowhere to appear.
+  const vehicle = await prisma.vehicle.create({
+    data: { cityId, code: `VH${suffix}`, name: "Archive Test Vehicle" },
+  });
+  vehicleId = vehicle.id;
+
   const customer = await prisma.customer.create({
     data: { cityId, code: `ELC${suffix}`, name: "Eligibility Test Customer", openingBalance: 0 },
   });
@@ -108,6 +116,8 @@ afterAll(async () => {
   await prisma.monthlyBill.deleteMany({ where: { routeId: { in: routeIds } } });
   await prisma.route.deleteMany({ where: { id: { in: routeIds } } });
   await prisma.customer.deleteMany({ where: { id: { in: [customerId, customer2Id] } } });
+  // Vehicles hold a city FK, so they have to go before the city.
+  await prisma.vehicle.deleteMany({ where: { cityId: cityId } });
   await prisma.city.deleteMany({ where: { id: cityId } });
   await prisma.$disconnect();
 });

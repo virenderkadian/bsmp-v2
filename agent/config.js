@@ -77,7 +77,10 @@ export function loadConfig() {
     openwa: {
       baseUrl: read("OPENWA_BASE_URL", "http://localhost:2785").replace(/\/$/, ""),
       apiKey: required("OPENWA_API_KEY"),
-      sessionId: read("OPENWA_SESSION_ID", "bsmp"),
+      // Required, with no default: OpenWA resolves sessions by id only (a
+      // UUID), never by the name typed when creating one. A friendly-looking
+      // default like "bsmp" would fail at the first send with a confusing 404.
+      sessionId: required("OPENWA_SESSION_ID"),
       timeoutMs: readNumber("OPENWA_TIMEOUT_MS", 30_000),
     },
 

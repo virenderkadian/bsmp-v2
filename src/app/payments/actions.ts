@@ -5,7 +5,9 @@ import { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentCityId } from "@/lib/current-city";
+import { getCurrentUser } from "@/lib/current-user";
 import { logAudit } from "@/lib/audit";
+import { getBillQuickView, type BillQuickView } from "@/lib/payments";
 
 export type PaymentActionState = {
   status: "idle" | "success" | "error";
@@ -37,6 +39,11 @@ const paymentStatusSchema = z.object({
 const bulkPaymentEntrySchema = z.object({
   customerId: z.string().trim().min(1, "Customer is required."),
   amount: z.coerce.number().positive("Amount must be greater than zero."),
+  // The round the money was actually collected on. The sheet spans a vehicle's
+  // morning AND evening rounds, so this is per row, not per batch. Optional so
+  // an off-round row — someone found by search who isn't on either round — can
+  // fall back to the sheet's route.
+  routeId: z.string().trim().optional(),
 });
 
 const bulkPaymentSchema = z.object({
@@ -98,53 +105,6 @@ function parseBulkEntries(entriesJson: string) {
 
 function getBillingMonth(month: string) {
   return new Date(`${month}-01T00:00:00.000Z`);
-}
-
-export async function createPayment(
-  _prevState: PaymentActionState = idleState,
-  formData: FormData,
-): Promise<PaymentActionState> {
-  void _prevState;
-
-  const parsed = paymentSchema.safeParse({
-    customerId: getValue(formData, "customerId"),
-    routeId: getValue(formData, "routeId"),
-    amount: getValue(formData, "amount"),
-    paymentDate: getValue(formData, "paymentDate"),
-    mode: getValue(formData, "mode"),
-    status: getValue(formData, "status"),
-    referenceNo: getValue(formData, "referenceNo"),
-    notes: getValue(formData, "notes"),
-  });
-
-  if (!parsed.success) {
-    return { status: "error", message: parsed.error.issues[0]?.message };
-  }
-
-  return runAction(async () => {
-    const cityId = await getCurrentCityId();
-    const payment = await prisma.payment.create({
-      data: {
-        customerId: parsed.data.customerId,
-        routeId: parsed.data.routeId,
-        amount: parsed.data.amount,
-        paymentDate: new Date(parsed.data.paymentDate),
-        mode: parsed.data.mode,
-        status: parsed.data.status,
-        referenceNo: asOptional(parsed.data.referenceNo ?? ""),
-        notes: asOptional(parsed.data.notes ?? ""),
-      },
-    });
-
-    await logAudit(prisma, {
-      cityId,
-      entityType: "Payment",
-      entityId: payment.id,
-      action: "CREATE",
-      summary: `Recorded payment of ${payment.amount} for customer ${payment.customerId}.`,
-      after: payment,
-    });
-  }, "Payment recorded.");
 }
 
 export async function updatePayment(
@@ -267,6 +227,7 @@ export async function createBulkRoutePayments(
   const entries = entriesParsed.data.map((entry) => ({
     customerId: entry.customerId,
     amount: Number(entry.amount.toFixed(2)),
+    routeId: entry.routeId?.trim() ? entry.routeId.trim() : parsed.data.routeId,
   }));
   const uniqueCustomerIds = new Set(entries.map((entry) => entry.customerId));
 
@@ -283,25 +244,45 @@ export async function createBulkRoutePayments(
 
   return runAction(async () => {
     const cityId = await getCurrentCityId();
+    // collectedById has existed on Payment since the beginning and nothing has
+    // ever written it, so there is no record of who took the money. Per-driver
+    // cash reconciliation needs exactly that.
+    const collectedBy = await getCurrentUser();
 
     await prisma.$transaction(async (transaction) => {
-      const sequenceCustomers = await transaction.monthlyRouteCustomerSequence.findMany({
+      // Scoped to the CITY, not to the selected round's sequence.
+      //
+      // Money arrives from a person, not from a round: a customer billed on
+      // another vehicle's round, or one dropped from the sequence still owing,
+      // can hand over cash and it has to be recordable. The old check —
+      // "active in the selected route/month sequence" — rejected exactly those
+      // payments, which is why the sheet could find a customer by search and
+      // then refuse to save them. City membership is the real boundary here;
+      // it is what stops a payment being written against another city.
+      const validCustomers = await transaction.customer.findMany({
         where: {
-          routeId: parsed.data.routeId,
-          sequenceMonth: billingMonth,
-          status: "ACTIVE",
-          customerId: {
-            in: entries.map((entry) => entry.customerId),
-          },
+          cityId,
+          isActive: true,
+          id: { in: entries.map((entry) => entry.customerId) },
         },
-        select: {
-          customerId: true,
-        },
+        select: { id: true },
       });
-      const validCustomerIds = new Set(sequenceCustomers.map((line) => line.customerId));
+      const validCustomerIds = new Set(validCustomers.map((customer) => customer.id));
 
       if (validCustomerIds.size !== entries.length) {
-        throw new Error("One or more customers are not active in the selected route/month sequence.");
+        throw new Error("One or more customers are not active in this city.");
+      }
+
+      // Every stamped route must belong to this city too, or a crafted payload
+      // could file a payment under someone else's round.
+      const routeIds = [...new Set(entries.map((entry) => entry.routeId))];
+      const validRoutes = await transaction.route.findMany({
+        where: { cityId, id: { in: routeIds } },
+        select: { id: true },
+      });
+
+      if (validRoutes.length !== routeIds.length) {
+        throw new Error("One or more payment rows reference a route outside this city.");
       }
 
       const batch = await transaction.paymentBatch.create({
@@ -324,7 +305,12 @@ export async function createBulkRoutePayments(
         data: entries.map((entry) => ({
           batchId: batch.id,
           customerId: entry.customerId,
-          routeId: parsed.data.routeId,
+          // The round it was collected on, which for an off-round row differs
+          // from the round that bills them. Per-driver cash reconciliation
+          // needs who took the money, and the bill link never depends on this
+          // — the ledger matches payments to bills by customer alone.
+          routeId: entry.routeId,
+          collectedById: collectedBy?.id ?? null,
           amount: entry.amount,
           paymentDate: new Date(parsed.data.paymentDate),
           mode: parsed.data.mode,
@@ -344,4 +330,10 @@ export async function createBulkRoutePayments(
       });
     });
   }, `Saved ${entries.length} route payments.`);
+}
+
+// Fetched on demand when the operator opens a row's bill, rather than shipped
+// with the sheet — see getBillQuickView.
+export async function fetchBillQuickView(customerId: string, month: string): Promise<BillQuickView> {
+  return getBillQuickView(customerId, month);
 }

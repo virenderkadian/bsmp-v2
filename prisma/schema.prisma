@@ -167,14 +167,14 @@ model Route {
   code               String
   name               String
   shift              RouteShift
-  vehicleId          String?                        @db.Uuid
+  vehicleId          String                         @db.Uuid
   driverName         String?
   driverPhone        String?
   isActive           Boolean                        @default(true)
   createdAt          DateTime                       @default(now())
   updatedAt          DateTime                       @updatedAt
   city               City                           @relation(fields: [cityId], references: [id])
-  vehicle            Vehicle?                       @relation(fields: [vehicleId], references: [id])
+  vehicle            Vehicle                        @relation(fields: [vehicleId], references: [id])
   assignments        RouteCustomerAssignment[]
   monthlySequences   MonthlyRouteCustomerSequence[]
   entries            DailyRouteEntry[]

@@ -45,6 +45,22 @@ export async function setBillingRoute(
 
   const sequenceMonth = monthInputToDate(parsed.data.sequenceMonth);
 
+  // Past months are viewable but not editable. The panel hides the controls,
+  // which is presentation, not protection — this is the check that holds. A
+  // past month is already billed, so moving where its bill sits would rewrite
+  // history rather than fix anything.
+  const now = new Date();
+  const currentMonthKey = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+    .toISOString()
+    .slice(0, 7);
+
+  if (parsed.data.sequenceMonth < currentMonthKey) {
+    return {
+      status: "error",
+      message: "That month has already been billed. Billing routes can only be changed from the current month onward.",
+    };
+  }
+
   try {
     const cityId = await getCurrentCityId();
 

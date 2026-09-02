@@ -119,11 +119,15 @@ function RouteDialog({
               { value: "EVENING", label: "Evening" },
             ]}
           />
+          {/* Required. The collections sheet lists rounds by vehicle, so a
+              route without one has no home and its customers cannot be
+              collected from. */}
           <SelectInput
             label="Vehicle"
             name="vehicleId"
+            required
             defaultValue={draft.vehicleId}
-            placeholder="Unassigned for now"
+            placeholder="Select a vehicle"
             options={vehicles.map((vehicle) => ({
               value: vehicle.id,
               label: `${vehicle.code} - ${vehicle.name}`,

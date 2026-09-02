@@ -41,7 +41,10 @@ const routeSchema = z.object({
   code: z.string().trim().min(2, "Code is required."),
   name: z.string().trim().min(2, "Route name is required."),
   shift: z.enum(["MORNING", "EVENING"]),
-  vehicleId: z.string().trim().optional(),
+  // Required. A route without a vehicle is invisible on the collections sheet,
+  // which is organised by vehicle — its customers would silently become
+  // uncollectable. The column is NOT NULL for the same reason.
+  vehicleId: z.string().trim().min(1, "Vehicle is required."),
   driverName: z.string().trim().optional(),
   driverPhone: z.string().trim().optional(),
 });
@@ -313,7 +316,7 @@ export async function createRoute(_prevState: ActionState = idleState, formData:
         code: parsed.data.code,
         name: parsed.data.name,
         shift: parsed.data.shift,
-        vehicleId: asOptional(parsed.data.vehicleId ?? ""),
+        vehicleId: parsed.data.vehicleId,
         driverName: asNullable(parsed.data.driverName ?? ""),
         driverPhone: asNullable(parsed.data.driverPhone ?? ""),
       },
@@ -344,7 +347,7 @@ export async function updateRoute(_prevState: ActionState = idleState, formData:
         code: parsed.data.code,
         name: parsed.data.name,
         shift: parsed.data.shift,
-        vehicleId: asOptional(parsed.data.vehicleId ?? ""),
+        vehicleId: parsed.data.vehicleId,
         driverName: asNullable(parsed.data.driverName ?? ""),
         driverPhone: asNullable(parsed.data.driverPhone ?? ""),
       },

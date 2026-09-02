@@ -49,8 +49,23 @@ internet — the machine holds your accounting data.
 
 ## 2. Pair the WhatsApp number
 
-Open the dashboard at `http://localhost:2785`, create a session called `bsmp`,
-start it, and scan the QR code with the phone holding the number.
+Open the dashboard and create a session — the payload is `{"name": "bsmp"}`;
+the name is 3-50 characters, letters/numbers/hyphens only, and there is no `id`
+field (the server assigns one). Start it, then scan the QR with the phone
+holding the number.
+
+**Note the session's `id` from the response.** OpenWA looks sessions up by id
+only, never by name, so the id — not `bsmp` — is what goes in `.env` as
+`OPENWA_SESSION_ID`.
+
+If the dashboard errors while creating a session, the API works directly:
+
+```
+curl -X POST http://localhost:2785/api/sessions -H "X-API-Key: KEY" ^
+  -H "Content-Type: application/json" -d "{\"name\":\"bsmp\"}"
+curl -X POST http://localhost:2785/api/sessions/<id>/start -H "X-API-Key: KEY"
+curl http://localhost:2785/api/sessions/<id>/qr -H "X-API-Key: KEY"
+```
 
 Use a **spare number**, not your main business line. If WhatsApp ever restricts
 it, you do not want that to be the number printed on your bills.
@@ -80,6 +95,26 @@ node index.js
 
 You should see the session confirmed, then either `queue empty — waiting` or
 messages going out one at a time.
+
+## Everyday use: the two buttons
+
+`agent\windows\` holds two double-clickable files. They are deliberately
+separate — see the note below.
+
+**`START WHATSAPP.bat`** — brings the connection up. Starts OpenWA, waits for
+it, starts the WhatsApp session, opens the dashboard. Safe to run any time: it
+sends nothing. Use it to pair a number, rescan an expired QR, or just check the
+session is healthy.
+
+**`START SENDING.bat`** — starts the agent, which drains the queue and sends
+real messages to real customers. Requires the first one to be running already.
+
+They are two buttons rather than one on purpose: bringing WhatsApp up is
+harmless and routine, while sending is neither. Bundling them would mean that
+checking the connection also starts messaging customers.
+
+Both keep their window open. Closing the sending window stops sending; nothing
+is lost, because unsent messages stay queued and resume next time.
 
 ## 5. Run it as a Windows service
 
