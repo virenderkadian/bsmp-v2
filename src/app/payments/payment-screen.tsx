@@ -3,7 +3,6 @@
 import { useActionState, useEffect, useMemo, useState, type FormEvent } from "react";
 import Link from "next/link";
 import {
-  createPayment,
   setPaymentStatus,
   type PaymentActionState,
   updatePayment,
@@ -13,7 +12,7 @@ import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { DataTable } from "@/components/admin/data-table";
 import { Dialog } from "@/components/admin/dialog";
 import { FormInput } from "@/components/admin/form-input";
-import { PencilSquareIcon, PlusIcon } from "@/components/admin/icons";
+import { PencilSquareIcon } from "@/components/admin/icons";
 import { KeyboardForm } from "@/components/admin/keyboard-form";
 import { usePageMetric } from "@/components/admin/page-metric";
 import { Pagination } from "@/components/admin/pagination";
@@ -143,26 +142,21 @@ function getDefaultNextStatus(status: string) {
 
 function PaymentDialog({
   open,
-  mode,
   dbConnected,
   draft,
   payload,
   onClose,
 }: {
   open: boolean;
-  mode: "create" | "edit";
   dbConnected: boolean;
   draft: PaymentDraft;
   payload: PaymentsPayload;
   onClose: () => void;
 }) {
-  const [createState, createAction, createPending] = useActionState(createPayment, initialState);
-  const [updateState, updateAction, updatePending] = useActionState(updatePayment, initialState);
+  const [state, formAction, pending] = useActionState(updatePayment, initialState);
   const [customerId, setCustomerId] = useState(draft.customerId);
   const [routeId, setRouteId] = useState(draft.routeId);
   const [paymentDate, setPaymentDate] = useState(draft.paymentDate);
-  const state = mode === "create" ? createState : updateState;
-  const pending = mode === "create" ? createPending : updatePending;
 
   // The dialog is mounted fresh each time it opens (the parent renders it
   // conditionally), so the useState initializers above already seed the
@@ -206,10 +200,6 @@ function PaymentDialog({
   }
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    if (mode !== "edit") {
-      return;
-    }
-
     const formData = new FormData(event.currentTarget);
     const hasChanges =
       normalizeText(formData.get("customerId")) !== draft.customerId ||
@@ -231,16 +221,16 @@ function PaymentDialog({
     <Dialog
       open={open}
       onClose={onClose}
-      title={mode === "create" ? "Add payment" : "Edit payment"}
+      title="Edit payment"
       description="Record and verify customer collections used by monthly bills and reconciliation."
       footer={null}
     >
       <KeyboardForm
-        action={mode === "create" ? createAction : updateAction}
+        action={formAction}
         onSubmit={handleSubmit}
         className="space-y-4"
       >
-        {mode === "edit" && draft.id ? <input type="hidden" name="id" value={draft.id} /> : null}
+        {draft.id ? <input type="hidden" name="id" value={draft.id} /> : null}
         <div className="grid gap-4 md:grid-cols-2">
           <SelectInput
             label="Customer"
@@ -318,7 +308,7 @@ function PaymentDialog({
             Cancel
           </SecondaryButton>
           <PrimaryButton type="submit" disabled={pending || payload.customers.length === 0 || payload.routes.length === 0}>
-            {pending ? "Saving..." : mode === "create" ? "Save payment" : "Update payment"}
+            {pending ? "Saving..." : "Update payment"}
           </PrimaryButton>
         </div>
       </KeyboardForm>
@@ -472,11 +462,6 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
     setDate("");
   };
 
-  const openCreateDialog = () => {
-    setSelectedPaymentId(null);
-    setDialogMode("create");
-  };
-
   const openEditDialog = (paymentId: string) => {
     setSelectedPaymentId(paymentId);
     setDialogMode("edit");
@@ -501,20 +486,18 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
             ]}
           />
           <div className="flex items-center gap-2 lg:shrink-0">
+            {/* The only way in. One-off entry used to live here as a dialog,
+                but it asked for a customer, a route and an amount with no
+                indication of what was actually owed — the collections sheet
+                shows the outstanding figure beside every name, and reaches
+                anyone by search, so it does that job strictly better. */}
             <Link
               href="/payments/bulk-entry"
-              className="inline-flex h-10 items-center justify-center rounded-md border border-surface-border-strong bg-surface px-4 text-sm font-semibold text-text-secondary transition hover:bg-surface-muted"
+              className="inline-flex h-10 items-center justify-center rounded-md bg-accent px-4 text-sm font-semibold text-white transition hover:opacity-90"
             >
-              Bulk route entry
+              Collect payments
             </Link>
-            <PrimaryButton
-              type="button"
-              onClick={openCreateDialog}
-              icon={<PlusIcon className="h-4 w-4" />}
-              className="h-10 shrink-0 rounded-md px-4 text-sm font-semibold"
-            >
-              Add payment
-            </PrimaryButton>
+
           </div>
         </div>
 
@@ -647,21 +630,9 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
         </section>
       </section>
 
-      {dialogMode === "create" ? (
-        <PaymentDialog
-          open
-          mode="create"
-          dbConnected={payload.dbConnected}
-          draft={emptyPaymentDraft}
-          payload={payload}
-          onClose={closeDialog}
-        />
-      ) : null}
-
       {dialogMode === "edit" && selectedPayment ? (
         <PaymentDialog
           open
-          mode="edit"
           dbConnected={payload.dbConnected}
           draft={draft}
           payload={payload}

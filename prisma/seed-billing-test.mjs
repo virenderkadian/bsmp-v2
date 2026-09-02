@@ -76,11 +76,33 @@ async function main() {
   const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const monthLabel = monthStart.toISOString().slice(0, 7);
 
+  // Both test rounds run on ONE vehicle, mirroring production: every vehicle
+  // covers a morning and an evening round, and a customer on both is billed on
+  // only one of them. A route without a vehicle no longer exists — the column
+  // is NOT NULL, and the collections sheet is organised by vehicle.
+  const vehicle = await prisma.vehicle.findFirst({
+    where: { cityId: city.id, isActive: true },
+    select: { id: true, code: true },
+  });
+  if (!vehicle) throw new Error("No active vehicle in this city — a route needs one.");
+
   const morning = await prisma.route.create({
-    data: { cityId: city.id, code: MORNING_CODE, name: "Billing Test Morning", shift: "MORNING" },
+    data: {
+      cityId: city.id,
+      code: MORNING_CODE,
+      name: "Billing Test Morning",
+      shift: "MORNING",
+      vehicleId: vehicle.id,
+    },
   });
   const evening = await prisma.route.create({
-    data: { cityId: city.id, code: EVENING_CODE, name: "Billing Test Evening", shift: "EVENING" },
+    data: {
+      cityId: city.id,
+      code: EVENING_CODE,
+      name: "Billing Test Evening",
+      shift: "EVENING",
+      vehicleId: vehicle.id,
+    },
   });
 
   const customer = await prisma.customer.create({

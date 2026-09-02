@@ -69,6 +69,9 @@ export function SettingsTabs({
         <BillingRoutesPanel
           dbConnected={billingRoutesPayload.dbConnected}
           customers={billingRoutesPayload.customers}
+          selectedMonth={billingRoutesPayload.selectedMonth}
+          availableMonths={billingRoutesPayload.availableMonths}
+          readOnly={billingRoutesPayload.readOnly}
           error={billingRoutesPayload.error}
         />
       ) : null}

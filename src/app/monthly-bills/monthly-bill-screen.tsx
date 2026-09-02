@@ -315,11 +315,25 @@ function BillStatusButton({
 function CustomerSummaryTab({
   summaryPayload,
   statuses,
+  status,
 }: {
   summaryPayload: MonthlyBillSummaryPayload;
   statuses: MonthlyBillPayload["statuses"];
+  status: string;
 }) {
   const { selectedMonth } = summaryPayload;
+  // A customer with no bill yet has a null status, so filtering by any status
+  // correctly excludes them rather than lumping them in with Draft.
+  const routes = useMemo(
+    () =>
+      status === ""
+        ? summaryPayload.routes
+        : summaryPayload.routes.map((route) => ({
+            ...route,
+            rows: route.rows.filter((row) => row.status === status),
+          })),
+    [status, summaryPayload.routes],
+  );
 
   return (
     <div className="space-y-4">
@@ -341,10 +355,10 @@ function CustomerSummaryTab({
         </div>
       ) : null}
 
-      {summaryPayload.routes.length === 0 ? (
+      {routes.length === 0 ? (
         <EmptyState message="No active routes found for this selection." />
       ) : (
-        summaryPayload.routes.map((route) => (
+        routes.map((route) => (
           <section key={route.id} className="rounded-lg border border-surface-border bg-surface shadow-sm">
             <div className="flex items-center justify-between gap-3 border-b border-surface-border bg-surface-muted px-4 py-3">
               <div>
@@ -554,7 +568,13 @@ export function MonthlyBillScreen({
   // collecting on) — the server resolves it into summaryPayload.selectedMonth.
   const defaultMonth = summaryPayload.selectedMonth;
   const [search, setSearch] = useState("");
-  const [month, setMonth] = useState(summaryPayload.selectedMonth);
+  // Which money column the min/max applies to. "Bills over 5,000" means
+  // something different for each: closing balance is what is still owed (the
+  // chase-the-money view), delivery amount is the month's milk (the
+  // spot-an-anomaly view).
+  const [amountField, setAmountField] = useState<"closingBalance" | "deliveryAmount">("closingBalance");
+  const [minAmount, setMinAmount] = useState("");
+  const [maxAmount, setMaxAmount] = useState("");
   const [routeId, setRouteId] = useState("");
   const [status, setStatus] = useState("");
   const [generateOpen, setGenerateOpen] = useState(false);
@@ -596,13 +616,21 @@ export function MonthlyBillScreen({
         bill.routeCode.toLowerCase().includes(query) ||
         bill.routeName.toLowerCase().includes(query) ||
         bill.itemSummary.toLowerCase().includes(query);
-      const matchesMonth = month === "" || formatMonthInput(bill.billingMonth) === month;
       const matchesRoute = routeId === "" || bill.routeId === routeId;
       const matchesStatus = status === "" || bill.status === status;
 
-      return matchesSearch && matchesMonth && matchesRoute && matchesStatus;
+      // Blank means unbounded on that side, so "min only" and "max only" both
+      // work rather than needing a full range.
+      const amount = Number(amountField === "closingBalance" ? bill.closingBalance : bill.deliveryAmount);
+      const min = minAmount.trim() === "" ? null : Number(minAmount);
+      const max = maxAmount.trim() === "" ? null : Number(maxAmount);
+      const matchesAmount =
+        (min === null || Number.isNaN(min) || amount >= min) &&
+        (max === null || Number.isNaN(max) || amount <= max);
+
+      return matchesSearch && matchesRoute && matchesStatus && matchesAmount;
     });
-  }, [month, payload.bills, routeId, search, status]);
+  }, [amountField, maxAmount, minAmount, payload.bills, routeId, search, status]);
 
   const totals = useMemo(() => {
     return filteredBills.reduce(
@@ -622,13 +650,18 @@ export function MonthlyBillScreen({
   }, [filteredBills]);
 
   const hasActiveFilters =
-    search.trim() !== "" || month !== defaultMonth || routeId !== "" || status !== "";
+    search.trim() !== "" ||
+    routeId !== "" ||
+    status !== "" ||
+    minAmount.trim() !== "" ||
+    maxAmount.trim() !== "";
 
   const resetFilters = () => {
     setSearch("");
-    setMonth(defaultMonth);
     setRouteId("");
     setStatus("");
+    setMinAmount("");
+    setMaxAmount("");
   };
 
   // Month/route are shared by both tabs, but the mechanisms differ: the
@@ -636,14 +669,13 @@ export function MonthlyBillScreen({
   // the already-loaded list client-side. One filter bar, handlers switch on
   // the active tab.
   const isSummary = activeTab === "summary";
-  const filterMonth = isSummary ? summaryMonth : month;
+  const filterMonth = isSummary ? summaryMonth : payload.selectedMonth;
   const filterRouteId = isSummary ? summaryRouteId : routeId;
+  // Both tabs reload on a month change now. The Bills tab used to filter an
+  // already-loaded list of every bill ever written; it fetches one month at a
+  // time instead, so the month has to reach the server.
   const onFilterMonthChange = (value: string) => {
-    if (isSummary) {
-      goToSummary(value, summaryRouteId);
-    } else {
-      setMonth(value);
-    }
+    goToSummary(value, isSummary ? summaryRouteId : routeId);
   };
   const onFilterRouteChange = (value: string) => {
     if (isSummary) {
@@ -701,6 +733,16 @@ export function MonthlyBillScreen({
             }))}
             className="h-10 rounded-md bg-surface text-sm"
           />
+          {/* Status applies to both tabs — the Summary rows carry a bill
+              status too, and "show me only what's still Draft" is the same
+              question on either. */}
+          <SelectInput
+            value={status}
+            onChange={(event) => setStatus(event.target.value)}
+            placeholder="All statuses"
+            options={payload.statuses}
+            className="h-10 rounded-md bg-surface text-sm"
+          />
           {isSummary ? (
             <SecondaryButton
               type="button"
@@ -727,12 +769,36 @@ export function MonthlyBillScreen({
                   className="h-10"
                 />
               </div>
+              {/* Which column the amounts below apply to — "over ₹5,000" of
+                  what is genuinely ambiguous on a bill. */}
               <SelectInput
-                value={status}
-                onChange={(event) => setStatus(event.target.value)}
-                placeholder="All statuses"
-                options={payload.statuses}
+                value={amountField}
+                onChange={(event) =>
+                  setAmountField(event.target.value as "closingBalance" | "deliveryAmount")
+                }
+                options={[
+                  { value: "closingBalance", label: "Closing balance" },
+                  { value: "deliveryAmount", label: "This month" },
+                ]}
                 className="h-10 rounded-md bg-surface text-sm"
+              />
+              <input
+                type="number"
+                inputMode="decimal"
+                value={minAmount}
+                onChange={(event) => setMinAmount(event.target.value)}
+                placeholder="Min ₹"
+                aria-label="Minimum amount"
+                className="h-10 w-24 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
+              />
+              <input
+                type="number"
+                inputMode="decimal"
+                value={maxAmount}
+                onChange={(event) => setMaxAmount(event.target.value)}
+                placeholder="Max ₹"
+                aria-label="Maximum amount"
+                className="h-10 w-24 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
               />
               {hasActiveFilters ? (
                 <SecondaryButton type="button" onClick={resetFilters} className="h-10 px-4 text-sm font-medium">
@@ -745,7 +811,7 @@ export function MonthlyBillScreen({
       </div>
 
       {activeTab === "summary" ? (
-        <CustomerSummaryTab summaryPayload={summaryPayload} statuses={payload.statuses} />
+        <CustomerSummaryTab summaryPayload={summaryPayload} statuses={payload.statuses} status={status} />
       ) : null}
 
       {activeTab === "bills" ? (

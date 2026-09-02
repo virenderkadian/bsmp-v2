@@ -55,8 +55,15 @@ beforeAll(async () => {
   const city = await db.city.create({ data: { code: `WA${suffix}`, name: `WhatsApp Test City ${suffix}` } });
   cityId = city.id;
 
+  // A route requires a vehicle now — see the route_vehicle_required migration.
+  const vehicle = await db.vehicle.create({
+    data: { cityId, code: `WAV-${suffix}`, name: "WA Test Vehicle" },
+  });
+
   const [route, product] = await Promise.all([
-    db.route.create({ data: { cityId, code: `WAR-${suffix}`, name: "WA Test Route", shift: "MORNING" } }),
+    db.route.create({
+      data: { cityId, code: `WAR-${suffix}`, name: "WA Test Route", shift: "MORNING", vehicleId: vehicle.id },
+    }),
     db.product.create({
       data: { cityId, code: `WAP-${suffix}`, name: "WA Test Milk", unit: "ltr", defaultRate: 62 },
     }),
@@ -86,6 +93,8 @@ afterAll(async () => {
   await db.customer.deleteMany({ where: { id: { in: customerIds } } });
   await db.product.deleteMany({ where: { id: productId } });
   await db.route.deleteMany({ where: { id: routeId } });
+  // Vehicles hold a city FK, so they have to go before the city.
+  await db.vehicle.deleteMany({ where: { cityId: cityId } });
   await db.city.deleteMany({ where: { id: cityId } });
   await db.$disconnect();
 });

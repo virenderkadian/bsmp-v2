@@ -1,6 +1,7 @@
 import type { BusinessProfile } from "@prisma/client";
 import { getCurrentCityId } from "@/lib/current-city";
 import { withDbTimeout } from "@/lib/db-timeout";
+import { monthInputToDate } from "@/lib/monthly-route-sequence";
 import { prisma } from "@/lib/prisma";
 import { getEligibleArchiveCandidates, type ArchiveCandidate } from "@/lib/archive/eligibility";
 import { isArchiveStorageConfigured } from "@/lib/archive/storage";
@@ -333,6 +334,12 @@ export type BillingRouteCustomer = {
 export type BillingRoutesPayload = {
   dbConnected: boolean;
   customers: BillingRouteCustomer[];
+  // The month being viewed, and every month that has any multi-route customer
+  // to look at, so the picker offers real choices rather than a blank calendar.
+  selectedMonth: string;
+  availableMonths: string[];
+  // Past months are readable but not editable — see the note on the loader.
+  readOnly: boolean;
   error?: string;
 };
 
@@ -341,17 +348,33 @@ export type BillingRoutesPayload = {
 // made in the add-to-sequence dialog — and for the ones that predate it, where
 // the migration picked the earliest route on their behalf.
 //
-// Scoped to months from the current one onward: past months are already billed
-// and changing where those appear would rewrite history, not fix anything.
-export async function getBillingRoutesPayload(): Promise<BillingRoutesPayload> {
+// Editing is limited to the current month and later: a past month is already
+// billed, and moving where its bill sits would rewrite history rather than fix
+// anything. VIEWING is not limited — being unable to see which route carried a
+// customer's bill in June is just a blind spot, so older months load read-only.
+export async function getBillingRoutesPayload(input?: {
+  month?: string;
+}): Promise<BillingRoutesPayload> {
+  const now = new Date();
+  const currentMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const currentMonthKey = currentMonth.toISOString().slice(0, 7);
+  const selectedMonth =
+    input?.month && /^\d{4}-\d{2}$/.test(input.month) ? input.month : currentMonthKey;
+  const readOnly = selectedMonth < currentMonthKey;
+
   try {
     const cityId = await getCurrentCityId();
-    const now = new Date();
-    const fromMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+    const fromMonth = monthInputToDate(selectedMonth);
 
     const rows = await withDbTimeout(
       prisma.monthlyRouteCustomerSequence.findMany({
-        where: { route: { cityId }, status: "ACTIVE", sequenceMonth: { gte: fromMonth } },
+        where: {
+          route: { cityId },
+          status: "ACTIVE",
+          // A past month is shown on its own; the current month still carries
+          // future ones with it, since those are all editable.
+          sequenceMonth: readOnly ? fromMonth : { gte: fromMonth },
+        },
         orderBy: [{ sequenceMonth: "asc" }, { createdAt: "asc" }],
         select: {
           customerId: true,
@@ -402,11 +425,31 @@ export async function getBillingRoutesPayload(): Promise<BillingRoutesPayload> {
           left.customerName.localeCompare(right.customerName),
       );
 
-    return { dbConnected: true, customers };
+    // Every month that actually has a multi-route customer, so the picker
+    // offers months worth opening rather than an open-ended calendar.
+    const monthRows = await withDbTimeout(
+      prisma.monthlyRouteCustomerSequence.groupBy({
+        by: ["sequenceMonth"],
+        where: { route: { cityId }, status: "ACTIVE" },
+        orderBy: { sequenceMonth: "desc" },
+      }),
+      "Billing route months request",
+    );
+    const availableMonths = [
+      ...new Set([
+        currentMonthKey,
+        ...monthRows.map((row) => row.sequenceMonth.toISOString().slice(0, 7)),
+      ]),
+    ].sort((left, right) => right.localeCompare(left));
+
+    return { dbConnected: true, customers, selectedMonth, availableMonths, readOnly };
   } catch (error) {
     return {
       dbConnected: false,
       customers: [],
+      selectedMonth,
+      availableMonths: [currentMonthKey],
+      readOnly,
       error: error instanceof Error ? error.message : "Unable to load billing routes.",
     };
   }

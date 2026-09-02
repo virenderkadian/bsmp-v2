@@ -8,6 +8,7 @@ const prisma = new PrismaClient();
 const BILLING_MONTH = new Date("2027-03-01T00:00:00.000Z");
 
 let cityId: string;
+let vehicleId: string;
 let routeId: string;
 let customerId: string;
 let productId: string;
@@ -17,8 +18,15 @@ beforeAll(async () => {
   const city = await prisma.city.create({ data: { code: `XA${suffix}`, name: `Archive Test City ${suffix}` } });
   cityId = city.id;
 
+  // A route requires a vehicle now — the collections sheet is organised
+  // by vehicle, so a route without one has nowhere to appear.
+  const vehicle = await prisma.vehicle.create({
+    data: { cityId, code: `VH${suffix}`, name: "Archive Test Vehicle" },
+  });
+  vehicleId = vehicle.id;
+
   const route = await prisma.route.create({
-    data: { cityId, code: `AR${suffix}`, name: "Archive Test Route", shift: "MORNING" },
+    data: { cityId, code: `AR${suffix}`, name: "Archive Test Route", shift: "MORNING", vehicleId },
   });
   routeId = route.id;
 
@@ -57,6 +65,8 @@ afterAll(async () => {
   await prisma.product.deleteMany({ where: { id: productId } });
   await prisma.customer.deleteMany({ where: { id: customerId } });
   await prisma.route.deleteMany({ where: { id: routeId } });
+  // Vehicles hold a city FK, so they have to go before the city.
+  await prisma.vehicle.deleteMany({ where: { cityId: cityId } });
   await prisma.city.deleteMany({ where: { id: cityId } });
   await prisma.$disconnect();
 });

@@ -128,13 +128,18 @@ describe("restore against the real partial unique index (dev DB)", () => {
   beforeAll(async () => {
     const suffix = Date.now().toString().slice(-8);
     const city = await prisma.city.create({ data: { code: `RS${suffix}`, name: `RestoreSeq ${suffix}` } });
+    // A route requires a vehicle now — see the route_vehicle_required
+    // migration. The collections sheet is organised by vehicle.
+    const vehicle = await prisma.vehicle.create({
+      data: { cityId: city.id, code: `RSV${suffix}`, name: "Test Vehicle" },
+    });
     cityId = city.id;
     const routeA = await prisma.route.create({
-      data: { cityId, code: `RSA-${suffix}`, name: "Restore A", shift: "MORNING" },
+      data: { cityId, code: `RSA-${suffix}`, name: "Restore A", shift: "MORNING", vehicleId: vehicle.id },
     });
     routeAId = routeA.id;
     const routeB = await prisma.route.create({
-      data: { cityId, code: `RSB-${suffix}`, name: "Restore B", shift: "EVENING" },
+      data: { cityId, code: `RSB-${suffix}`, name: "Restore B", shift: "EVENING", vehicleId: vehicle.id },
     });
     routeBId = routeB.id;
     const customer = await prisma.customer.create({
@@ -147,6 +152,8 @@ describe("restore against the real partial unique index (dev DB)", () => {
     await prisma.monthlyRouteCustomerSequence.deleteMany({ where: { routeId: { in: [routeAId, routeBId] } } });
     await prisma.route.deleteMany({ where: { id: { in: [routeAId, routeBId] } } });
     await prisma.customer.deleteMany({ where: { cityId } });
+    // Vehicles hold a city FK, so they have to go before the city.
+    await prisma.vehicle.deleteMany({ where: { cityId: cityId } });
     await prisma.city.deleteMany({ where: { id: cityId } });
     await prisma.$disconnect();
   });

@@ -121,14 +121,19 @@ async function runBillPipeline() {
 beforeAll(async () => {
   const suffix = Date.now().toString().slice(-8);
   const city = await prisma.city.create({ data: { code: `BR${suffix}`, name: `BillingRoute Test ${suffix}` } });
+  // A route requires a vehicle now — see the route_vehicle_required
+  // migration. The collections sheet is organised by vehicle.
+  const vehicle = await prisma.vehicle.create({
+    data: { cityId: city.id, code: `BRV${suffix}`, name: "Test Vehicle" },
+  });
   cityId = city.id;
 
   const morning = await prisma.route.create({
-    data: { cityId, code: `BRM-${suffix}`, name: "Test Morning", shift: "MORNING" },
+    data: { cityId, code: `BRM-${suffix}`, name: "Test Morning", shift: "MORNING", vehicleId: vehicle.id },
   });
   morningRouteId = morning.id;
   const evening = await prisma.route.create({
-    data: { cityId, code: `BRE-${suffix}`, name: "Test Evening", shift: "EVENING" },
+    data: { cityId, code: `BRE-${suffix}`, name: "Test Evening", shift: "EVENING", vehicleId: vehicle.id },
   });
   eveningRouteId = evening.id;
 
@@ -159,6 +164,8 @@ afterAll(async () => {
   await prisma.route.deleteMany({ where: { id: { in: routeIds } } });
   await prisma.customer.deleteMany({ where: { cityId } });
   await prisma.product.deleteMany({ where: { cityId } });
+  // Vehicles hold a city FK, so they have to go before the city.
+  await prisma.vehicle.deleteMany({ where: { cityId: cityId } });
   await prisma.city.deleteMany({ where: { id: cityId } });
   await prisma.$disconnect();
 });
