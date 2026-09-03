@@ -495,6 +495,11 @@ function AddCustomerBar({
 }
 
 export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayload }) {
+  // Identifies THIS draft to the server, which uses it as the batch's primary
+  // key — so a double click or a retried request cannot write a second batch.
+  // A new one is minted after every successful save, below.
+  const [submissionId, setSubmissionId] = useState(() => crypto.randomUUID());
+
   // Rows pulled in by search rather than listed on the sheet.
   const [offRoundRows, setOffRoundRows] = useState<BulkPaymentCustomerRow[]>([]);
   const [billView, setBillView] = useState<BillQuickView | null>(null);
@@ -638,7 +643,12 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
   // clear the tally. Keyed on the message so it fires once per result.
   // Refocusing the search box is a DOM side effect handled in the effect below
   // (no setState there), keeping this render-time block setState-only.
-  const actionResultKey = state.status !== "idle" && state.message ? `${state.status}:${state.message}` : null;
+  // Keyed on the server's per-result token, NOT the message. The bulk success
+  // message is only "Saved N route payments.", so two consecutive saves of the
+  // same row count produced an identical key and the second result was
+  // swallowed — no toast, and the sheet kept its rows as though nothing had
+  // happened.
+  const actionResultKey = state.status !== "idle" && state.token ? state.token : null;
   const [processedActionKey, setProcessedActionKey] = useState<string | null>(null);
   if (actionResultKey && state.message && actionResultKey !== processedActionKey) {
     setProcessedActionKey(actionResultKey);
@@ -651,6 +661,8 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
       setQuery("");
       setAmount("");
       setSelectedCustomerId(null);
+      // The next draft is a different submission.
+      setSubmissionId(crypto.randomUUID());
     }
   }
 
@@ -1009,6 +1021,7 @@ export function BulkPaymentEntryScreen({ payload }: { payload: BulkPaymentPayloa
       </section>
 
       <form id="bulk-route-payment-form" action={formAction}>
+        <input type="hidden" name="submissionId" value={submissionId} readOnly />
         <input type="hidden" name="routeId" value={payload.selectedRouteId} readOnly />
         <input type="hidden" name="billingMonth" value={payload.selectedMonth} readOnly />
         <input type="hidden" name="paymentDate" value={paymentDate} readOnly />
