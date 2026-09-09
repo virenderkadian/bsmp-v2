@@ -17,6 +17,15 @@ export type MonthlySequenceCustomerOption = {
   name: string;
   area: string | null;
   mobile: string | null;
+  // The round this customer is already on this month, if any.
+  //
+  // Names collide constantly here — 10 groups share a name exactly and 154
+  // customers share a leading house number — and the customer code means
+  // nothing to whoever is building a sheet. The area and the round are what
+  // actually tell two people apart, so both belong in the picker. Without
+  // this, an existing customer was picked for the wrong round and the mistake
+  // only surfaced weeks later.
+  currentRound: string | null;
 };
 
 export type MonthlySequenceLineRecord = {
@@ -99,7 +108,7 @@ export async function getMonthlyRouteSequencePayload(input?: {
 
   try {
     const cityId = await getCurrentCityId();
-    const [routes, customers] = await withDbTimeout(Promise.all([
+    const [routes, customers, currentRounds] = await withDbTimeout(Promise.all([
       prisma.route.findMany({
         where: { cityId, isActive: true },
         orderBy: [{ shift: "asc" }, { code: "asc" }],
@@ -126,7 +135,19 @@ export async function getMonthlyRouteSequencePayload(input?: {
           mobile: true,
         },
       }),
+      prisma.monthlyRouteCustomerSequence.findMany({
+        where: { route: { cityId }, sequenceMonth, status: "ACTIVE" },
+        select: { customerId: true, route: { select: { name: true } } },
+      }),
     ]), "Monthly route sequence options request");
+
+    const roundByCustomer = new Map(
+      currentRounds.map((row) => [row.customerId, row.route.name]),
+    );
+    const customerOptions: MonthlySequenceCustomerOption[] = customers.map((customer) => ({
+      ...customer,
+      currentRound: roundByCustomer.get(customer.id) ?? null,
+    }));
 
     const routeOptions = routes.map((route) => ({
       id: route.id,
@@ -148,7 +169,7 @@ export async function getMonthlyRouteSequencePayload(input?: {
         ...fallbackPayload(selectedMonth),
         dbConnected: true,
         routes: routeOptions,
-        customers,
+        customers: customerOptions,
       };
     }
 
@@ -198,7 +219,7 @@ export async function getMonthlyRouteSequencePayload(input?: {
       return {
         dbConnected: true,
         routes: routeOptions,
-        customers,
+        customers: customerOptions,
         lines: lines.map((line) => ({
           id: line.id,
           customerId: line.customerId,
@@ -218,7 +239,7 @@ export async function getMonthlyRouteSequencePayload(input?: {
       return {
         dbConnected: true,
         routes: routeOptions,
-        customers,
+        customers: customerOptions,
         lines: [],
         selectedRouteId,
         selectedMonth,

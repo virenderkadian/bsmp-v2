@@ -77,12 +77,15 @@ function TotalsRow({
 export default async function MonthlyBillSummaryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ month?: string; routeId?: string }>;
+  searchParams: Promise<{ month?: string; routeId?: string; status?: string }>;
 }) {
   const params = await searchParams;
   const payload = await getMonthlyBillSummary({
     month: params.month,
     routeId: params.routeId,
+    // Applied server-side: this is a separate route from the screen, so a
+    // filter that is not in the URL simply does not reach the paper.
+    status: params.status,
   });
   const productIds = payload.products.map((product) => product.id);
   const rowCount = payload.routes.reduce((total, route) => total + route.rows.length, 0);
@@ -117,6 +120,13 @@ export default async function MonthlyBillSummaryPage({
             <p className="mt-0.5 text-sm text-slate-600">
               {formatMonth(payload.selectedMonth)} · {rowCount} customer{rowCount === 1 ? "" : "s"}
             </p>
+            {/* A filtered sheet has to say so. Someone handed this page has no
+                way to tell a partial list from the whole month otherwise. */}
+            {params.status ? (
+              <p className="mt-0.5 text-sm font-semibold text-amber-700">
+                Filtered: {params.status.charAt(0)}{params.status.slice(1).toLowerCase()} bills only
+              </p>
+            ) : null}
           </div>
           <p className="text-xs text-slate-600">Printed {printedAt}</p>
         </div>

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useMemo, useState } from "react";
+import { useActionState, useCallback, useEffect, useMemo, useState } from "react";
 import {
   generateMonthlyBills,
   type MonthlyBillActionState,
@@ -18,6 +18,7 @@ import { FormInput } from "@/components/admin/form-input";
 import { BillIcon, ViewIcon } from "@/components/admin/icons";
 import { KeyboardForm } from "@/components/admin/keyboard-form";
 import { MasterTabs } from "@/components/admin/master-tabs";
+import { FilterButton, FilterChip, FilterPanel } from "@/components/admin/filter-panel";
 import { PageActions } from "@/components/admin/page-actions";
 import { SearchInput } from "@/components/admin/search-input";
 import { SelectInput } from "@/components/admin/select-input";
@@ -312,28 +313,66 @@ function BillStatusButton({
   );
 }
 
+// Blank on either side means unbounded, so "min only" and "max only" both
+// work rather than requiring a full range.
+function withinAmountRange(value: number, minAmount: string, maxAmount: string) {
+  const min = minAmount.trim() === "" ? null : Number(minAmount);
+  const max = maxAmount.trim() === "" ? null : Number(maxAmount);
+
+  return (
+    (min === null || Number.isNaN(min) || value >= min) &&
+    (max === null || Number.isNaN(max) || value <= max)
+  );
+}
+
 function CustomerSummaryTab({
   summaryPayload,
   statuses,
   status,
+  search,
+  amountField,
+  minAmount,
+  maxAmount,
 }: {
   summaryPayload: MonthlyBillSummaryPayload;
   statuses: MonthlyBillPayload["statuses"];
   status: string;
+  search: string;
+  amountField: "closingBalance" | "deliveryAmount";
+  minAmount: string;
+  maxAmount: string;
 }) {
   const { selectedMonth } = summaryPayload;
-  // A customer with no bill yet has a null status, so filtering by any status
-  // correctly excludes them rather than lumping them in with Draft.
-  const routes = useMemo(
-    () =>
-      status === ""
-        ? summaryPayload.routes
-        : summaryPayload.routes.map((route) => ({
-            ...route,
-            rows: route.rows.filter((row) => row.status === status),
-          })),
-    [status, summaryPayload.routes],
-  );
+  // Every filter applies on both tabs, so the panel holds the same controls
+  // whichever one is open. A customer with no bill yet has a null status, so
+  // filtering by status correctly excludes them rather than lumping them in
+  // with Draft.
+  const routes = useMemo(() => {
+    const query = search.trim().toLowerCase();
+
+    return summaryPayload.routes.map((route) => ({
+      ...route,
+      rows: route.rows.filter((row) => {
+        if (status !== "" && row.status !== status) {
+          return false;
+        }
+        if (
+          query !== "" &&
+          !row.customerCode.toLowerCase().includes(query) &&
+          !row.customerName.toLowerCase().includes(query) &&
+          !(row.customerArea?.toLowerCase().includes(query) ?? false)
+        ) {
+          return false;
+        }
+        // pendingAmount is the Summary's name for what the Bills tab calls the
+        // closing balance — the same figure, so one control drives both.
+        const amount = Number(
+          amountField === "closingBalance" ? row.pendingAmount : row.deliveryAmount,
+        );
+        return withinAmountRange(amount, minAmount, maxAmount);
+      }),
+    }));
+  }, [amountField, maxAmount, minAmount, search, status, summaryPayload.routes]);
 
   return (
     <div className="space-y-4">
@@ -374,7 +413,9 @@ function CustomerSummaryTab({
                 disabled={route.rows.length === 0}
                 onClick={() => {
                   window.open(
-                    `/monthly-bills/summary?month=${selectedMonth}&routeId=${route.id}`,
+                    `/monthly-bills/summary?month=${selectedMonth}&routeId=${route.id}${
+                      status ? `&status=${status}` : ""
+                    }`,
                     PRINT_WINDOW_NAME,
                   );
                 }}
@@ -572,6 +613,7 @@ export function MonthlyBillScreen({
   // something different for each: closing balance is what is still owed (the
   // chase-the-money view), delivery amount is the month's milk (the
   // spot-an-anomaly view).
+  const [filterPanelOpen, setFilterPanelOpen] = useState(false);
   const [amountField, setAmountField] = useState<"closingBalance" | "deliveryAmount">("closingBalance");
   const [minAmount, setMinAmount] = useState("");
   const [maxAmount, setMaxAmount] = useState("");
@@ -581,16 +623,24 @@ export function MonthlyBillScreen({
   const [printSummaryOpen, setPrintSummaryOpen] = useState(false);
 
   const { selectedMonth: summaryMonth, selectedRouteId: summaryRouteId } = summaryPayload;
-  const goToSummary = (nextMonth: string, nextRouteId: string) => {
-    const params = new URLSearchParams();
-    params.set("month", nextMonth);
-    if (nextRouteId) {
-      params.set("routeId", nextRouteId);
-    }
-    router.push(`/monthly-bills?${params.toString()}`);
-  };
+  const goToSummary = useCallback(
+    (nextMonth: string, nextRouteId: string) => {
+      const params = new URLSearchParams();
+      params.set("month", nextMonth);
+      if (nextRouteId) {
+        params.set("routeId", nextRouteId);
+      }
+      router.push(`/monthly-bills?${params.toString()}`);
+    },
+    [router],
+  );
+  // Print URLs carry the filters. These are separate server routes, so
+  // whatever is not in the URL is simply not applied — which is why a filtered
+  // screen used to print the whole month.
   const printAllHref = summaryRouteId
-    ? `/monthly-bills/print-all?month=${summaryMonth}&routeId=${summaryRouteId}`
+    ? `/monthly-bills/print-all?month=${summaryMonth}&routeId=${summaryRouteId}${
+        status ? `&status=${status}` : ""
+      }`
     : null;
 
   // Months (YYYY-MM) that still have at least one non-final bill (Draft or
@@ -619,14 +669,10 @@ export function MonthlyBillScreen({
       const matchesRoute = routeId === "" || bill.routeId === routeId;
       const matchesStatus = status === "" || bill.status === status;
 
-      // Blank means unbounded on that side, so "min only" and "max only" both
-      // work rather than needing a full range.
+      // Same rule as the Summary tab, so the one control cannot mean two
+      // different things depending on which tab is open.
       const amount = Number(amountField === "closingBalance" ? bill.closingBalance : bill.deliveryAmount);
-      const min = minAmount.trim() === "" ? null : Number(minAmount);
-      const max = maxAmount.trim() === "" ? null : Number(maxAmount);
-      const matchesAmount =
-        (min === null || Number.isNaN(min) || amount >= min) &&
-        (max === null || Number.isNaN(max) || amount <= max);
+      const matchesAmount = withinAmountRange(amount, minAmount, maxAmount);
 
       return matchesSearch && matchesRoute && matchesStatus && matchesAmount;
     });
@@ -649,19 +695,15 @@ export function MonthlyBillScreen({
     );
   }, [filteredBills]);
 
-  const hasActiveFilters =
-    search.trim() !== "" ||
-    routeId !== "" ||
-    status !== "" ||
-    minAmount.trim() !== "" ||
-    maxAmount.trim() !== "";
 
   const resetFilters = () => {
     setSearch("");
-    setRouteId("");
     setStatus("");
     setMinAmount("");
     setMaxAmount("");
+    // Route goes through the shared handler, which navigates on the Summary
+    // tab rather than only setting local state.
+    onFilterRouteChange("");
   };
 
   // Month/route are shared by both tabs, but the mechanisms differ: the
@@ -677,13 +719,48 @@ export function MonthlyBillScreen({
   const onFilterMonthChange = (value: string) => {
     goToSummary(value, isSummary ? summaryRouteId : routeId);
   };
-  const onFilterRouteChange = (value: string) => {
-    if (isSummary) {
-      goToSummary(summaryMonth, value);
-    } else {
-      setRouteId(value);
+  const onFilterRouteChange = useCallback(
+    (value: string) => {
+      if (isSummary) {
+        goToSummary(summaryMonth, value);
+      } else {
+        setRouteId(value);
+      }
+    },
+    [goToSummary, isSummary, summaryMonth],
+  );
+
+  // One entry per filter that is actually narrowing the view. Drives the count
+  // on the button and the chips beside it, so both always agree.
+  const activeFilterChips = useMemo(() => {
+    const chips: Array<{ key: string; label: string; clear: () => void }> = [];
+    const routeLabel = payload.routes.find((route) => route.id === filterRouteId);
+
+    if (filterRouteId !== "" && routeLabel) {
+      chips.push({
+        key: "route",
+        label: routeLabel.code,
+        clear: () => onFilterRouteChange(""),
+      });
     }
-  };
+    if (status !== "") {
+      const label = payload.statuses.find((entry) => entry.value === status)?.label ?? status;
+      chips.push({ key: "status", label, clear: () => setStatus("") });
+    }
+    if (search.trim() !== "") {
+      chips.push({ key: "search", label: `“${search.trim()}”`, clear: () => setSearch("") });
+    }
+    if (minAmount.trim() !== "") {
+      chips.push({ key: "min", label: `≥ ₹${minAmount.trim()}`, clear: () => setMinAmount("") });
+    }
+    if (maxAmount.trim() !== "") {
+      chips.push({ key: "max", label: `≤ ₹${maxAmount.trim()}`, clear: () => setMaxAmount("") });
+    }
+
+    return chips;
+  }, [filterRouteId, maxAmount, minAmount, onFilterRouteChange, payload.routes, payload.statuses, search, status]);
+
+  const activeFilterCount = activeFilterChips.length;
 
   return (
     <>
@@ -716,33 +793,16 @@ export function MonthlyBillScreen({
             onChange={setActiveTab}
             className="w-fit shrink-0"
           />
+          {/* Month stays out of the panel: it is the context you are working
+              in rather than a filter, and it reloads the page. */}
           <input
             type="month"
             value={filterMonth}
             onChange={(event) => onFilterMonthChange(event.target.value)}
             className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
-            aria-label="Filter by billing month"
+            aria-label="Billing month"
           />
-          <SelectInput
-            value={filterRouteId}
-            onChange={(event) => onFilterRouteChange(event.target.value)}
-            placeholder="All routes"
-            options={payload.routes.map((route) => ({
-              value: route.id,
-              label: `${route.code} - ${route.name}`,
-            }))}
-            className="h-10 rounded-md bg-surface text-sm"
-          />
-          {/* Status applies to both tabs — the Summary rows carry a bill
-              status too, and "show me only what's still Draft" is the same
-              question on either. */}
-          <SelectInput
-            value={status}
-            onChange={(event) => setStatus(event.target.value)}
-            placeholder="All statuses"
-            options={payload.statuses}
-            className="h-10 rounded-md bg-surface text-sm"
-          />
+          <FilterButton activeCount={activeFilterCount} onClick={() => setFilterPanelOpen(true)} />
           {isSummary ? (
             <SecondaryButton
               type="button"
@@ -758,60 +818,123 @@ export function MonthlyBillScreen({
             >
               Print all bills
             </SecondaryButton>
-          ) : (
-            <>
-              <div className="min-w-[200px] flex-1">
-                <SearchInput
-                  name="search"
-                  placeholder="Search customer, route, product"
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  className="h-10"
-                />
-              </div>
-              {/* Which column the amounts below apply to — "over ₹5,000" of
-                  what is genuinely ambiguous on a bill. */}
-              <SelectInput
-                value={amountField}
-                onChange={(event) =>
-                  setAmountField(event.target.value as "closingBalance" | "deliveryAmount")
-                }
-                options={[
-                  { value: "closingBalance", label: "Closing balance" },
-                  { value: "deliveryAmount", label: "This month" },
-                ]}
-                className="h-10 rounded-md bg-surface text-sm"
-              />
-              <input
-                type="number"
-                inputMode="decimal"
-                value={minAmount}
-                onChange={(event) => setMinAmount(event.target.value)}
-                placeholder="Min ₹"
-                aria-label="Minimum amount"
-                className="h-10 w-24 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
-              />
-              <input
-                type="number"
-                inputMode="decimal"
-                value={maxAmount}
-                onChange={(event) => setMaxAmount(event.target.value)}
-                placeholder="Max ₹"
-                aria-label="Maximum amount"
-                className="h-10 w-24 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
-              />
-              {hasActiveFilters ? (
-                <SecondaryButton type="button" onClick={resetFilters} className="h-10 px-4 text-sm font-medium">
-                  Clear
-                </SecondaryButton>
-              ) : null}
-            </>
-          )}
+          ) : null}
         </div>
+
+        {/* A chip per active filter. Collapsing the controls behind a button is
+            only safe if the screen still says what it is showing — a hidden
+            filter that quietly removes rows is worse than a crowded toolbar. */}
+        {activeFilterChips.length > 0 ? (
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
+            {activeFilterChips.map((chip) => (
+              <FilterChip key={chip.key} label={chip.label} onClear={chip.clear} />
+            ))}
+            <button
+              type="button"
+              onClick={resetFilters}
+              className="text-xs font-semibold text-accent underline underline-offset-2"
+            >
+              Clear all
+            </button>
+          </div>
+        ) : null}
       </div>
 
+      <FilterPanel
+        open={filterPanelOpen}
+        onClose={() => setFilterPanelOpen(false)}
+        onClear={resetFilters}
+        activeCount={activeFilterCount}
+      >
+        <SelectInput
+          label="Route"
+          value={filterRouteId}
+          onChange={(event) => onFilterRouteChange(event.target.value)}
+          placeholder="All routes"
+          options={payload.routes.map((route) => ({
+            value: route.id,
+            label: `${route.code} - ${route.name}`,
+          }))}
+          className="h-10 rounded-md bg-surface text-sm"
+        />
+
+        {/* Status applies to both tabs — the Summary rows carry a bill status
+            too, and "show me only what is still Draft" is the same question on
+            either. */}
+        <SelectInput
+          label="Bill status"
+          value={status}
+          onChange={(event) => setStatus(event.target.value)}
+          placeholder="All statuses"
+          options={payload.statuses}
+          className="h-10 rounded-md bg-surface text-sm"
+        />
+
+        <label className="flex flex-col gap-1.5">
+          <span className="text-xs font-medium text-text-secondary">Search</span>
+          <SearchInput
+            name="search"
+            placeholder="Customer, code, or area"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            className="h-10"
+          />
+        </label>
+
+        {/* Which column the amounts apply to — "over ₹5,000" of what is
+            genuinely ambiguous on a bill. Named for the figure rather than the
+            column, since the two tabs label it differently. */}
+        <SelectInput
+          label="Amount applies to"
+          value={amountField}
+          onChange={(event) =>
+            setAmountField(event.target.value as "closingBalance" | "deliveryAmount")
+          }
+          options={[
+            { value: "closingBalance", label: "Outstanding" },
+            { value: "deliveryAmount", label: "This month" },
+          ]}
+          className="h-10 rounded-md bg-surface text-sm"
+        />
+
+        <div className="grid grid-cols-2 gap-3">
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-text-secondary">Minimum ₹</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              value={minAmount}
+              onChange={(event) => setMinAmount(event.target.value)}
+              placeholder="Any"
+              aria-label="Minimum amount"
+              className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
+            />
+          </label>
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium text-text-secondary">Maximum ₹</span>
+            <input
+              type="number"
+              inputMode="decimal"
+              value={maxAmount}
+              onChange={(event) => setMaxAmount(event.target.value)}
+              placeholder="Any"
+              aria-label="Maximum amount"
+              className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
+            />
+          </label>
+        </div>
+      </FilterPanel>
+
       {activeTab === "summary" ? (
-        <CustomerSummaryTab summaryPayload={summaryPayload} statuses={payload.statuses} status={status} />
+        <CustomerSummaryTab
+          summaryPayload={summaryPayload}
+          statuses={payload.statuses}
+          status={status}
+          search={search}
+          amountField={amountField}
+          minAmount={minAmount}
+          maxAmount={maxAmount}
+        />
       ) : null}
 
       {activeTab === "bills" ? (

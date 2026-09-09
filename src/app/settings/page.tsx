@@ -6,6 +6,7 @@ import {
   getArchivePayload,
   getAuditLogsPayload,
   getBillingRoutesPayload,
+  getDuplicateNamesPayload,
   getBusinessProfile,
   getCitiesPayload,
   getUsersPayload,
@@ -44,6 +45,7 @@ export default async function SettingsPage({
     { dbConnected: auditLogsConnected, logs: auditLogs },
     archivePayload,
     billingRoutesPayload,
+    duplicateNamesPayload,
   ] = isSuperadmin
     ? await Promise.all([
         getCitiesPayload(),
@@ -51,6 +53,7 @@ export default async function SettingsPage({
         getAuditLogsPayload(),
         getArchivePayload(),
         getBillingRoutesPayload({ month: params?.billingMonth }),
+        getDuplicateNamesPayload(),
       ])
     : [
         { dbConnected: true, cities: [] },
@@ -58,6 +61,7 @@ export default async function SettingsPage({
         { dbConnected: true, logs: [] },
         emptyArchivePayload,
         emptyBillingRoutesPayload,
+        { dbConnected: true, groups: [], unresolvableCount: 0 },
       ];
 
   return (
@@ -74,6 +78,7 @@ export default async function SettingsPage({
           auditLogs={auditLogs}
           archivePayload={archivePayload}
           billingRoutesPayload={billingRoutesPayload}
+          duplicateNamesPayload={duplicateNamesPayload}
         />
       ) : (
         <BasicSettingsTabs profile={profile} />

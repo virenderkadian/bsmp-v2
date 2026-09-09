@@ -454,3 +454,102 @@ export async function getBillingRoutesPayload(input?: {
     };
   }
 }
+
+export type DuplicateNameGroup = {
+  name: string;
+  customers: Array<{
+    code: string;
+    area: string | null;
+    round: string | null;
+    // True when nothing distinguishes this record from its namesake — no area
+    // to tell them apart. These are the ones that genuinely cannot be picked
+    // correctly, and the only ones worth chasing.
+    unresolvable: boolean;
+  }>;
+};
+
+export type DuplicateNamesPayload = {
+  dbConnected: boolean;
+  groups: DuplicateNameGroup[];
+  unresolvableCount: number;
+  error?: string;
+};
+
+// Customers sharing a name within a city.
+//
+// Not a defect list — RAHUL really is four different people, and 10 groups
+// share a name exactly. It is a review queue, ordered so the ones that cannot
+// be told apart at all (a shared name AND no area) come first. Those are the
+// three records where picking the wrong customer is unavoidable rather than
+// merely easy.
+export async function getDuplicateNamesPayload(): Promise<DuplicateNamesPayload> {
+  try {
+    const cityId = await getCurrentCityId();
+    const now = new Date();
+    const sequenceMonth = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+
+    const [customers, rounds] = await withDbTimeout(
+      Promise.all([
+        prisma.customer.findMany({
+          where: { cityId, isActive: true },
+          select: { id: true, code: true, name: true, area: true },
+          orderBy: { code: "asc" },
+        }),
+        prisma.monthlyRouteCustomerSequence.findMany({
+          where: { route: { cityId }, sequenceMonth, status: "ACTIVE" },
+          select: { customerId: true, route: { select: { name: true } } },
+        }),
+      ]),
+      "Duplicate names request",
+    );
+
+    const roundByCustomer = new Map(rounds.map((row) => [row.customerId, row.route.name]));
+
+    const byName = new Map<string, typeof customers>();
+    customers.forEach((customer) => {
+      const key = customer.name.trim().toUpperCase();
+      const existing = byName.get(key) ?? [];
+      existing.push(customer);
+      byName.set(key, existing);
+    });
+
+    const groups: DuplicateNameGroup[] = [];
+    let unresolvableCount = 0;
+
+    byName.forEach((members) => {
+      if (members.length < 2) {
+        return;
+      }
+      const entries = members.map((member) => {
+        const unresolvable = !member.area || member.area.trim() === "";
+        if (unresolvable) {
+          unresolvableCount += 1;
+        }
+        return {
+          code: member.code,
+          area: member.area,
+          round: roundByCustomer.get(member.id) ?? null,
+          unresolvable,
+        };
+      });
+      groups.push({ name: members[0].name, customers: entries });
+    });
+
+    // Worst first: a group holding a record with no area cannot be resolved by
+    // looking at it, so it is the one worth opening.
+    groups.sort((left, right) => {
+      const leftBad = left.customers.filter((entry) => entry.unresolvable).length;
+      const rightBad = right.customers.filter((entry) => entry.unresolvable).length;
+      return rightBad - leftBad || right.customers.length - left.customers.length;
+    });
+
+    return { dbConnected: true, groups, unresolvableCount };
+  } catch (error) {
+    return {
+      dbConnected: false,
+      groups: [],
+      unresolvableCount: 0,
+      error: error instanceof Error ? error.message : "Unable to load duplicate names.",
+    };
+  }
+}

@@ -531,9 +531,17 @@ export async function getMonthlyBillsPayload(input?: {
 export async function getMonthlyBillSummary(input?: {
   month?: string;
   routeId?: string;
+  // Applied here rather than only in the browser, because the printed sheet is
+  // a separate server route that never sees the on-screen filter state — so a
+  // filtered screen used to print unfiltered.
+  status?: string;
 }): Promise<MonthlyBillSummaryPayload> {
   const selectedMonth = getMonthInputValue(input?.month);
   const selectedRouteId = input?.routeId && input.routeId !== "all" ? input.routeId : "";
+  const selectedStatus =
+    input?.status && ["DRAFT", "GENERATED", "LOCKED", "CANCELLED"].includes(input.status)
+      ? (input.status as BillingStatus)
+      : "";
   const { start, end } = getMonthBounds(monthInputToDate(selectedMonth));
   const emptyTotals: MonthlyBillSummaryTotals = {
     productQuantities: {},
@@ -885,7 +893,12 @@ export async function getMonthlyBillSummary(input?: {
     }
 
     const summaryRoutes = routes.map((route) => {
-      const rows = rowsByRoute.get(route.id) ?? [];
+      const allRouteRows = rowsByRoute.get(route.id) ?? [];
+      // A customer with no bill yet has a null status, so filtering by any
+      // status correctly excludes them rather than lumping them with Draft.
+      const rows = selectedStatus === ""
+        ? allRouteRows
+        : allRouteRows.filter((row) => row.status === selectedStatus);
 
       return {
         id: route.id,
@@ -1261,6 +1274,9 @@ export type MonthlyBillPrintBatchPayload = {
 export async function getMonthlyBillsForRoutePrint(
   routeId: string,
   month: string,
+  // Same reason as the summary: this is a separate server route, so a filter
+  // that stays in the browser simply does not reach the printed output.
+  status?: string,
 ): Promise<MonthlyBillPrintBatchPayload> {
   try {
     const billingMonth = monthInputToDate(month);
@@ -1287,7 +1303,13 @@ export async function getMonthlyBillsForRoutePrint(
         }),
         prisma.businessProfile.findUnique({ where: { cityId: route.cityId } }),
         prisma.monthlyBill.findMany({
-          where: { routeId, billingMonth: start },
+          where: {
+            routeId,
+            billingMonth: start,
+            ...(status && ["DRAFT", "GENERATED", "LOCKED", "CANCELLED"].includes(status)
+              ? { status: status as BillingStatus }
+              : {}),
+          },
           select: {
             id: true,
             customerId: true,
