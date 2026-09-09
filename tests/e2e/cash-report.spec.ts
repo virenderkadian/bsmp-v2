@@ -52,7 +52,7 @@ test.describe("Vehicle cash report", () => {
 
   async function openReport(page: import("@playwright/test").Page) {
     await page.goto(
-      `/reconciliation/cash-report?vehicleId=${TEST_VEHICLE_ID}&from=2027-01-05&to=2027-01-06`,
+      `/reconciliation?tab=cash-report&vehicleId=${TEST_VEHICLE_ID}&from=2027-01-05&to=2027-01-06`,
     );
     await page.waitForLoadState("networkidle");
   }
@@ -83,6 +83,20 @@ test.describe("Vehicle cash report", () => {
     await expect(page.getByText("₹5,400.00").first()).toBeVisible();
   });
 
+  test("switches between the cycle and the report on one screen", async ({ page }) => {
+    // Two views of the same data, so they belong on one screen: the cycle is
+    // where stock is entered, the report is the range read-out over it.
+    await page.goto("/reconciliation");
+    await page.waitForLoadState("networkidle");
+
+    await page.getByRole("button", { name: "Cash report", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Load report" })).toBeVisible();
+
+    await page.getByRole("button", { name: "Cycle", exact: true }).click();
+    // The cycle date control belongs to the cycle tab, and comes back with it.
+    await expect(page.locator('input[name="cycleDate"]')).toBeVisible();
+  });
+
   test("records a deposit and reduces what the driver owes", async ({ page }) => {
     await openReport(page);
     await page.getByRole("button", { name: "Record a deposit" }).click();
@@ -103,5 +117,112 @@ test.describe("Vehicle cash report", () => {
         { timeout: 15_000 },
       )
       .toBe(400);
+  });
+
+  // A deposit typed wrong is the ordinary case: the figure needs correcting,
+  // not the row deleting.
+  test("edits a deposit and keeps the old figure in the trail", async ({ page }) => {
+    const prisma = testPrisma();
+    const deposit = await prisma.vehicleCashSalePayment.create({
+      data: {
+        vehicleId: TEST_VEHICLE_ID,
+        cycleDate: DAY_TWO,
+        amount: 111,
+        paymentDate: DAY_TWO,
+        mode: "CASH",
+        status: "VERIFIED",
+        referenceNo: "EDIT-ME",
+      },
+    });
+
+    await openReport(page);
+    await page
+      .getByRole("row", { name: /EDIT-ME/ })
+      .getByRole("button", { name: "Edit" })
+      .click();
+
+    const dialog = page.getByRole("dialog");
+    await dialog.locator('input[name="amount"]').fill("222");
+    await dialog.getByRole("button", { name: "Save changes" }).click();
+
+    await expect
+      .poll(
+        async () => {
+          const row = await prisma.vehicleCashSalePayment.findUnique({
+            where: { id: deposit.id },
+            select: { amount: true },
+          });
+          return Number(row?.amount);
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(222);
+
+    // Polled, not read once: the audit row is written after the update itself,
+    // so the amount can already read 222 while the trail entry is still in
+    // flight.
+    await expect
+      .poll(
+        async () => {
+          const audit = await prisma.auditLog.findFirst({
+            where: { entityType: "VehicleCashSalePayment", entityId: deposit.id, action: "UPDATE" },
+            orderBy: { createdAt: "desc" },
+          });
+          // The point of the trail: what it was, not only what it is now.
+          return JSON.stringify(audit?.before ?? null);
+        },
+        { timeout: 15_000 },
+      )
+      .toContain('"amount":111');
+  });
+
+  // Cancelling rather than deleting: the row survives, and every total already
+  // counts VERIFIED only, so no arithmetic changes.
+  test("cancels a deposit so it stops counting but stays on record", async ({ page }) => {
+    const prisma = testPrisma();
+    const deposit = await prisma.vehicleCashSalePayment.create({
+      data: {
+        vehicleId: TEST_VEHICLE_ID,
+        cycleDate: DAY_TWO,
+        amount: 333,
+        paymentDate: DAY_TWO,
+        mode: "CASH",
+        status: "VERIFIED",
+        referenceNo: "CANCEL-ME",
+      },
+    });
+
+    await openReport(page);
+    const depositedTotal = () =>
+      page.locator("section", { hasText: "Total deposited" }).last().locator("p").last().innerText();
+    const before = Number((await depositedTotal()).replace(/[^0-9.]/g, ""));
+
+    await page
+      .getByRole("row", { name: /CANCEL-ME/ })
+      .getByRole("button", { name: "Cancel" })
+      .click();
+    await page.getByRole("dialog").getByRole("button", { name: "Cancel deposit" }).click();
+
+    await expect
+      .poll(
+        async () => {
+          const row = await prisma.vehicleCashSalePayment.findUnique({
+            where: { id: deposit.id },
+            select: { status: true },
+          });
+          return row?.status;
+        },
+        { timeout: 15_000 },
+      )
+      .toBe("CANCELLED");
+
+    // Still listed — struck through, not gone.
+    await expect(page.getByRole("row", { name: /CANCEL-ME/ })).toBeVisible();
+    // And it has stopped counting: the deposited total is 333 lighter.
+    await expect
+      .poll(async () => Number((await depositedTotal()).replace(/[^0-9.]/g, "")), {
+        timeout: 15_000,
+      })
+      .toBe(before - 333);
   });
 });

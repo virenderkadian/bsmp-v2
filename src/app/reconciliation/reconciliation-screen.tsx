@@ -17,12 +17,20 @@ function formatDate(value: string) {
   });
 }
 
+// "a, b and c" rather than "a and b and c".
+function formatList(items: string[]) {
+  if (items.length <= 1) {
+    return items.join("");
+  }
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
 function formatMoney(value: string) {
   const amount = Number(value);
   return `₹${amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function VehicleCycleCard({
+function VehicleCycleSection({
   cycle,
   onEditStock,
   onBulkEntry,
@@ -37,27 +45,35 @@ function VehicleCycleCard({
   const balance = Number(cycle.balance);
   const isReady = cycle.hasEveningEntry && cycle.hasMorningEntry && cycle.hasStockEntry;
 
+  // What is still missing, said once. Three separate badges on every vehicle
+  // was three things to read per row when the useful answer is usually "ready"
+  // or one specific gap.
+  const pending = [
+    cycle.hasEveningEntry ? null : "evening entry",
+    cycle.hasMorningEntry ? null : "morning entry",
+    cycle.hasStockEntry ? null : "stock",
+  ].filter((item): item is string => item !== null);
+
   return (
-    <section className="rounded-xl border border-surface-border bg-surface p-5 shadow-sm">
-      <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 md:flex-row md:items-start md:justify-between">
+    // A section and a rule rather than a card. Border, radius and shadow each
+    // say "separate object", and stamping them on all eight vehicles made the
+    // frame mean nothing while burying the one round that needs attention.
+    <section className="border-t border-surface-border py-5 first:border-t-0 first:pt-0">
+      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-text-primary">
-            {cycle.vehicleCode} - {cycle.vehicleName}
+          <h2 className="text-base font-semibold text-text-primary">
+            {cycle.vehicleCode} · {cycle.vehicleName}
           </h2>
-          <p className="mt-1 text-sm text-text-secondary">
-            Evening {formatDate(cycle.eveningDate)} ({cycle.eveningRouteName ?? "no evening route"}) → Morning{" "}
-            {formatDate(cycle.cycleDate)} ({cycle.morningRouteName ?? "no morning route"})
+          <p className="mt-0.5 text-sm text-text-secondary">
+            {cycle.eveningRouteName ?? "no evening route"} {formatDate(cycle.eveningDate)} →{" "}
+            {cycle.morningRouteName ?? "no morning route"} {formatDate(cycle.cycleDate)}
           </p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <StatusBadge tone={cycle.hasEveningEntry ? "success" : "warning"}>
-              {cycle.hasEveningEntry ? "Evening entry recorded" : "Evening entry pending"}
-            </StatusBadge>
-            <StatusBadge tone={cycle.hasMorningEntry ? "success" : "warning"}>
-              {cycle.hasMorningEntry ? "Morning entry recorded" : "Morning entry pending"}
-            </StatusBadge>
-            <StatusBadge tone={cycle.hasStockEntry ? "success" : "warning"}>
-              {cycle.hasStockEntry ? "Stock recorded" : "Stock not entered"}
-            </StatusBadge>
+          <div className="mt-2">
+            {isReady ? (
+              <StatusBadge tone="success">Ready</StatusBadge>
+            ) : (
+              <StatusBadge tone="warning">Waiting on {formatList(pending)}</StatusBadge>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -73,6 +89,13 @@ function VehicleCycleCard({
         </div>
       </div>
 
+      {!cycle.hasStockEntry ? (
+        <p className="mt-3 text-sm text-text-secondary">
+          Given and returned quantities have not been entered for this cycle, so there is nothing
+          to reconcile yet.
+        </p>
+      ) : (
+        <>
       <div className="mt-4 overflow-x-auto">
         <table className="w-full min-w-[640px] text-sm">
           <thead className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
@@ -134,10 +157,9 @@ function VehicleCycleCard({
             {formatMoney(cycle.balance)}
           </p>
         </div>
-        {!isReady ? (
-          <StatusBadge tone="warning">Incomplete — some entries are still pending</StatusBadge>
-        ) : null}
       </div>
+        </>
+      )}
     </section>
   );
 }
@@ -162,9 +184,9 @@ export function ReconciliationScreen({ payload }: { payload: ReconciliationPaylo
   }
 
   return (
-    <div className="space-y-5">
+    <div>
       {payload.cycles.map((cycle) => (
-        <VehicleCycleCard
+        <VehicleCycleSection
           key={cycle.vehicleId}
           cycle={cycle}
           onEditStock={() => setStockDialogVehicleId(cycle.vehicleId)}
