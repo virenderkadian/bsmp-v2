@@ -199,3 +199,116 @@ export async function recordCashSalePayment(
     });
   }, "Cash sale payment recorded.");
 }
+
+const paymentUpdateSchema = paymentSchema
+  .omit({ vehicleId: true, cycleDate: true })
+  .extend({ id: z.string().trim().min(1, "Deposit is required.") });
+
+// Correcting a deposit that was typed wrong.
+//
+// Editing a verified deposit is deliberately allowed: these are small daily
+// cash amounts, and a typo should not need cancelling and re-entering. The
+// before/after in the audit trail is what makes that safe — it records what
+// the figure was believed to be, and what it became.
+export async function updateCashSalePayment(
+  _prevState: ActionState = idleState,
+  formData: FormData,
+): Promise<ActionState> {
+  void _prevState;
+
+  const parsed = paymentUpdateSchema.safeParse({
+    id: getValue(formData, "id"),
+    amount: getValue(formData, "amount"),
+    paymentDate: getValue(formData, "paymentDate"),
+    mode: getValue(formData, "mode"),
+    status: getValue(formData, "status"),
+    referenceNo: getValue(formData, "referenceNo"),
+    notes: getValue(formData, "notes"),
+  });
+
+  if (!parsed.success) {
+    return { status: "error", message: parsed.error.issues[0]?.message };
+  }
+
+  return runAction(async () => {
+    const cityId = await getCurrentCityId();
+
+    // Scoped to this city rather than trusting the id alone — the deposit id
+    // arrives from the browser.
+    const before = await prisma.vehicleCashSalePayment.findFirst({
+      where: { id: parsed.data.id, vehicle: { cityId } },
+    });
+
+    if (!before) {
+      throw new Error("That deposit was not found in this city.");
+    }
+
+    const after = await prisma.vehicleCashSalePayment.update({
+      where: { id: parsed.data.id },
+      data: {
+        amount: parsed.data.amount,
+        paymentDate: new Date(parsed.data.paymentDate),
+        mode: parsed.data.mode,
+        status: parsed.data.status,
+        referenceNo: asOptional(parsed.data.referenceNo ?? ""),
+        notes: asOptional(parsed.data.notes ?? ""),
+      },
+    });
+
+    await logAudit(prisma, {
+      cityId,
+      entityType: "VehicleCashSalePayment",
+      entityId: after.id,
+      action: "UPDATE",
+      summary: `Changed a deposit for vehicle ${after.vehicleId} from ${before.amount} to ${after.amount}.`,
+      before,
+      after,
+    });
+  }, "Deposit updated.");
+}
+
+// Cancelling, not deleting.
+//
+// Every total already counts VERIFIED deposits only, so cancelling removes it
+// from the maths without touching a single calculation — and the row survives,
+// so the trail still shows that money was recorded and then withdrawn. A hard
+// delete would erase the fact it ever happened, which is the one thing a money
+// trail must not do.
+export async function cancelCashSalePayment(
+  _prevState: ActionState = idleState,
+  formData: FormData,
+): Promise<ActionState> {
+  void _prevState;
+
+  const id = getValue(formData, "id");
+
+  if (!id) {
+    return { status: "error", message: "Deposit is required." };
+  }
+
+  return runAction(async () => {
+    const cityId = await getCurrentCityId();
+    const before = await prisma.vehicleCashSalePayment.findFirst({
+      where: { id, vehicle: { cityId } },
+    });
+
+    if (!before) {
+      throw new Error("That deposit was not found in this city.");
+    }
+
+    const after = await prisma.vehicleCashSalePayment.update({
+      where: { id },
+      data: { status: "CANCELLED" },
+    });
+
+    await logAudit(prisma, {
+      cityId,
+      entityType: "VehicleCashSalePayment",
+      entityId: after.id,
+      action: "CANCEL",
+      summary: `Cancelled a deposit of ${after.amount} for vehicle ${after.vehicleId}.`,
+      before,
+      after,
+    });
+  }, "Deposit cancelled.");
+}

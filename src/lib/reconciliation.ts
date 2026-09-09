@@ -320,6 +320,19 @@ export type CashReportPayload = {
       cashAmount: string;
     }>;
   }>;
+  // Every deposit in the range, including cancelled ones. Only VERIFIED rows
+  // feed the totals; the rest are here so an operator can see what was entered
+  // and correct it.
+  deposits: Array<{
+    id: string;
+    cycleDate: string;
+    paymentDate: string;
+    amount: string;
+    mode: string;
+    status: string;
+    referenceNo: string;
+    notes: string;
+  }>;
   totals: {
     products: Array<{
       productId: string;
@@ -361,6 +374,7 @@ export async function getVehicleCashReportPayload(input?: {
     from,
     to,
     days: [],
+    deposits: [],
     totals: {
       products: [],
       totalCash: "0.00",
@@ -417,8 +431,18 @@ export async function getVehicleCashReportPayload(input?: {
         select: { productId: true, cycleDate: true, givenQty: true, returnedQty: true, rateSnapshot: true },
       }),
       prisma.vehicleCashSalePayment.findMany({
-        where: { vehicleId: vehicle.id, cycleDate: { gte: fromDate, lte: toDate }, status: "VERIFIED" },
-        select: { cycleDate: true, amount: true },
+        where: { vehicleId: vehicle.id, cycleDate: { gte: fromDate, lte: toDate } },
+        orderBy: [{ cycleDate: "asc" }, { createdAt: "asc" }],
+        select: {
+          id: true,
+          cycleDate: true,
+          paymentDate: true,
+          amount: true,
+          mode: true,
+          status: true,
+          referenceNo: true,
+          notes: true,
+        },
       }),
       prisma.dailyRouteEntry.findMany({
         where: {
@@ -451,11 +475,15 @@ export async function getVehicleCashReportPayload(input?: {
       deliveredByRouteDate.set(key, perProduct);
     });
 
+    // Cancelled and pending deposits are listed but never counted — the money
+    // has not been confirmed as handed over.
     const depositByDate = new Map<string, number>();
-    deposits.forEach((deposit) => {
-      const key = toDateInput(deposit.cycleDate);
-      depositByDate.set(key, (depositByDate.get(key) ?? 0) + Number(deposit.amount));
-    });
+    deposits
+      .filter((deposit) => deposit.status === "VERIFIED")
+      .forEach((deposit) => {
+        const key = toDateInput(deposit.cycleDate);
+        depositByDate.set(key, (depositByDate.get(key) ?? 0) + Number(deposit.amount));
+      });
 
     const days: CashReportDay[] = [];
     const perDayDetail: CashReportPayload["days"] = [];
@@ -526,6 +554,16 @@ export async function getVehicleCashReportPayload(input?: {
       from,
       to,
       days: perDayDetail,
+      deposits: deposits.map((deposit) => ({
+        id: deposit.id,
+        cycleDate: toDateInput(deposit.cycleDate),
+        paymentDate: toDateInput(deposit.paymentDate),
+        amount: Number(deposit.amount).toFixed(2),
+        mode: deposit.mode,
+        status: deposit.status,
+        referenceNo: deposit.referenceNo ?? "",
+        notes: deposit.notes ?? "",
+      })),
       totals: {
         products: totals.products.map((entry) => ({
           productId: entry.productId,
