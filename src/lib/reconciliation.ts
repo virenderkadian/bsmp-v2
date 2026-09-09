@@ -1,7 +1,10 @@
 import { getCurrentCityId } from "@/lib/current-city";
 import { withDbTimeout } from "@/lib/db-timeout";
 import { prisma } from "@/lib/prisma";
-import { computeLeftover, computeLeftoverValue, computeVehicleBalance } from "@/lib/reconciliation-math";
+import {
+  summariseCashReport,
+  type CashReportDay, computeLeftover, computeLeftoverValue, computeVehicleBalance
+} from "@/lib/reconciliation-math";
 
 function toDateInput(date: Date) {
   return date.toISOString().slice(0, 10);
@@ -190,7 +193,7 @@ export async function getReconciliationPayload(input?: { cycleDate?: string }): 
       withDbTimeout(
         prisma.vehicleCycleStock.findMany({
           where: { vehicleId: { in: vehicleIds }, productId: { in: productIds }, cycleDate: new Date(cycleDate) },
-          select: { vehicleId: true, productId: true, givenQty: true, returnedQty: true },
+          select: { vehicleId: true, productId: true, givenQty: true, returnedQty: true, rateSnapshot: true },
         }),
         "Reconciliation stock request",
       ),
@@ -236,7 +239,12 @@ export async function getReconciliationPayload(input?: { cycleDate?: string }): 
         const given = stock ? Number(stock.givenQty) : 0;
         const returned = stock ? Number(stock.returnedQty) : 0;
         const leftover = computeLeftover({ given, eveningDelivered, morningDelivered, returned });
-        const rate = Number(product.defaultRate);
+        // The rate frozen when the stock was recorded, so a later rate change
+        // cannot re-price a past cycle. Falls back to today's rate only for
+        // rows written before the snapshot existed.
+        const rate = stock?.rateSnapshot !== null && stock?.rateSnapshot !== undefined
+          ? Number(stock.rateSnapshot)
+          : Number(product.defaultRate);
         const leftoverValue = computeLeftoverValue(leftover, rate);
         cashSaleAmount += leftoverValue;
 
@@ -288,5 +296,256 @@ export async function getReconciliationPayload(input?: { cycleDate?: string }): 
     const message = error instanceof Error ? error.message : "Unable to load reconciliation data.";
 
     return fallbackPayload(cycleDate, message);
+  }
+}
+
+export type CashReportPayload = {
+  dbConnected: boolean;
+  vehicles: Array<{ id: string; code: string; name: string }>;
+  products: Array<{ id: string; name: string; unit: string }>;
+  selectedVehicleId: string;
+  from: string;
+  to: string;
+  days: Array<{
+    date: string;
+    stockRecorded: boolean;
+    deposited: string;
+    pending: string;
+    products: Array<{
+      productId: string;
+      given: string;
+      delivered: string;
+      returned: string;
+      cashQty: string;
+      cashAmount: string;
+    }>;
+  }>;
+  totals: {
+    products: Array<{
+      productId: string;
+      taken: string;
+      distributed: string;
+      returned: string;
+      cashQty: string;
+      cashAmount: string;
+    }>;
+    totalCash: string;
+    totalDeposited: string;
+    owed: string;
+    daysRecorded: number;
+    daysMissingStock: number;
+  };
+  error?: string;
+};
+
+// What a vehicle sold for cash over a date range, and what its driver still
+// owes for it.
+//
+// A cycle is the PREVIOUS evening's round plus this morning's, which is how
+// the per-cycle screen already pairs them — the milk loaded covers both.
+export async function getVehicleCashReportPayload(input?: {
+  vehicleId?: string;
+  from?: string;
+  to?: string;
+}): Promise<CashReportPayload> {
+  const today = new Date();
+  const defaultFrom = toDateInput(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)));
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(input?.from ?? "") ? (input!.from as string) : defaultFrom;
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(input?.to ?? "") ? (input!.to as string) : toDateInput(today);
+
+  const empty: CashReportPayload = {
+    dbConnected: false,
+    vehicles: [],
+    products: [],
+    selectedVehicleId: input?.vehicleId ?? "",
+    from,
+    to,
+    days: [],
+    totals: {
+      products: [],
+      totalCash: "0.00",
+      totalDeposited: "0.00",
+      owed: "0.00",
+      daysRecorded: 0,
+      daysMissingStock: 0,
+    },
+  };
+
+  try {
+    const cityId = await getCurrentCityId();
+
+    const [vehicles, products] = await Promise.all([
+      prisma.vehicle.findMany({
+        where: { cityId, isActive: true },
+        orderBy: { code: "asc" },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          routes: { where: { isActive: true }, select: { id: true, shift: true } },
+        },
+      }),
+      prisma.product.findMany({
+        where: { cityId, isActive: true, includeInReconciliation: true },
+        orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
+        select: { id: true, name: true, unit: true, defaultRate: true },
+      }),
+    ]);
+
+    const selectedVehicleId =
+      input?.vehicleId && vehicles.some((vehicle) => vehicle.id === input.vehicleId)
+        ? input.vehicleId
+        : vehicles[0]?.id ?? "";
+    const vehicle = vehicles.find((entry) => entry.id === selectedVehicleId);
+    const vehicleOptions = vehicles.map(({ id, code, name }) => ({ id, code, name }));
+    const productOptions = products.map(({ id, name, unit }) => ({ id, name, unit }));
+
+    if (!vehicle) {
+      return { ...empty, dbConnected: true, vehicles: vehicleOptions, products: productOptions, selectedVehicleId };
+    }
+
+    const morningRouteId = vehicle.routes.find((route) => route.shift === "MORNING")?.id;
+    const eveningRouteId = vehicle.routes.find((route) => route.shift === "EVENING")?.id;
+    const fromDate = new Date(`${from}T00:00:00.000Z`);
+    const toDate = new Date(`${to}T00:00:00.000Z`);
+    // The evening half of the first cycle falls on the day before the range.
+    const deliveriesFrom = addDays(from, -1);
+
+    const [stockRows, deposits, entries] = await Promise.all([
+      prisma.vehicleCycleStock.findMany({
+        where: { vehicleId: vehicle.id, cycleDate: { gte: fromDate, lte: toDate } },
+        select: { productId: true, cycleDate: true, givenQty: true, returnedQty: true, rateSnapshot: true },
+      }),
+      prisma.vehicleCashSalePayment.findMany({
+        where: { vehicleId: vehicle.id, cycleDate: { gte: fromDate, lte: toDate }, status: "VERIFIED" },
+        select: { cycleDate: true, amount: true },
+      }),
+      prisma.dailyRouteEntry.findMany({
+        where: {
+          routeId: { in: [morningRouteId, eveningRouteId].filter((id): id is string => Boolean(id)) },
+          entryDate: { gte: new Date(`${deliveriesFrom}T00:00:00.000Z`), lte: toDate },
+        },
+        select: {
+          routeId: true,
+          entryDate: true,
+          lines: {
+            where: { skipped: false },
+            select: { productEntries: { select: { productId: true, quantity: true } } },
+          },
+        },
+      }),
+    ]);
+
+    const deliveredByRouteDate = new Map<string, Map<string, number>>();
+    entries.forEach((entry) => {
+      const key = `${entry.routeId}:${toDateInput(entry.entryDate)}`;
+      const perProduct = deliveredByRouteDate.get(key) ?? new Map<string, number>();
+      entry.lines.forEach((line) => {
+        line.productEntries.forEach((productEntry) => {
+          perProduct.set(
+            productEntry.productId,
+            (perProduct.get(productEntry.productId) ?? 0) + Number(productEntry.quantity),
+          );
+        });
+      });
+      deliveredByRouteDate.set(key, perProduct);
+    });
+
+    const depositByDate = new Map<string, number>();
+    deposits.forEach((deposit) => {
+      const key = toDateInput(deposit.cycleDate);
+      depositByDate.set(key, (depositByDate.get(key) ?? 0) + Number(deposit.amount));
+    });
+
+    const days: CashReportDay[] = [];
+    const perDayDetail: CashReportPayload["days"] = [];
+
+    for (let cursor = from; cursor <= to; cursor = addDays(cursor, 1)) {
+      const eveningDate = addDays(cursor, -1);
+      const dayStock = stockRows.filter((row) => toDateInput(row.cycleDate) === cursor);
+      const stockRecorded = dayStock.length > 0;
+      const deposited = depositByDate.get(cursor) ?? 0;
+
+      const dayProducts = products.map((product) => {
+        const stock = dayStock.find((row) => row.productId === product.id);
+        const delivered =
+          (morningRouteId
+            ? (deliveredByRouteDate.get(`${morningRouteId}:${cursor}`)?.get(product.id) ?? 0)
+            : 0) +
+          (eveningRouteId
+            ? (deliveredByRouteDate.get(`${eveningRouteId}:${eveningDate}`)?.get(product.id) ?? 0)
+            : 0);
+
+        return {
+          productId: product.id,
+          given: stock ? Number(stock.givenQty) : 0,
+          delivered,
+          returned: stock ? Number(stock.returnedQty) : 0,
+          rate:
+            stock?.rateSnapshot !== null && stock?.rateSnapshot !== undefined
+              ? Number(stock.rateSnapshot)
+              : Number(product.defaultRate),
+        };
+      });
+
+      days.push({ date: cursor, stockRecorded, deposited, products: dayProducts });
+
+      const dayCash = stockRecorded
+        ? dayProducts.reduce((sum, entry) => {
+            const leftover = entry.given - entry.delivered - entry.returned;
+            return sum + leftover * entry.rate;
+          }, 0)
+        : 0;
+
+      perDayDetail.push({
+        date: cursor,
+        stockRecorded,
+        deposited: deposited.toFixed(2),
+        pending: (dayCash - deposited).toFixed(2),
+        products: dayProducts.map((entry) => {
+          const leftover = entry.given - entry.delivered - entry.returned;
+          return {
+            productId: entry.productId,
+            given: entry.given.toFixed(3),
+            delivered: entry.delivered.toFixed(3),
+            returned: entry.returned.toFixed(3),
+            cashQty: leftover.toFixed(3),
+            cashAmount: (leftover * entry.rate).toFixed(2),
+          };
+        }),
+      });
+    }
+
+    const totals = summariseCashReport(days);
+
+    return {
+      dbConnected: true,
+      vehicles: vehicleOptions,
+      products: productOptions,
+      selectedVehicleId,
+      from,
+      to,
+      days: perDayDetail,
+      totals: {
+        products: totals.products.map((entry) => ({
+          productId: entry.productId,
+          taken: entry.taken.toFixed(3),
+          distributed: entry.distributed.toFixed(3),
+          returned: entry.returned.toFixed(3),
+          cashQty: entry.cashQty.toFixed(3),
+          cashAmount: entry.cashAmount.toFixed(2),
+        })),
+        totalCash: totals.totalCash.toFixed(2),
+        totalDeposited: totals.totalDeposited.toFixed(2),
+        owed: totals.owed.toFixed(2),
+        daysRecorded: totals.daysRecorded,
+        daysMissingStock: totals.daysMissingStock,
+      },
+    };
+  } catch (error) {
+    return {
+      ...empty,
+      error: error instanceof Error ? error.message : "Unable to load the cash report.",
+    };
   }
 }

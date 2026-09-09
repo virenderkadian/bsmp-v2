@@ -477,6 +477,18 @@ model VehicleCycleStock {
   cycleDate   DateTime @db.Date
   givenQty    Decimal  @default(0) @db.Decimal(10, 3)
   returnedQty Decimal  @default(0) @db.Decimal(10, 3)
+  // The product rate as it stood on this cycle, so a rate change tomorrow
+  // cannot silently re-price what a driver owed last month. Cash sales are
+  // valued as leftover x rate, and reading Product.defaultRate at display time
+  // meant every past month moved whenever a rate did. Bills already snapshot
+  // per line (see DailyRouteEntryLineProduct.rateSnapshot); this is the same
+  // idea for vehicle stock.
+  //
+  // Nullable on purpose: a write path that misses it degrades to the old
+  // behaviour rather than failing a save the office needs to complete. Every
+  // existing row was backfilled at the point no rate had ever changed, so the
+  // backfill is exact rather than a guess.
+  rateSnapshot Decimal? @db.Decimal(10, 2)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   vehicle     Vehicle  @relation(fields: [vehicleId], references: [id])

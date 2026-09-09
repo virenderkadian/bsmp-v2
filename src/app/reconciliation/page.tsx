@@ -1,5 +1,6 @@
 import { ReconciliationScreen } from "@/app/reconciliation/reconciliation-screen";
 import { PageActions } from "@/components/admin/page-actions";
+import Link from "next/link";
 import { SecondaryButton } from "@/components/admin/buttons";
 import { getReconciliationPayload } from "@/lib/reconciliation";
 
@@ -25,6 +26,14 @@ export default async function ReconciliationPage({
             Reload
           </SecondaryButton>
         </form>
+        {/* The range read-out for this per-cycle data: what a driver sold for
+            cash over a month, and what is still to be collected. */}
+        <Link
+          href="/reconciliation/cash-report"
+          className="inline-flex h-10 items-center justify-center rounded-md border border-surface-border-strong bg-surface px-4 text-sm font-semibold text-text-secondary transition hover:bg-surface-muted"
+        >
+          Cash report
+        </Link>
       </PageActions>
 
       {payload.error ? <div className="text-sm text-rose-700">{payload.error}</div> : null}
