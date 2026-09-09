@@ -33,6 +33,7 @@ export function BulkAddCustomersScreen() {
   const [rows, setRows] = useState<DraftRow[]>([]);
   const [newName, setNewName] = useState("");
   const [toast, setToast] = useState<ToastState | null>(null);
+  const [confirmDuplicate, setConfirmDuplicate] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const [state, formAction, pending] = useActionState(createCustomersBulk, initialState);
 
@@ -44,6 +45,11 @@ export function BulkAddCustomersScreen() {
   // Handle each action result once (render-time), then clear on success.
   const actionResultKey = state.status !== "idle" && state.message ? `${state.status}:${state.message}` : null;
   const [processedActionKey, setProcessedActionKey] = useState<string | null>(null);
+  // A duplicate warning is the one error worth offering a way past, so the
+  // confirmation appears only after the operator has seen which names clash.
+  const duplicateWarning =
+    state.status === "error" && (state.message?.startsWith("Some names are not unique") ?? false);
+
   if (actionResultKey && state.message && actionResultKey !== processedActionKey) {
     setProcessedActionKey(actionResultKey);
     setToast({ tone: state.status === "success" ? "success" : "error", message: state.message });
@@ -220,6 +226,10 @@ export function BulkAddCustomersScreen() {
 
       <form id="bulk-add-customers-form" action={formAction}>
         <input type="hidden" name="customersJson" value={customersJson} readOnly />
+        {/* Set once the operator has read which names collide and still wants
+            to proceed. Names repeat legitimately here, so this is a
+            confirmation rather than a block. */}
+        <input type="hidden" name="confirmDuplicate" value={confirmDuplicate ? "true" : "false"} readOnly />
       </form>
 
       {rows.length > 0 ? (
@@ -228,6 +238,17 @@ export function BulkAddCustomersScreen() {
             <span className="font-semibold text-text-primary">{validRows.length}</span> ready to add
             {missingNames > 0 ? ` · ${missingNames} row${missingNames === 1 ? "" : "s"} need a name` : ""}
           </span>
+          {duplicateWarning ? (
+            <label className="flex items-center gap-2 text-sm font-medium text-amber-700">
+              <input
+                type="checkbox"
+                checked={confirmDuplicate}
+                onChange={(event) => setConfirmDuplicate(event.target.checked)}
+                className="h-4 w-4"
+              />
+              Add them anyway
+            </label>
+          ) : null}
           <SecondaryButton type="button" onClick={() => setRows([])} disabled={pending}>
             Clear all
           </SecondaryButton>

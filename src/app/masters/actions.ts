@@ -11,6 +11,16 @@ import { prisma } from "@/lib/prisma";
 export type ActionState = {
   status: "idle" | "success" | "error";
   message?: string;
+  // Customers who already carry the name being created. Returned instead of a
+  // bare error so the operator can see WHO they would be duplicating — with
+  // the area and round that tell them apart — and either pick the existing
+  // person or confirm this really is somebody new.
+  //
+  // Names collide constantly here: 10 groups share a name exactly (RAHUL is
+  // four different people) and 154 customers share a leading house number.
+  // Blocking outright would be wrong; creating silently is how the wrong
+  // customer ends up on a round.
+  duplicates?: Array<{ code: string; name: string; area: string | null; round: string | null }>;
 };
 
 const idleState: ActionState = { status: "idle" };
@@ -355,6 +365,44 @@ export async function updateRoute(_prevState: ActionState = idleState, formData:
   }, "Route updated.");
 }
 
+// Active customers in this city already carrying the same name, with what
+// actually distinguishes them: the area, and the round they are on this month.
+// The customer code is deliberately not the answer — "ROHTAKCID0398" means
+// nothing to whoever is building a sheet, whereas "KANHELI · NAVEEN EVENING"
+// does.
+async function findCustomersNamed(cityId: string, name: string) {
+  const month = new Date();
+  const sequenceMonth = new Date(Date.UTC(month.getUTCFullYear(), month.getUTCMonth(), 1));
+
+  const matches = await prisma.customer.findMany({
+    where: { cityId, isActive: true, name: { equals: name.trim(), mode: "insensitive" } },
+    select: { id: true, code: true, name: true, area: true },
+    orderBy: { code: "asc" },
+    take: 10,
+  });
+
+  if (matches.length === 0) {
+    return [];
+  }
+
+  const rounds = await prisma.monthlyRouteCustomerSequence.findMany({
+    where: {
+      customerId: { in: matches.map((match) => match.id) },
+      sequenceMonth,
+      status: "ACTIVE",
+    },
+    select: { customerId: true, route: { select: { name: true } } },
+  });
+  const roundByCustomer = new Map(rounds.map((row) => [row.customerId, row.route.name]));
+
+  return matches.map((match) => ({
+    code: match.code,
+    name: match.name,
+    area: match.area,
+    round: roundByCustomer.get(match.id) ?? null,
+  }));
+}
+
 export async function createCustomer(_prevState: ActionState = idleState, formData: FormData): Promise<ActionState> {
   void _prevState;
   const parsed = customerCreateSchema.safeParse({
@@ -368,8 +416,37 @@ export async function createCustomer(_prevState: ActionState = idleState, formDa
     return { status: "error", message: parsed.error.issues[0]?.message };
   }
 
+  const cityIdForCheck = await getCurrentCityId();
+  const duplicates = await findCustomersNamed(cityIdForCheck, parsed.data.name);
+
+  if (duplicates.length > 0) {
+    const area = (parsed.data.area ?? "").trim();
+
+    // An area is only demanded when the name is ambiguous. Requiring it of
+    // everyone would mean backfilling 688 records to fix a problem that
+    // currently affects three; requiring it exactly here closes the gap for
+    // every future collision at no cost to anybody else.
+    if (area === "") {
+      return {
+        status: "error",
+        message: `Another customer is already called “${parsed.data.name}”. Add an area so the two can be told apart.`,
+        duplicates,
+      };
+    }
+
+    // Seen the list and still went ahead — that is the operator saying this is
+    // genuinely a different person, which is usually true.
+    if (getValue(formData, "confirmDuplicate") !== "true") {
+      return {
+        status: "error",
+        message: `${duplicates.length === 1 ? "A customer" : `${duplicates.length} customers`} already named “${parsed.data.name}”. Check it isn't one of these before adding another.`,
+        duplicates,
+      };
+    }
+  }
+
   return runAction(async () => {
-    const cityId = await getCurrentCityId();
+    const cityId = cityIdForCheck;
 
     // Two customers created at nearly the same moment could compute the
     // same "next" code before either commits — retry with a freshly
@@ -432,9 +509,53 @@ export async function createCustomersBulk(
   }
 
   const rows = parsed.data;
+  const cityIdForCheck = await getCurrentCityId();
+
+  // Bulk add is the fastest way to introduce duplicates — a whole round pasted
+  // at once, with nothing checking the names. Two kinds of collision matter:
+  // against customers already in the city, and within the paste itself.
+  const seen = new Map<string, number>();
+  const repeatedInPaste: string[] = [];
+  rows.forEach((row) => {
+    const key = row.name.trim().toUpperCase();
+    const count = (seen.get(key) ?? 0) + 1;
+    seen.set(key, count);
+    if (count === 2) {
+      repeatedInPaste.push(row.name.trim());
+    }
+  });
+
+  const existing = await prisma.customer.findMany({
+    where: {
+      cityId: cityIdForCheck,
+      isActive: true,
+      name: { in: [...new Set(rows.map((row) => row.name.trim()))], mode: "insensitive" },
+    },
+    select: { name: true },
+  });
+  const clashingWithExisting = [...new Set(existing.map((match) => match.name))];
+
+  if ((clashingWithExisting.length > 0 || repeatedInPaste.length > 0) &&
+      getValue(formData, "confirmDuplicate") !== "true") {
+    const parts: string[] = [];
+    if (clashingWithExisting.length > 0) {
+      parts.push(
+        `already in this city: ${clashingWithExisting.slice(0, 5).join(", ")}${clashingWithExisting.length > 5 ? ` and ${clashingWithExisting.length - 5} more` : ""}`,
+      );
+    }
+    if (repeatedInPaste.length > 0) {
+      parts.push(
+        `repeated in this paste: ${repeatedInPaste.slice(0, 5).join(", ")}${repeatedInPaste.length > 5 ? ` and ${repeatedInPaste.length - 5} more` : ""}`,
+      );
+    }
+    return {
+      status: "error",
+      message: `Some names are not unique — ${parts.join("; ")}. Check these aren't the same people before adding, then confirm to continue.`,
+    };
+  }
 
   return runAction(async () => {
-    const cityId = await getCurrentCityId();
+    const cityId = cityIdForCheck;
 
     await prisma.$transaction(async (tx) => {
       // Compute the whole run of codes from one max-scan so the batch gets
@@ -467,6 +588,23 @@ export async function updateCustomer(_prevState: ActionState = idleState, formDa
 
   if (!parsed.success) {
     return { status: "error", message: parsed.error.issues[0]?.message };
+  }
+
+  // Renaming into a collision is the same mistake as creating one, so it gets
+  // the same treatment: show who else carries the name, and let the operator
+  // decide. Only the OTHER customers count — a customer never clashes with
+  // itself when its name is left alone.
+  const cityIdForCheck = await getCurrentCityId();
+  const duplicates = (await findCustomersNamed(cityIdForCheck, parsed.data.name)).filter(
+    (match) => match.code !== parsed.data.code,
+  );
+
+  if (duplicates.length > 0 && getValue(formData, "confirmDuplicate") !== "true") {
+    return {
+      status: "error",
+      message: `${duplicates.length === 1 ? "Another customer is" : `${duplicates.length} other customers are`} already called “${parsed.data.name}”. Confirm this is a different person.`,
+      duplicates,
+    };
   }
 
   return runAction(async () => {

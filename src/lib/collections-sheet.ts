@@ -26,7 +26,14 @@ export type SheetSequenceLine = {
 
 export type SheetMoney = {
   // From an issued bill, when the month has been generated.
-  bill?: { openingBalance: number; deliveryAmount: number };
+  //
+  // `frozen` marks a LOCKED bill. Locking moves that month's payment into the
+  // bill itself and takes it OUT of the open-bill ledger, so the usual
+  // opening + delivered - paid sum loses the payment entirely and reports the
+  // whole bill as still owing. In production that showed 4,142.50 due on a
+  // bill that had closed at zero, across 239 customers. A locked bill is a
+  // finished statement: its closing balance IS what remains.
+  bill?: { openingBalance: number; deliveryAmount: number; paymentAmount?: number; closingBalance?: number; frozen?: boolean };
   // Carried forward from the previous month's closing, for the estimate path.
   priorClosing?: number;
   // The customer's first-ever balance, used only when they have no prior bill.
@@ -50,6 +57,20 @@ export type SheetRow = {
 };
 
 function amountsFor(money: SheetMoney) {
+  // A locked bill is read straight off the statement rather than recomputed.
+  // Everything about it is frozen — including the payment, which the open-bill
+  // ledger no longer counts — so recomputing it would silently drop that
+  // payment and ask for the money a second time.
+  if (money.bill?.frozen) {
+    return {
+      openingOutstanding: money.bill.openingBalance,
+      monthlyBillAmount: money.bill.deliveryAmount,
+      alreadyPaid: money.bill.paymentAmount ?? 0,
+      pendingAmount: money.bill.closingBalance ?? 0,
+      source: "BILL" as const,
+    };
+  }
+
   const openingOutstanding = money.bill
     ? money.bill.openingBalance
     : (money.priorClosing ?? money.staticOpening);

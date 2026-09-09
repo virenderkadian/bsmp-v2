@@ -14,7 +14,7 @@ function formatMonth(value: string) {
 export default async function MonthlyBillsPrintAllPage({
   searchParams,
 }: {
-  searchParams: Promise<{ month?: string; routeId?: string }>;
+  searchParams: Promise<{ month?: string; routeId?: string; status?: string }>;
 }) {
   const params = await searchParams;
   const month = params.month ?? new Date().toISOString().slice(0, 7);
@@ -42,7 +42,7 @@ export default async function MonthlyBillsPrintAllPage({
     );
   }
 
-  const payload = await getMonthlyBillsForRoutePrint(routeId, month);
+  const payload = await getMonthlyBillsForRoutePrint(routeId, month, params.status);
   const qrDataUrl = payload.bills[0]?.businessProfile?.upiQrDataUrl ?? null;
 
   return (
@@ -50,7 +50,9 @@ export default async function MonthlyBillsPrintAllPage({
       <div className="print:hidden">
         <PageHeader
           title="Print All Bills"
-          subtitle={`${payload.routeCode ? `${payload.routeCode} - ${payload.routeName}` : "Route"} · ${formatMonth(month)} · ${payload.bills.length} bill(s)`}
+          subtitle={`${payload.routeCode ? `${payload.routeCode} - ${payload.routeName}` : "Route"} · ${formatMonth(month)} · ${payload.bills.length} bill(s)${
+            params.status ? ` · ${params.status.charAt(0)}${params.status.slice(1).toLowerCase()} only` : ""
+          }`}
           actions={
             <>
               <Link

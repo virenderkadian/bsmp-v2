@@ -66,15 +66,51 @@ function getDraftFromForm(formData: FormData): CustomerDraft {
   };
 }
 
-function CustomerFormFields({ draft, mode }: { draft: CustomerDraft; mode: CustomerDialogMode }) {
+// Controlled, not defaultValue. React resets an uncontrolled form once its
+// action returns, so on a duplicate-name warning the operator's typed name and
+// area vanished at exactly the moment they needed to read them and decide.
+function CustomerFormFields({
+  values,
+  onChange,
+  mode,
+}: {
+  values: CustomerDraft;
+  onChange: (field: keyof CustomerDraft, value: string) => void;
+  mode: CustomerDialogMode;
+}) {
   return (
     <div className="grid gap-4 md:grid-cols-2">
       {mode === "edit" ? (
-        <FormInput label="Code" name="code" placeholder="CUS-104" defaultValue={draft.code} />
+        <FormInput
+          label="Code"
+          name="code"
+          placeholder="CUS-104"
+          value={values.code}
+          onChange={(event) => onChange("code", event.target.value)}
+        />
       ) : null}
-      <FormInput label="Name" name="name" placeholder="Deepak Meena" defaultValue={draft.name} autoFocus={mode === "create"} />
-      <FormInput label="Area" name="area" placeholder="Mansarovar" defaultValue={draft.area} />
-      <FormInput label="Mobile" name="mobile" placeholder="98290 11224" defaultValue={draft.mobile} />
+      <FormInput
+        label="Name"
+        name="name"
+        placeholder="Deepak Meena"
+        value={values.name}
+        onChange={(event) => onChange("name", event.target.value)}
+        autoFocus={mode === "create"}
+      />
+      <FormInput
+        label="Area"
+        name="area"
+        placeholder="Mansarovar"
+        value={values.area}
+        onChange={(event) => onChange("area", event.target.value)}
+      />
+      <FormInput
+        label="Mobile"
+        name="mobile"
+        placeholder="98290 11224"
+        value={values.mobile}
+        onChange={(event) => onChange("mobile", event.target.value)}
+      />
       <div className="md:col-span-2">
         <FormInput
           label="Opening balance"
@@ -82,7 +118,8 @@ function CustomerFormFields({ draft, mode }: { draft: CustomerDraft; mode: Custo
           type="number"
           step="0.01"
           placeholder="0"
-          defaultValue={draft.openingBalance}
+          value={values.openingBalance}
+          onChange={(event) => onChange("openingBalance", event.target.value)}
         />
       </div>
     </div>
@@ -102,6 +139,9 @@ function CustomerDialog({
   customer?: CustomerRecord;
   onClose: () => void;
 }) {
+  // The parent mounts this dialog fresh on every open, so the initializer is
+  // the reset — the next customer is always a fresh decision.
+  const [confirmDuplicate, setConfirmDuplicate] = useState(false);
   const [createState, createAction, createPending] = useActionState(createCustomer, initialState);
   const [updateState, updateAction, updatePending] = useActionState(updateCustomer, initialState);
 
@@ -113,6 +153,7 @@ function CustomerDialog({
       onClose();
     }
   }, [onClose, open, state.status]);
+
 
   const draft: CustomerDraft =
     mode === "edit" && customer
@@ -126,6 +167,13 @@ function CustomerDialog({
         }
       : emptyDraft;
   const normalizedDraft = normalizeDraft(draft);
+
+  // Seeded once — the dialog is mounted fresh on every open, so this holds the
+  // operator's typing across a failed submit instead of losing it to React's
+  // post-action form reset.
+  const [values, setValues] = useState<CustomerDraft>(draft);
+  const updateField = (field: keyof CustomerDraft, value: string) =>
+    setValues((current) => ({ ...current, [field]: value }));
 
   return (
     <Dialog
@@ -163,11 +211,46 @@ function CustomerDialog({
         }}
       >
         {mode === "edit" && draft.id ? <input type="hidden" name="id" value={draft.id} /> : null}
-        <CustomerFormFields draft={draft} mode={mode} />
+        {/* Set once the operator has seen the existing customers below and
+            still wants a new record. Cleared whenever the dialog reopens,
+            because the next customer is a fresh decision. */}
+        <input type="hidden" name="confirmDuplicate" value={confirmDuplicate ? "true" : "false"} readOnly />
+        <CustomerFormFields values={values} onChange={updateField} mode={mode} />
         {state.status !== "idle" && state.message ? (
           <p className={`text-sm ${state.status === "success" ? "text-emerald-700" : "text-rose-700"}`}>
             {state.message}
           </p>
+        ) : null}
+
+        {/* Who you might be duplicating, with what actually tells them apart.
+            Names collide constantly here — RAHUL is four different people — so
+            this lists them rather than refusing outright. */}
+        {state.duplicates && state.duplicates.length > 0 ? (
+          <div className="rounded-md border border-amber-300 bg-amber-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+              Already in this city
+            </p>
+            <ul className="mt-2 divide-y divide-amber-200">
+              {state.duplicates.map((duplicate) => (
+                <li key={duplicate.code} className="py-1.5 text-sm text-amber-900">
+                  <span className="font-semibold">{duplicate.name}</span>
+                  <span className="text-amber-800">
+                    {duplicate.area ? ` · ${duplicate.area}` : " · no area"}
+                    {duplicate.round ? ` · ${duplicate.round}` : " · not on a round"}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <label className="mt-3 flex items-start gap-2 text-sm text-amber-900">
+              <input
+                type="checkbox"
+                checked={confirmDuplicate}
+                onChange={(event) => setConfirmDuplicate(event.target.checked)}
+                className="mt-0.5 h-4 w-4"
+              />
+              <span>This is a different person — add them anyway.</span>
+            </label>
+          </div>
         ) : null}
         <div className="flex flex-wrap items-center justify-end gap-3 border-t border-surface-border pt-4">
           <StatusBadge tone={dbConnected ? "success" : "warning"}>

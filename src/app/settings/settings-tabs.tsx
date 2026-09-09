@@ -6,13 +6,22 @@ import { ActivityPanel } from "@/app/settings/activity-panel";
 import { AppearancePanel } from "@/app/settings/appearance-panel";
 import { ArchivePanel } from "@/app/settings/archive-panel";
 import { BillingRoutesPanel } from "@/app/settings/billing-routes-panel";
+import { DuplicateNamesPanel } from "@/app/settings/duplicate-names-panel";
 import { BusinessProfileForm } from "@/app/settings/business-profile-form";
 import { CitiesPanel } from "@/app/settings/cities-panel";
 import { TeamPanel } from "@/app/settings/team-panel";
 import { MasterTabs } from "@/components/admin/master-tabs";
-import type { ArchivePayload, AuditLogRecord, BillingRoutesPayload, CityRecord, UserRecord } from "@/lib/settings";
+import type {
+  ArchivePayload,
+  AuditLogRecord,
+  BillingRoutesPayload,
+  CityRecord,
+  DuplicateNamesPayload,
+  UserRecord,
+} from "@/lib/settings";
 
-type SettingsTab = "profile" | "appearance" | "cities" | "team" | "billing-routes" | "activity" | "archive";
+type SettingsTab = "profile" | "appearance" | "cities" | "team" | "billing-routes" | "duplicate-names"
+  | "activity" | "archive";
 
 export function SettingsTabs({
   profile,
@@ -25,6 +34,7 @@ export function SettingsTabs({
   auditLogs,
   archivePayload,
   billingRoutesPayload,
+  duplicateNamesPayload,
 }: {
   profile: BusinessProfile | null;
   citiesConnected: boolean;
@@ -36,6 +46,7 @@ export function SettingsTabs({
   auditLogs: AuditLogRecord[];
   archivePayload: ArchivePayload;
   billingRoutesPayload: BillingRoutesPayload;
+  duplicateNamesPayload: DuplicateNamesPayload;
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("profile");
 
@@ -52,6 +63,11 @@ export function SettingsTabs({
             value: "billing-routes",
             label: "Billing routes",
             count: billingRoutesPayload.customers.length,
+          },
+          {
+            value: "duplicate-names",
+            label: "Duplicate names",
+            count: duplicateNamesPayload.groups.length,
           },
           { value: "activity", label: "Activity", count: auditLogs.length },
           { value: "archive", label: "Archive", count: archivePayload.candidates.length },
@@ -73,6 +89,14 @@ export function SettingsTabs({
           availableMonths={billingRoutesPayload.availableMonths}
           readOnly={billingRoutesPayload.readOnly}
           error={billingRoutesPayload.error}
+        />
+      ) : null}
+      {activeTab === "duplicate-names" ? (
+        <DuplicateNamesPanel
+          dbConnected={duplicateNamesPayload.dbConnected}
+          groups={duplicateNamesPayload.groups}
+          unresolvableCount={duplicateNamesPayload.unresolvableCount}
+          error={duplicateNamesPayload.error}
         />
       ) : null}
       {activeTab === "activity" ? (

@@ -162,6 +162,84 @@ describe("buildCollectionRows", () => {
   });
 });
 
+describe("a locked bill", () => {
+  // Locking moves the payment into the bill and out of the open-bill ledger.
+  // Recomputing such a bill loses the payment entirely and asks for the whole
+  // amount again — which is what 239 production customers were showing.
+  const lockedMoney = money({
+    bill: {
+      openingBalance: 0,
+      deliveryAmount: 4142.5,
+      paymentAmount: 4142.5,
+      closingBalance: 0,
+      frozen: true,
+    },
+    // The ledger has already excluded this payment, which is the trap.
+    alreadyPaid: 0,
+  });
+
+  it("shows what the statement says is left, not the whole bill again", () => {
+    const rows = buildCollectionRows({
+      sequenceLines: [line("c1", MORNING, 1, true)],
+      sheetRouteIds: BOTH_ROUNDS,
+      shiftByRoute: SHIFTS,
+      moneyByCustomer: new Map([["c1", lockedMoney]]),
+    });
+
+    expect(rows[0].pendingAmount).toBe(0);
+    expect(rows[0].alreadyPaid).toBe(4142.5);
+  });
+
+  it("still reports a genuine leftover on a locked bill", () => {
+    const rows = buildCollectionRows({
+      sequenceLines: [line("c1", MORNING, 1, true)],
+      sheetRouteIds: BOTH_ROUNDS,
+      shiftByRoute: SHIFTS,
+      moneyByCustomer: new Map([
+        [
+          "c1",
+          money({
+            bill: { openingBalance: 0, deliveryAmount: 6672.5, paymentAmount: 6672, closingBalance: 0.5, frozen: true },
+            alreadyPaid: 0,
+          }),
+        ],
+      ]),
+    });
+
+    expect(rows[0].pendingAmount).toBe(0.5);
+  });
+
+  it("keeps a settled locked customer off the off-round list", () => {
+    const offRound = buildOffRoundCustomers({
+      listedCustomerIds: new Set(),
+      candidateCustomerIds: ["c1"],
+      moneyByCustomer: new Map([["c1", lockedMoney]]),
+    });
+
+    expect(offRound).toEqual([]);
+  });
+
+  it("recomputes a bill that is only generated, since its payment still counts", () => {
+    const rows = buildCollectionRows({
+      sequenceLines: [line("c1", MORNING, 1, true)],
+      sheetRouteIds: BOTH_ROUNDS,
+      shiftByRoute: SHIFTS,
+      moneyByCustomer: new Map([
+        [
+          "c1",
+          money({
+            bill: { openingBalance: 0, deliveryAmount: 5882, paymentAmount: 6000, closingBalance: -118 },
+            alreadyPaid: 6000,
+          }),
+        ],
+      ]),
+    });
+
+    // Real production figures for BHCID0043.
+    expect(rows[0].pendingAmount).toBe(-118);
+  });
+});
+
 describe("buildOffRoundCustomers", () => {
   it("finds someone billed on another vehicle who still owes", () => {
     const offRound = buildOffRoundCustomers({

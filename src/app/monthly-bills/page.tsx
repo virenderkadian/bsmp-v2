@@ -4,12 +4,12 @@ import { getMonthlyBillsPayload, getMonthlyBillSummary } from "@/lib/monthly-bil
 export default async function MonthlyBillsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ month?: string; routeId?: string }>;
+  searchParams: Promise<{ month?: string; routeId?: string; status?: string }>;
 }) {
   const params = await searchParams;
   const [payload, summaryPayload] = await Promise.all([
     getMonthlyBillsPayload({ month: params.month }),
-    getMonthlyBillSummary({ month: params.month, routeId: params.routeId }),
+    getMonthlyBillSummary({ month: params.month, routeId: params.routeId, status: params.status }),
   ]);
 
   return <MonthlyBillScreen payload={payload} summaryPayload={summaryPayload} />;

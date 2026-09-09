@@ -243,3 +243,15 @@ export function EyeIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function FilterIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} {...props}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M3.5 5.5h17l-6.5 7.6v5.9l-4 2v-7.9L3.5 5.5Z"
+      />
+    </svg>
+  );
+}

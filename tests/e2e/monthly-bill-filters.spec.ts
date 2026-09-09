@@ -73,6 +73,17 @@ test.describe("Monthly bill filters", () => {
     await page.getByRole("button", { name: "Bills", exact: true }).click();
   }
 
+  // The filters now live behind a single button rather than on the toolbar.
+  async function openFilters(page: import("@playwright/test").Page) {
+    await page.getByRole("button", { name: /^Filters/ }).click();
+    await expect(page.getByRole("dialog", { name: "Filters" })).toBeVisible();
+  }
+
+  async function applyFilters(page: import("@playwright/test").Page) {
+    await page.getByRole("button", { name: "Done" }).click();
+    await expect(page.getByRole("dialog", { name: "Filters" })).toHaveCount(0);
+  }
+
   test("loads only the selected month", async ({ page }) => {
     await openBillsTab(page);
 
@@ -85,7 +96,9 @@ test.describe("Monthly bill filters", () => {
   test("filters by bill status", async ({ page }) => {
     await openBillsTab(page);
 
-    await page.getByRole("combobox").filter({ hasText: /All statuses|Draft/ }).first().selectOption("DRAFT");
+    await openFilters(page);
+    await page.getByLabel("Bill status").selectOption("DRAFT");
+    await applyFilters(page);
 
     await expect(page.getByText("9,000.00").first()).toBeVisible();
     await expect(page.getByText("120.00")).toHaveCount(0);
@@ -94,7 +107,9 @@ test.describe("Monthly bill filters", () => {
   test("filters by a minimum amount", async ({ page }) => {
     await openBillsTab(page);
 
+    await openFilters(page);
     await page.getByLabel("Minimum amount").fill("1000");
+    await applyFilters(page);
 
     // The small bill drops out; the large one stays.
     await expect(page.getByText("9,000.00").first()).toBeVisible();
@@ -104,7 +119,9 @@ test.describe("Monthly bill filters", () => {
   test("filters by a maximum amount", async ({ page }) => {
     await openBillsTab(page);
 
+    await openFilters(page);
     await page.getByLabel("Maximum amount").fill("1000");
+    await applyFilters(page);
 
     await expect(page.getByText("120.00").first()).toBeVisible();
     await expect(page.getByText("9,000.00")).toHaveCount(0);
@@ -113,10 +130,12 @@ test.describe("Monthly bill filters", () => {
   test("clears every filter at once", async ({ page }) => {
     await openBillsTab(page);
 
+    await openFilters(page);
     await page.getByLabel("Minimum amount").fill("1000");
+    await applyFilters(page);
     await expect(page.getByText("120.00")).toHaveCount(0);
 
-    await page.getByRole("button", { name: "Clear" }).click();
+    await page.getByRole("button", { name: "Clear all" }).first().click();
 
     await expect(page.getByText("120.00").first()).toBeVisible();
     await expect(page.getByText("9,000.00").first()).toBeVisible();

@@ -35,8 +35,18 @@ type ToastState = {
   message: string;
 };
 
+// Area first, then the round they are already on. Those two are what tell two
+// people with the same name apart — the code does not, since "ROHTAKCID0398"
+// means nothing to whoever is building the sheet.
 function formatCustomerMeta(customer: MonthlySequenceCustomerOption) {
-  return [customer.code, customer.area, customer.mobile].filter(Boolean).join(" · ");
+  return [
+    customer.area,
+    customer.currentRound ? `on ${customer.currentRound}` : null,
+    customer.code,
+    customer.mobile,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function formatLineMeta(line: MonthlySequenceLineRecord) {
@@ -44,7 +54,7 @@ function formatLineMeta(line: MonthlySequenceLineRecord) {
 }
 
 function matchesCustomer(customer: MonthlySequenceCustomerOption, query: string) {
-  const searchText = [customer.code, customer.name, customer.area, customer.mobile]
+  const searchText = [customer.code, customer.name, customer.area, customer.currentRound, customer.mobile]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();

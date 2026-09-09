@@ -405,6 +405,9 @@ export async function getBulkPaymentPayload(input?: {
           customerId: true,
           openingBalance: true,
           deliveryAmount: true,
+          paymentAmount: true,
+          closingBalance: true,
+          status: true,
         },
       }),
       // Carry-forward for the estimate path: before a month is generated there
@@ -487,7 +490,15 @@ export async function getBulkPaymentPayload(input?: {
       const bill = billMap.get(customerId);
       moneyByCustomer.set(customerId, {
         bill: bill
-          ? { openingBalance: Number(bill.openingBalance), deliveryAmount: Number(bill.deliveryAmount) }
+          ? {
+              openingBalance: Number(bill.openingBalance),
+              deliveryAmount: Number(bill.deliveryAmount),
+              paymentAmount: Number(bill.paymentAmount),
+              closingBalance: Number(bill.closingBalance),
+              // Locked means the statement is final; read it rather than
+              // recompute it. See amountsFor in collections-sheet.ts.
+              frozen: bill.status === "LOCKED",
+            }
           : undefined,
         priorClosing: priorClosingMap.get(customerId),
         staticOpening: Number(customer.openingBalance),
