@@ -103,6 +103,18 @@ export async function saveVehicleCycleStock(
   return runAction(async () => {
     const cityId = await getCurrentCityId();
 
+    // Today's rate, frozen onto each row as it is written. Reading it at
+    // display time meant a rate change silently re-priced every past month's
+    // cash sale — and therefore what a driver was recorded as owing.
+    const rates = new Map(
+      (
+        await prisma.product.findMany({
+          where: { cityId, id: { in: entriesParsed.data.map((entry) => entry.productId) } },
+          select: { id: true, defaultRate: true },
+        })
+      ).map((product) => [product.id, product.defaultRate]),
+    );
+
     await prisma.$transaction(async (tx) => {
       for (const entry of entriesParsed.data) {
         await tx.vehicleCycleStock.upsert({
@@ -116,6 +128,7 @@ export async function saveVehicleCycleStock(
           update: {
             givenQty: entry.givenQty,
             returnedQty: entry.returnedQty,
+            rateSnapshot: rates.get(entry.productId),
           },
           create: {
             vehicleId: parsed.data.vehicleId,
@@ -123,6 +136,7 @@ export async function saveVehicleCycleStock(
             cycleDate: new Date(entry.cycleDate),
             givenQty: entry.givenQty,
             returnedQty: entry.returnedQty,
+            rateSnapshot: rates.get(entry.productId),
           },
         });
       }
