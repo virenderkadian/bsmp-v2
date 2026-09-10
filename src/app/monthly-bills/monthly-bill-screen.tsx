@@ -19,6 +19,15 @@ import { BillIcon, ViewIcon } from "@/components/admin/icons";
 import { KeyboardForm } from "@/components/admin/keyboard-form";
 import { MasterTabs } from "@/components/admin/master-tabs";
 import { FilterButton, FilterChip, FilterPanel } from "@/components/admin/filter-panel";
+import {
+  billFiltersToParams,
+  hasActiveBillFilters,
+  matchesBillFilters,
+  sumBillRows,
+  withinAmountRange,
+  type BillAmountField,
+  type BillFilters,
+} from "@/lib/bill-filters";
 import { PageActions } from "@/components/admin/page-actions";
 import { SearchInput } from "@/components/admin/search-input";
 import { SelectInput } from "@/components/admin/select-input";
@@ -315,16 +324,6 @@ function BillStatusButton({
 
 // Blank on either side means unbounded, so "min only" and "max only" both
 // work rather than requiring a full range.
-function withinAmountRange(value: number, minAmount: string, maxAmount: string) {
-  const min = minAmount.trim() === "" ? null : Number(minAmount);
-  const max = maxAmount.trim() === "" ? null : Number(maxAmount);
-
-  return (
-    (min === null || Number.isNaN(min) || value >= min) &&
-    (max === null || Number.isNaN(max) || value <= max)
-  );
-}
-
 function CustomerSummaryTab({
   summaryPayload,
   statuses,
@@ -338,7 +337,7 @@ function CustomerSummaryTab({
   statuses: MonthlyBillPayload["statuses"];
   status: string;
   search: string;
-  amountField: "closingBalance" | "deliveryAmount";
+  amountField: BillAmountField;
   minAmount: string;
   maxAmount: string;
 }) {
@@ -347,31 +346,22 @@ function CustomerSummaryTab({
   // whichever one is open. A customer with no bill yet has a null status, so
   // filtering by status correctly excludes them rather than lumping them in
   // with Draft.
+  // The identical rule the print route runs — see src/lib/bill-filters.ts.
+  // pendingAmount is the Summary's name for what the Bills tab calls the
+  // closing balance, so one control drives both.
+  const filters: BillFilters = { status, search, amountField, minAmount, maxAmount };
+  // The same filters, encoded for the print route so the paper matches the screen.
+  const summaryFilterQuery = billFiltersToParams(filters).toString();
   const routes = useMemo(() => {
-    const query = search.trim().toLowerCase();
+    const filtered = hasActiveBillFilters(filters);
 
-    return summaryPayload.routes.map((route) => ({
-      ...route,
-      rows: route.rows.filter((row) => {
-        if (status !== "" && row.status !== status) {
-          return false;
-        }
-        if (
-          query !== "" &&
-          !row.customerCode.toLowerCase().includes(query) &&
-          !row.customerName.toLowerCase().includes(query) &&
-          !(row.customerArea?.toLowerCase().includes(query) ?? false)
-        ) {
-          return false;
-        }
-        // pendingAmount is the Summary's name for what the Bills tab calls the
-        // closing balance — the same figure, so one control drives both.
-        const amount = Number(
-          amountField === "closingBalance" ? row.pendingAmount : row.deliveryAmount,
-        );
-        return withinAmountRange(amount, minAmount, maxAmount);
-      }),
-    }));
+    return summaryPayload.routes.map((route) => {
+      const rows = route.rows.filter((row) => matchesBillFilters(row, filters));
+      // A Route Total that doesn't add up to the rows above it reads as a bug,
+      // so once a filter hides a row the total is recomputed from what is left.
+      return { ...route, rows, totals: filtered ? sumBillRows(rows) : route.totals };
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [amountField, maxAmount, minAmount, search, status, summaryPayload.routes]);
 
   return (
@@ -414,7 +404,7 @@ function CustomerSummaryTab({
                 onClick={() => {
                   window.open(
                     `/monthly-bills/summary?month=${selectedMonth}&routeId=${route.id}${
-                      status ? `&status=${status}` : ""
+                      summaryFilterQuery ? `&${summaryFilterQuery}` : ""
                     }`,
                     PRINT_WINDOW_NAME,
                   );
@@ -614,7 +604,7 @@ export function MonthlyBillScreen({
   // chase-the-money view), delivery amount is the month's milk (the
   // spot-an-anomaly view).
   const [filterPanelOpen, setFilterPanelOpen] = useState(false);
-  const [amountField, setAmountField] = useState<"closingBalance" | "deliveryAmount">("closingBalance");
+  const [amountField, setAmountField] = useState<BillAmountField>("closingBalance");
   const [minAmount, setMinAmount] = useState("");
   const [maxAmount, setMaxAmount] = useState("");
   const [routeId, setRouteId] = useState("");
@@ -637,9 +627,16 @@ export function MonthlyBillScreen({
   // Print URLs carry the filters. These are separate server routes, so
   // whatever is not in the URL is simply not applied — which is why a filtered
   // screen used to print the whole month.
+  const printFilterQuery = billFiltersToParams({
+    status,
+    search,
+    amountField,
+    minAmount,
+    maxAmount,
+  }).toString();
   const printAllHref = summaryRouteId
     ? `/monthly-bills/print-all?month=${summaryMonth}&routeId=${summaryRouteId}${
-        status ? `&status=${status}` : ""
+        printFilterQuery ? `&${printFilterQuery}` : ""
       }`
     : null;
 

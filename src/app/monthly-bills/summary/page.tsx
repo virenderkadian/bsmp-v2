@@ -1,3 +1,10 @@
+import {
+  billFiltersFromParams,
+  describeBillFilters,
+  hasActiveBillFilters,
+  matchesBillFilters,
+  sumBillRows,
+} from "@/lib/bill-filters";
 import Link from "next/link";
 import { PageHeader } from "@/components/admin/page-header";
 import { getMonthlyBillSummary, type MonthlyBillSummaryTotals } from "@/lib/monthly-bills";
@@ -77,16 +84,41 @@ function TotalsRow({
 export default async function MonthlyBillSummaryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ month?: string; routeId?: string; status?: string }>;
+  searchParams: Promise<{
+    month?: string;
+    routeId?: string;
+    status?: string;
+    search?: string;
+    amountField?: string;
+    minAmount?: string;
+    maxAmount?: string;
+  }>;
 }) {
   const params = await searchParams;
-  const payload = await getMonthlyBillSummary({
+  // Applied here, not on the screen: this is a separate route, so a filter that
+  // is not in the URL simply does not reach the paper.
+  const filters = billFiltersFromParams(params);
+  const loaded = await getMonthlyBillSummary({
     month: params.month,
     routeId: params.routeId,
-    // Applied server-side: this is a separate route from the screen, so a
-    // filter that is not in the URL simply does not reach the paper.
     status: params.status,
   });
+  // Status is already applied by the loader; the rest are the same rules the
+  // screen runs, from src/lib/bill-filters.ts.
+  const filtered = hasActiveBillFilters(filters);
+  const routes = loaded.routes.map((route) => {
+    const rows = route.rows.filter((row) => matchesBillFilters(row, filters));
+    // Totals have to add up to the lines actually printed.
+    return { ...route, rows, totals: filtered ? sumBillRows(rows) : route.totals };
+  });
+  const payload = {
+    ...loaded,
+    routes,
+    grandTotals: filtered
+      ? sumBillRows(routes.flatMap((route) => route.rows))
+      : loaded.grandTotals,
+  };
+  const filterNotice = describeBillFilters(filters);
   const productIds = payload.products.map((product) => product.id);
   const rowCount = payload.routes.reduce((total, route) => total + route.rows.length, 0);
   const printedAt = formatPrintedAt(new Date());
@@ -122,10 +154,8 @@ export default async function MonthlyBillSummaryPage({
             </p>
             {/* A filtered sheet has to say so. Someone handed this page has no
                 way to tell a partial list from the whole month otherwise. */}
-            {params.status ? (
-              <p className="mt-0.5 text-sm font-semibold text-amber-700">
-                Filtered: {params.status.charAt(0)}{params.status.slice(1).toLowerCase()} bills only
-              </p>
+            {filterNotice ? (
+              <p className="mt-0.5 text-sm font-semibold text-amber-700">{filterNotice}</p>
             ) : null}
           </div>
           <p className="text-xs text-slate-600">Printed {printedAt}</p>
