@@ -110,4 +110,54 @@ test.describe("Filter panel and printing", () => {
     await expect(page.getByText("E2E Customer Two")).toBeVisible();
     await expect(page.getByText(/Filtered:/)).toHaveCount(0);
   });
+
+  // Status was the only filter that ever reached the paper. Search and the
+  // amount bounds stayed in the browser, so a screen narrowed to a handful of
+  // customers still printed the whole month.
+  test("the printed summary honours the amount filter", async ({ page }) => {
+    await page.goto(
+      `/monthly-bills/summary?month=${TEST_MONTH}&routeId=${TEST_ROUTE_ID}&amountField=closingBalance&minAmount=1000`,
+    );
+    await page.waitForLoadState("networkidle");
+
+    // One is 9,000 pending, Two is 120.
+    await expect(page.getByText("E2E Customer One")).toBeVisible();
+    await expect(page.getByText("E2E Customer Two")).toHaveCount(0);
+    await expect(page.getByText(/Filtered: pending of ₹1000 or more/)).toBeVisible();
+  });
+
+  test("the printed summary honours the search filter", async ({ page }) => {
+    await page.goto(
+      `/monthly-bills/summary?month=${TEST_MONTH}&routeId=${TEST_ROUTE_ID}&search=Customer%20Two`,
+    );
+    await page.waitForLoadState("networkidle");
+
+    await expect(page.getByText("E2E Customer Two")).toBeVisible();
+    await expect(page.getByText("E2E Customer One")).toHaveCount(0);
+    await expect(page.getByText(/matching "Customer Two"/)).toBeVisible();
+  });
+
+  // A Route Total that still counts the rows a filter removed reads as an
+  // arithmetic bug to whoever is handed the sheet.
+  test("a filtered sheet totals only the rows it prints", async ({ page }) => {
+    await page.goto(
+      `/monthly-bills/summary?month=${TEST_MONTH}&routeId=${TEST_ROUTE_ID}&amountField=closingBalance&minAmount=1000`,
+    );
+    await page.waitForLoadState("networkidle");
+
+    const totalsRow = page.getByRole("row", { name: /Route Total/ });
+    await expect(totalsRow).toContainText("9,000.00");
+    // 9,120 would mean Customer Two's 120 was still counted.
+    await expect(totalsRow).not.toContainText("9,120.00");
+  });
+
+  test("printing every bill on a route honours the amount filter too", async ({ page }) => {
+    await page.goto(
+      `/monthly-bills/print-all?month=${TEST_MONTH}&routeId=${TEST_ROUTE_ID}&amountField=closingBalance&minAmount=1000`,
+    );
+    await page.waitForLoadState("networkidle");
+
+    await expect(page.getByText("E2E Customer Two")).toHaveCount(0);
+    await expect(page.getByText(/Filtered: pending of ₹1000 or more/)).toBeVisible();
+  });
 });

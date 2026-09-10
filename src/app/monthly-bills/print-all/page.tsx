@@ -2,6 +2,7 @@ import Link from "next/link";
 import { PageHeader } from "@/components/admin/page-header";
 import { PrintButton } from "@/components/admin/print-button";
 import { getMonthlyBillsForRoutePrint } from "@/lib/monthly-bills";
+import { billFiltersFromParams, describeBillFilters, matchesBillFilters } from "@/lib/bill-filters";
 import { MonthlyBillDocument } from "@/app/monthly-bills/monthly-bill-document";
 
 function formatMonth(value: string) {
@@ -14,7 +15,15 @@ function formatMonth(value: string) {
 export default async function MonthlyBillsPrintAllPage({
   searchParams,
 }: {
-  searchParams: Promise<{ month?: string; routeId?: string; status?: string }>;
+  searchParams: Promise<{
+    month?: string;
+    routeId?: string;
+    status?: string;
+    search?: string;
+    amountField?: string;
+    minAmount?: string;
+    maxAmount?: string;
+  }>;
 }) {
   const params = await searchParams;
   const month = params.month ?? new Date().toISOString().slice(0, 7);
@@ -42,7 +51,20 @@ export default async function MonthlyBillsPrintAllPage({
     );
   }
 
-  const payload = await getMonthlyBillsForRoutePrint(routeId, month, params.status);
+  // Applied here, not on the screen: this is a separate route, so a filter that
+  // is not in the URL simply does not reach the paper.
+  const filters = billFiltersFromParams(params);
+  const loaded = await getMonthlyBillsForRoutePrint(routeId, month, params.status);
+  const payload = {
+    ...loaded,
+    // Status is already applied by the loader; the rest are the same rules the
+    // screen runs, from src/lib/bill-filters.ts. closingBalance is what the
+    // Summary calls pendingAmount — the same figure under two names.
+    bills: loaded.bills.filter((bill) =>
+      matchesBillFilters({ ...bill, pendingAmount: bill.closingBalance }, filters),
+    ),
+  };
+  const filterNotice = describeBillFilters(filters);
   const qrDataUrl = payload.bills[0]?.businessProfile?.upiQrDataUrl ?? null;
 
   return (
@@ -51,7 +73,7 @@ export default async function MonthlyBillsPrintAllPage({
         <PageHeader
           title="Print All Bills"
           subtitle={`${payload.routeCode ? `${payload.routeCode} - ${payload.routeName}` : "Route"} · ${formatMonth(month)} · ${payload.bills.length} bill(s)${
-            params.status ? ` · ${params.status.charAt(0)}${params.status.slice(1).toLowerCase()} only` : ""
+            filterNotice ? ` · ${filterNotice}` : ""
           }`}
           actions={
             <>
