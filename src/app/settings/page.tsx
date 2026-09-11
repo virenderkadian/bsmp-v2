@@ -1,6 +1,7 @@
 import { BasicSettingsTabs } from "@/app/settings/basic-settings-tabs";
 import { SettingsTabs } from "@/app/settings/settings-tabs";
 import { getCurrentCityId } from "@/lib/current-city";
+import { getCitySettings } from "@/lib/city-settings";
 import { getCurrentUser } from "@/lib/current-user";
 import {
   getArchivePayload,
@@ -36,7 +37,11 @@ export default async function SettingsPage({
 }) {
   const params = await searchParams;
   const cityId = await getCurrentCityId();
-  const [{ profile }, currentUser] = await Promise.all([getBusinessProfile(cityId), getCurrentUser()]);
+  const [{ profile }, currentUser, citySettings] = await Promise.all([
+    getBusinessProfile(cityId),
+    getCurrentUser(),
+    getCitySettings(cityId),
+  ]);
   const isSuperadmin = currentUser?.role === "SUPERADMIN";
 
   const [
@@ -79,9 +84,14 @@ export default async function SettingsPage({
           archivePayload={archivePayload}
           billingRoutesPayload={billingRoutesPayload}
           duplicateNamesPayload={duplicateNamesPayload}
+          citySettings={citySettings}
         />
       ) : (
-        <BasicSettingsTabs profile={profile} />
+        <BasicSettingsTabs
+          profile={profile}
+          citySettings={citySettings}
+          canConfigure={currentUser?.role === "ADMIN"}
+        />
       )}
     </>
   );
