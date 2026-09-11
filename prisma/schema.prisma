@@ -79,6 +79,7 @@ model City {
   userAssignments    UserCityAssignment[]
   auditLogs          AuditLog[]
   dailyEntryArchives DailyEntryArchive[]
+  settings           CitySetting[]
 }
 
 // id matches the Supabase Auth user id directly (no separate mapping table) —
@@ -471,12 +472,12 @@ model BusinessProfile {
 // morning. Both columns are filled independently as the cycle progresses,
 // and either can be back-filled later for missed days.
 model VehicleCycleStock {
-  id          String   @id @default(uuid()) @db.Uuid
-  vehicleId   String   @db.Uuid
-  productId   String   @db.Uuid
-  cycleDate   DateTime @db.Date
-  givenQty    Decimal  @default(0) @db.Decimal(10, 3)
-  returnedQty Decimal  @default(0) @db.Decimal(10, 3)
+  id           String   @id @default(uuid()) @db.Uuid
+  vehicleId    String   @db.Uuid
+  productId    String   @db.Uuid
+  cycleDate    DateTime @db.Date
+  givenQty     Decimal  @default(0) @db.Decimal(10, 3)
+  returnedQty  Decimal  @default(0) @db.Decimal(10, 3)
   // The product rate as it stood on this cycle, so a rate change tomorrow
   // cannot silently re-price what a driver owed last month. Cash sales are
   // valued as leftover x rate, and reading Product.defaultRate at display time
@@ -489,10 +490,10 @@ model VehicleCycleStock {
   // existing row was backfilled at the point no rate had ever changed, so the
   // backfill is exact rather than a guess.
   rateSnapshot Decimal? @db.Decimal(10, 2)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  vehicle     Vehicle  @relation(fields: [vehicleId], references: [id])
-  product     Product  @relation(fields: [productId], references: [id])
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  vehicle      Vehicle  @relation(fields: [vehicleId], references: [id])
+  product      Product  @relation(fields: [productId], references: [id])
 
   @@unique([vehicleId, productId, cycleDate])
 }
@@ -668,4 +669,23 @@ model NotificationOutbox {
   @@index([status, channel, notBefore])
   @@index([batchId])
   @@index([customerId, createdAt])
+}
+
+// Per-city switches for how the app behaves — deliberately key/value rather
+// than a column per setting, so adding one is a code change and not a
+// migration. Kept separate from BusinessProfile, which is the letterhead and
+// bank details a bill is printed with: this is behaviour, not identity.
+//
+// Every key has a default in src/lib/city-settings.ts, so a city with no rows
+// at all is a valid, fully-configured city.
+model CitySetting {
+  id        String   @id @default(uuid()) @db.Uuid
+  cityId    String   @db.Uuid
+  key       String
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  city      City     @relation(fields: [cityId], references: [id])
+
+  @@unique([cityId, key])
 }

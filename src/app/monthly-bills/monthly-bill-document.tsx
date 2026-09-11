@@ -184,6 +184,26 @@ export function MonthlyBillDocument({
         </table>
       </div>
 
+      {/* Occasional sales — paneer, ghee, a festival order. One line rather
+          than a calendar column of empty cells, so the bill still explains its
+          own total. */}
+      {bill.otherItems.length > 0 ? (
+        <div className="mt-2 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-t border-slate-300 pt-1.5 text-xs print:mt-1 print:pt-1">
+          <div>
+            <span className="font-semibold">Other items: </span>
+            <span>
+              {bill.otherItems
+                .map(
+                  (item) =>
+                    `${Number(item.quantity).toLocaleString("en-IN", { maximumFractionDigits: 3 })} ${item.unit} ${item.shortName ?? item.name} x ${formatMoney(item.rate)}`,
+                )
+                .join("  ·  ")}
+            </span>
+          </div>
+          <span className="font-semibold">{formatMoney(bill.otherItemsTotal)}</span>
+        </div>
+      ) : null}
+
       <div className="mt-2 ml-auto max-w-xs space-y-0.5 print:mt-1">
         <div className="flex justify-between">
           <span>Previous Balance</span>
@@ -191,8 +211,19 @@ export function MonthlyBillDocument({
         </div>
         <div className="flex justify-between">
           <span>Milk/Product Total (+)</span>
-          <span>{formatMoney(bill.deliveryAmount)}</span>
+          {/* Derived from the bill's own total rather than summed off the
+              calendar: the two can differ when a bill predates a later
+              delivery, or when the daily entries behind it have been archived.
+              Taking the difference keeps these two lines adding up to the
+              Balance Amount below in every one of those cases. */}
+          <span>{formatMoney(Number(bill.deliveryAmount) - Number(bill.otherItemsTotal))}</span>
         </div>
+        {Number(bill.otherItemsTotal) !== 0 ? (
+          <div className="flex justify-between">
+            <span>Other Items (+)</span>
+            <span>{formatMoney(bill.otherItemsTotal)}</span>
+          </div>
+        ) : null}
         <div className="flex justify-between text-emerald-700">
           <span>Payment Received (-)</span>
           <span>{formatMoney(bill.paymentAmount)}</span>

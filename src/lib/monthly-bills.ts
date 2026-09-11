@@ -4,6 +4,14 @@ import { getCityCustomerLedger, receivedAgainstOpenBill } from "@/lib/bill-ledge
 import { mergeCalendarDays, resolveBillingRoutes, selectBillingRows } from "@/lib/monthly-bills-math";
 import { withDbTimeout } from "@/lib/db-timeout";
 import { prisma } from "@/lib/prisma";
+import { getCitySettings } from "@/lib/city-settings";
+import {
+  billDocumentProducts,
+  narrowSummaryToSoldProducts,
+  otherItemsFor,
+  splitDailyAndOccasional,
+  type OtherItemLine,
+} from "@/lib/sold-products";
 
 export type MonthlyBillItemRecord = {
   id: string;
@@ -128,6 +136,11 @@ export type MonthlyBillDetail = MonthlyBillRecord & {
   calendarProducts: MonthlyBillDocumentProduct[];
   calendarDays: MonthlyBillCalendarDay[];
   calendarTotals: MonthlyBillCalendarTotals;
+  // Occasional sales — a kilo of paneer, a one-off ghee order. Summarised on
+  // one line beneath the calendar rather than given a column of 29 empty
+  // cells, and added into the same total.
+  otherItems: OtherItemLine[];
+  otherItemsTotal: string;
   businessProfile: MonthlyBillBusinessProfile | null;
   deliveryRows: MonthlyBillDeliveryRow[];
   payments: MonthlyBillPaymentRecord[];
@@ -145,6 +158,9 @@ export type MonthlyBillSummaryProduct = {
   name: string;
   shortName: string | null;
   unit: string;
+  // Whether the product earns a column of its own. Occasional sales are money
+  // on this sheet without being a column — see narrowSummaryToSoldProducts.
+  showInDailyEntry: boolean;
 };
 
 export type MonthlyBillSummaryCustomerRow = {
@@ -554,11 +570,14 @@ export async function getMonthlyBillSummary(input?: {
   try {
     const cityId = await getCurrentCityId();
     const [products, routes] = await withDbTimeout(Promise.all([
+      // Every active product, not just the ones flagged for Daily Entry — the
+      // columns are narrowed afterwards to what was actually sold, which also
+      // lets an occasional item reach the sheet it belongs on. See
+      // narrowSummaryToSoldProducts below.
       prisma.product.findMany({
         where: {
           cityId,
           isActive: true,
-          showInDailyEntry: true,
         },
         orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
         select: {
@@ -567,6 +586,7 @@ export async function getMonthlyBillSummary(input?: {
           name: true,
           shortName: true,
           unit: true,
+          showInDailyEntry: true,
         },
       }),
       prisma.route.findMany({
@@ -972,7 +992,12 @@ export async function getMonthlyBillSummary(input?: {
     const figuresAsOf =
       snapshotTimes.length > 0 ? new Date(Math.min(...snapshotTimes)).toISOString() : null;
 
-    return {
+    // A column exists because something was sold into it. Applied to the
+    // assembled payload so the columns, the rows and the totals cannot
+    // disagree.
+    const settings = await getCitySettings(cityId);
+
+    return narrowSummaryToSoldProducts({
       dbConnected: true,
       selectedMonth,
       selectedRouteId,
@@ -984,7 +1009,7 @@ export async function getMonthlyBillSummary(input?: {
       grandTotals: buildTotals(allRows),
       outstanding,
       figuresAsOf,
-    };
+    }, settings.showOccasionalProductColumns);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unable to load monthly bill summary.";
@@ -1048,6 +1073,7 @@ export async function getMonthlyBillDetail(id: string): Promise<MonthlyBillDetai
             totalAmount: true,
             product: {
               select: {
+                id: true,
                 code: true,
                 name: true,
                 shortName: true,
@@ -1067,12 +1093,15 @@ export async function getMonthlyBillDetail(id: string): Promise<MonthlyBillDetai
 
     // Everything below only depends on `bill` (already loaded), not on each
     // other — one round trip instead of three sequential ones.
-    const [calendarProducts, businessProfile, sequenceLine, deliveryEntries, payments] = await withDbTimeout(
+    const [cityProducts, businessProfile, sequenceLine, deliveryEntries, payments] = await withDbTimeout(
       Promise.all([
+        // Every active product; the calendar columns are narrowed below to what
+        // this customer actually took. An occasional item is not flagged for
+        // Daily Entry and would otherwise be billed with no column to show it.
         prisma.product.findMany({
-          where: { cityId: bill.route.cityId, isActive: true, showInDailyEntry: true },
+          where: { cityId: bill.route.cityId, isActive: true },
           orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
-          select: { id: true, code: true, name: true, shortName: true, unit: true },
+          select: { id: true, code: true, name: true, shortName: true, unit: true, showInDailyEntry: true },
         }),
         prisma.businessProfile.findUnique({ where: { cityId: bill.route.cityId } }),
         prisma.monthlyRouteCustomerSequence.findUnique({
@@ -1178,7 +1207,29 @@ export async function getMonthlyBillDetail(id: string): Promise<MonthlyBillDetai
     const dayEntryMap = buildMergedDayEntryMap(
       deliveryEntries.map((entry) => ({ day: entry.entryDate.getUTCDate(), line: entry.lines[0] })),
     );
+    // Only what this customer actually took. The union of the bill's own items
+    // and the month's deliveries: the items survive the daily entries being
+    // archived, the deliveries cover anything recorded after generation.
+    const { daily, occasional } = splitDailyAndOccasional(cityProducts);
+    const calendarProducts = billDocumentProducts(
+      daily,
+      bill.items.map((item) => item.product.id),
+      deliveryEntries.flatMap((entry) =>
+        (entry.lines[0]?.productEntries ?? [])
+          .filter((productEntry) => Number(productEntry.quantity) !== 0)
+          .map((productEntry) => productEntry.product.id),
+      ),
+    );
     const { calendarDays, calendarTotals } = buildCalendarDays(dayEntryMap, calendarProducts, start);
+    const { lines: otherItems, total: otherItemsTotal } = otherItemsFor(
+      occasional,
+      bill.items.map((item) => ({
+        productId: item.product.id,
+        totalQty: String(item.totalQty),
+        averageRate: String(item.averageRate),
+        totalAmount: String(item.totalAmount),
+      })),
+    );
 
     return {
       dbConnected: true,
@@ -1206,6 +1257,8 @@ export async function getMonthlyBillDetail(id: string): Promise<MonthlyBillDetai
         driverName: bill.route.driverName,
         driverPhone: bill.route.driverPhone,
         calendarProducts,
+        otherItems,
+        otherItemsTotal,
         calendarDays,
         calendarTotals,
         businessProfile,
@@ -1294,12 +1347,15 @@ export async function getMonthlyBillsForRoutePrint(
       return { dbConnected: true, routeCode: "", routeName: "", bills: [], error: "Route not found." };
     }
 
-    const [calendarProducts, businessProfile, bills, sequenceLines, dailyEntries] = await withDbTimeout(
+    const [cityProducts, businessProfile, bills, sequenceLines, dailyEntries] = await withDbTimeout(
       Promise.all([
+        // Every active product; each bill's columns are narrowed below to what
+        // that customer actually took, so a milk-only round stops printing a
+        // column per product in the city.
         prisma.product.findMany({
-          where: { cityId: route.cityId, isActive: true, showInDailyEntry: true },
+          where: { cityId: route.cityId, isActive: true },
           orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
-          select: { id: true, code: true, name: true, shortName: true, unit: true },
+          select: { id: true, code: true, name: true, shortName: true, unit: true, showInDailyEntry: true },
         }),
         prisma.businessProfile.findUnique({ where: { cityId: route.cityId } }),
         prisma.monthlyBill.findMany({
@@ -1319,6 +1375,10 @@ export async function getMonthlyBillsForRoutePrint(
             closingBalance: true,
             status: true,
             generatedAt: true,
+            // Drives the printed columns alongside the month's deliveries —
+            // the items are what survives the daily entries being archived —
+            // and carries the occasional sales summarised beneath the calendar.
+            items: { select: { productId: true, totalQty: true, averageRate: true, totalAmount: true } },
             customer: {
               select: {
                 code: true,
@@ -1389,10 +1449,32 @@ export async function getMonthlyBillsForRoutePrint(
       entriesByCustomerDay.set(customerId, buildMergedDayEntryMap(rows));
     }
 
+    const { daily, occasional } = splitDailyAndOccasional(cityProducts);
     const documents: MonthlyBillDetail[] = bills
       .map((bill) => {
         const dayEntryMap = entriesByCustomerDay.get(bill.customerId) ?? new Map();
+        // Columns per bill, not per batch: a customer who takes only buffalo
+        // milk gets one column even when the round also sells cow milk, and a
+        // one-off item appears on the single bill it belongs to.
+        const calendarProducts = billDocumentProducts(
+          daily,
+          bill.items.map((item) => item.productId),
+          (rowsByCustomer.get(bill.customerId) ?? []).flatMap((row) =>
+            (row.line?.productEntries ?? [])
+              .filter((productEntry) => Number(productEntry.quantity) !== 0)
+              .map((productEntry) => productEntry.product.id),
+          ),
+        );
         const { calendarDays, calendarTotals } = buildCalendarDays(dayEntryMap, calendarProducts, start);
+        const { lines: otherItems, total: otherItemsTotal } = otherItemsFor(
+          occasional,
+          bill.items.map((item) => ({
+            productId: item.productId,
+            totalQty: String(item.totalQty),
+            averageRate: String(item.averageRate),
+            totalAmount: String(item.totalAmount),
+          })),
+        );
 
         return {
           id: bill.id,
@@ -1418,6 +1500,8 @@ export async function getMonthlyBillsForRoutePrint(
           driverName: route.driverName,
           driverPhone: route.driverPhone,
           calendarProducts,
+          otherItems,
+          otherItemsTotal,
           calendarDays,
           calendarTotals,
           businessProfile,

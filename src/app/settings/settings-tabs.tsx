@@ -9,8 +9,10 @@ import { BillingRoutesPanel } from "@/app/settings/billing-routes-panel";
 import { DuplicateNamesPanel } from "@/app/settings/duplicate-names-panel";
 import { BusinessProfileForm } from "@/app/settings/business-profile-form";
 import { CitiesPanel } from "@/app/settings/cities-panel";
+import { ConfigurationPanel } from "@/app/settings/configuration-panel";
 import { TeamPanel } from "@/app/settings/team-panel";
 import { MasterTabs } from "@/components/admin/master-tabs";
+import type { CitySettings } from "@/lib/city-settings.shared";
 import type {
   ArchivePayload,
   AuditLogRecord,
@@ -20,8 +22,8 @@ import type {
   UserRecord,
 } from "@/lib/settings";
 
-type SettingsTab = "profile" | "appearance" | "cities" | "team" | "billing-routes" | "duplicate-names"
-  | "activity" | "archive";
+type SettingsTab = "profile" | "appearance" | "configuration" | "cities" | "team" | "billing-routes"
+  | "duplicate-names" | "activity" | "archive";
 
 export function SettingsTabs({
   profile,
@@ -35,6 +37,7 @@ export function SettingsTabs({
   archivePayload,
   billingRoutesPayload,
   duplicateNamesPayload,
+  citySettings,
 }: {
   profile: BusinessProfile | null;
   citiesConnected: boolean;
@@ -47,6 +50,7 @@ export function SettingsTabs({
   archivePayload: ArchivePayload;
   billingRoutesPayload: BillingRoutesPayload;
   duplicateNamesPayload: DuplicateNamesPayload;
+  citySettings: CitySettings;
 }) {
   const [activeTab, setActiveTab] = useState<SettingsTab>("profile");
 
@@ -57,6 +61,7 @@ export function SettingsTabs({
         tabs={[
           { value: "profile", label: "Business profile" },
           { value: "appearance", label: "Appearance" },
+          { value: "configuration", label: "Configuration" },
           { value: "cities", label: "Cities", count: cities.length },
           { value: "team", label: "Team", count: users.length },
           {
@@ -77,6 +82,7 @@ export function SettingsTabs({
 
       {activeTab === "profile" ? <BusinessProfileForm profile={profile} /> : null}
       {activeTab === "appearance" ? <AppearancePanel /> : null}
+      {activeTab === "configuration" ? <ConfigurationPanel settings={citySettings} /> : null}
       {activeTab === "cities" ? <CitiesPanel dbConnected={citiesConnected} cities={cities} /> : null}
       {activeTab === "team" ? (
         <TeamPanel dbConnected={usersConnected} users={users} cities={cities} currentUserId={currentUserId} />
