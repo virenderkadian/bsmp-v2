@@ -6,7 +6,6 @@ import { withDbTimeout } from "@/lib/db-timeout";
 import { prisma } from "@/lib/prisma";
 import { getCitySettings } from "@/lib/city-settings";
 import {
-  billDocumentProducts,
   narrowSummaryToSoldProducts,
   otherItemsFor,
   splitDailyAndOccasional,
@@ -1210,16 +1209,12 @@ export async function getMonthlyBillDetail(id: string): Promise<MonthlyBillDetai
     // Only what this customer actually took. The union of the bill's own items
     // and the month's deliveries: the items survive the daily entries being
     // archived, the deliveries cover anything recorded after generation.
+    // Every product switched on for Daily Entry gets a column, sold or not, so
+    // a customer's bill looks the same month to month and the columns are
+    // controlled from Products rather than drifting with what happened to
+    // sell. Occasional items are the exception — they go on one line below.
     const { daily, occasional } = splitDailyAndOccasional(cityProducts);
-    const calendarProducts = billDocumentProducts(
-      daily,
-      bill.items.map((item) => item.product.id),
-      deliveryEntries.flatMap((entry) =>
-        (entry.lines[0]?.productEntries ?? [])
-          .filter((productEntry) => Number(productEntry.quantity) !== 0)
-          .map((productEntry) => productEntry.product.id),
-      ),
-    );
+    const calendarProducts = daily;
     const { calendarDays, calendarTotals } = buildCalendarDays(dayEntryMap, calendarProducts, start);
     const { lines: otherItems, total: otherItemsTotal } = otherItemsFor(
       occasional,
@@ -1456,16 +1451,7 @@ export async function getMonthlyBillsForRoutePrint(
         // Columns per bill, not per batch: a customer who takes only buffalo
         // milk gets one column even when the round also sells cow milk, and a
         // one-off item appears on the single bill it belongs to.
-        const calendarProducts = billDocumentProducts(
-          daily,
-          bill.items.map((item) => item.productId),
-          (rowsByCustomer.get(bill.customerId) ?? []).flatMap((row) =>
-            (row.line?.productEntries ?? [])
-              .filter((productEntry) => Number(productEntry.quantity) !== 0)
-              .map((productEntry) => productEntry.product.id),
-          ),
-        );
-        const { calendarDays, calendarTotals } = buildCalendarDays(dayEntryMap, calendarProducts, start);
+        const { calendarDays, calendarTotals } = buildCalendarDays(dayEntryMap, daily, start);
         const { lines: otherItems, total: otherItemsTotal } = otherItemsFor(
           occasional,
           bill.items.map((item) => ({
@@ -1499,7 +1485,7 @@ export async function getMonthlyBillsForRoutePrint(
           routeShift: route.shift,
           driverName: route.driverName,
           driverPhone: route.driverPhone,
-          calendarProducts,
+          calendarProducts: daily,
           otherItems,
           otherItemsTotal,
           calendarDays,

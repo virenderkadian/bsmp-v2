@@ -3,7 +3,9 @@ import { PageHeader } from "@/components/admin/page-header";
 import { PrintButton } from "@/components/admin/print-button";
 import { getMonthlyBillsForRoutePrint } from "@/lib/monthly-bills";
 import { billFiltersFromParams, describeBillFilters, matchesBillFilters } from "@/lib/bill-filters";
-import { MonthlyBillDocument } from "@/app/monthly-bills/monthly-bill-document";
+import { getCitySettings } from "@/lib/city-settings";
+import { getCurrentCityId } from "@/lib/current-city";
+import { BillDocument } from "@/app/monthly-bills/bill-document";
 
 function formatMonth(value: string) {
   return new Date(`${value}-01T00:00:00.000Z`).toLocaleDateString("en-IN", {
@@ -65,6 +67,7 @@ export default async function MonthlyBillsPrintAllPage({
     ),
   };
   const filterNotice = describeBillFilters(filters);
+  const { billFormat } = await getCitySettings(await getCurrentCityId());
   const qrDataUrl = payload.bills[0]?.businessProfile?.upiQrDataUrl ?? null;
 
   return (
@@ -103,10 +106,11 @@ export default async function MonthlyBillsPrintAllPage({
       ) : (
         <div className="mt-4 space-y-4 print:mt-0 print:space-y-0">
           {payload.bills.map((bill, index) => (
-            <MonthlyBillDocument
+            <BillDocument
               key={bill.id}
               bill={bill}
               qrDataUrl={qrDataUrl}
+              format={billFormat}
               className={index > 0 ? "print:break-before-page" : undefined}
             />
           ))}

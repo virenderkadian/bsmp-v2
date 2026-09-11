@@ -4,7 +4,9 @@ import { PageHeader } from "@/components/admin/page-header";
 import { PrintButton } from "@/components/admin/print-button";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { getMonthlyBillDetail } from "@/lib/monthly-bills";
-import { MonthlyBillDocument } from "@/app/monthly-bills/monthly-bill-document";
+import { getCitySettings } from "@/lib/city-settings";
+import { getCurrentCityId } from "@/lib/current-city";
+import { BillDocument } from "@/app/monthly-bills/bill-document";
 
 function billStatusTone(status: string) {
   if (status === "LOCKED") {
@@ -29,6 +31,7 @@ export default async function MonthlyBillDetailPage({
 }) {
   const { id } = await params;
   const payload = await getMonthlyBillDetail(id);
+  const { billFormat } = await getCitySettings(await getCurrentCityId());
 
   if (payload.dbConnected && !payload.bill) {
     notFound();
@@ -87,7 +90,7 @@ export default async function MonthlyBillDetailPage({
       </div>
 
       <div className="mt-4 print:mt-0">
-        <MonthlyBillDocument bill={bill} qrDataUrl={qrDataUrl} />
+        <BillDocument bill={bill} qrDataUrl={qrDataUrl} format={billFormat} />
       </div>
     </>
   );

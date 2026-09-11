@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  billDocumentProducts,
   narrowSummaryToSoldProducts,
   soldProductIds,
   otherItemsFor,
@@ -120,40 +119,6 @@ describe("narrowSummaryToSoldProducts", () => {
     // collapsing to a table with no product columns at all.
     const result = narrowSummaryToSoldProducts(payload([row({})]));
     expect(result.products).toHaveLength(4);
-  });
-});
-
-describe("billDocumentProducts", () => {
-  it("gives a customer only the products they took", () => {
-    expect(billDocumentProducts(CATALOGUE, ["buf"], ["buf"]).map((p) => p.code)).toEqual(["BUF"]);
-  });
-
-  it("unions the bill's items with the month's deliveries", () => {
-    // Items survive the daily entries being archived; deliveries cover
-    // anything recorded after the bill was generated. Dropping either would
-    // lose a column — and buildCalendarDays sums its gross over these columns,
-    // so it would lose the money too.
-    const result = billDocumentProducts(CATALOGUE, ["buf"], ["ghee"]);
-    expect(result.map((p) => p.code)).toEqual(["BUF", "GHEE"]);
-  });
-
-  it("ignores nothing when the bill has items but no surviving entries", () => {
-    expect(billDocumentProducts(CATALOGUE, ["cow", "dahi"], []).map((p) => p.code)).toEqual([
-      "COW",
-      "DAHI",
-    ]);
-  });
-
-  it("falls back to the catalogue for a bill with nothing on it", () => {
-    // A zero-delivery bill would otherwise render a calendar with no columns.
-    expect(billDocumentProducts(CATALOGUE, [], [])).toHaveLength(4);
-  });
-
-  it("keeps the catalogue's display order rather than the order sold", () => {
-    expect(billDocumentProducts(CATALOGUE, ["ghee"], ["cow"]).map((p) => p.code)).toEqual([
-      "COW",
-      "GHEE",
-    ]);
   });
 });
 
