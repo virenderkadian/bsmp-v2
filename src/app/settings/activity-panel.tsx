@@ -9,6 +9,10 @@ import { SearchInput } from "@/components/admin/search-input";
 import { StatusBadge } from "@/components/admin/status-badge";
 import type { AuditLogRecord } from "@/lib/settings";
 
+// timeZone is pinned, not optional: this is a client component rendering a
+// real timestamp, so without it the server formats in UTC, the browser formats
+// in IST, and React reports a hydration mismatch on every Activity view. The
+// same fix the WhatsApp panels already carry.
 function formatTimestamp(value: string) {
   return new Date(value).toLocaleString("en-IN", {
     day: "2-digit",
@@ -16,6 +20,7 @@ function formatTimestamp(value: string) {
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
+    timeZone: "Asia/Kolkata",
   });
 }
 
