@@ -6,7 +6,7 @@ import { AppearancePanel } from "@/app/settings/appearance-panel";
 import { BusinessProfileForm } from "@/app/settings/business-profile-form";
 import { ConfigurationPanel } from "@/app/settings/configuration-panel";
 import type { CitySettings } from "@/lib/city-settings.shared";
-import { MasterTabs } from "@/components/admin/master-tabs";
+import { SettingsLayout, SettingsNav } from "@/components/admin/settings-nav";
 
 type BasicSettingsTab = "profile" | "appearance" | "configuration";
 
@@ -27,22 +27,31 @@ export function BasicSettingsTabs({
   const [activeTab, setActiveTab] = useState<BasicSettingsTab>("profile");
 
   return (
-    <>
-      <MasterTabs
-        activeValue={activeTab}
-        tabs={[
-          { value: "profile", label: "Business profile" },
-          { value: "appearance", label: "Appearance" },
-          ...(canConfigure ? [{ value: "configuration", label: "Configuration" }] : []),
-        ]}
-        onChange={(value) => setActiveTab(value as BasicSettingsTab)}
-      />
-
+    <SettingsLayout
+      nav={
+        <SettingsNav
+          activeValue={activeTab}
+          onChange={setActiveTab}
+          groups={[
+            {
+              heading: "Business",
+              items: [
+                { value: "profile" as BasicSettingsTab, label: "Business profile" },
+                ...(canConfigure
+                  ? [{ value: "configuration" as BasicSettingsTab, label: "Configuration" }]
+                  : []),
+                { value: "appearance" as BasicSettingsTab, label: "Appearance" },
+              ],
+            },
+          ]}
+        />
+      }
+    >
       {activeTab === "profile" ? <BusinessProfileForm profile={profile} /> : null}
       {activeTab === "appearance" ? <AppearancePanel /> : null}
       {activeTab === "configuration" && canConfigure ? (
         <ConfigurationPanel settings={citySettings} />
       ) : null}
-    </>
+    </SettingsLayout>
   );
 }

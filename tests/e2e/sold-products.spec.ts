@@ -121,6 +121,8 @@ test.describe("Printed sheets show the products a round actually sold", () => {
     // Ghee gets no calendar column — it gets a line that explains the money,
     // and the bill's own arithmetic now accounts for every rupee in its total.
     await expect(page.getByRole("columnheader", { name: /GHEE/i })).toHaveCount(0);
+    // Milk does, because it is on the Daily Entry grid.
+    await expect(page.getByRole("columnheader", { name: /Buffalo/i })).toBeVisible();
     await expect(page.getByText(/Other items:/)).toBeVisible();
     await expect(page.getByText(/0\.5 Kg .*Ghee/i)).toBeVisible();
     await expect(page.getByText("Other Items (+)")).toBeVisible();
@@ -139,7 +141,7 @@ test.describe("Printed sheets show the products a round actually sold", () => {
     await expect(dialog).toBeHidden({ timeout: 20_000 });
   }
 
-  test("a printed bill shows only what that customer took", async ({ page }) => {
+  test("a bill keeps every Daily Entry product, sold or not", async ({ page }) => {
     const prisma = testPrisma();
     await generateBills(page);
 
@@ -151,9 +153,65 @@ test.describe("Printed sheets show the products a round actually sold", () => {
     await page.goto(`/monthly-bills/${billTwo!.id}`);
     await page.waitForLoadState("networkidle");
 
-    // Customer 2 took milk only, so their bill's calendar carries no ghee
-    // column even though the round sold some to customer 1.
-    await expect(page.getByText(/GHEE/i)).toHaveCount(0);
-    await expect(page.getByText(/PANEER/i)).toHaveCount(0);
+    // Customer 2 took milk only, but paneer is switched on for Daily Entry, so
+    // it still gets its column — every bill in the city reads the same way,
+    // and the columns are controlled from Products.
+    await expect(page.getByRole("columnheader", { name: /PANEER/i })).toBeVisible();
+    // Ghee is an occasional item: never a column, wherever it was sold.
+    await expect(page.getByRole("columnheader", { name: /GHEE/i })).toHaveCount(0);
+  });
+
+  // The stored setting is the real outcome; the toast is a 2.6s flash.
+  async function expectFormat(prisma: ReturnType<typeof testPrisma>, value: string) {
+    await expect
+      .poll(
+        async () => {
+          const row = await prisma.citySetting.findFirst({
+            where: { cityId: TEST_CITY_ID, key: "billFormat" },
+            select: { value: true },
+          });
+          return row?.value ?? "classic";
+        },
+        { timeout: 15_000 },
+      )
+      .toBe(value);
+  }
+
+  // Two formats, one switch. Both must itemise occasional sales — that is the
+  // part that makes a bill explain its own total.
+  test("Configuration switches the printed bill format", async ({ page }) => {
+    const prisma = testPrisma();
+    await generateBills(page);
+    const billOne = await prisma.monthlyBill.findFirst({
+      where: { routeId: TEST_ROUTE_ID, customerId: TEST_CUSTOMER_1_ID },
+      select: { id: true },
+    });
+
+    // Classic is the default, and keeps a per-day Amt column.
+    await page.goto(`/monthly-bills/${billOne!.id}`);
+    await page.waitForLoadState("networkidle");
+    await expect(page.getByRole("columnheader", { name: "Amt", exact: true })).not.toHaveCount(0);
+    await expect(page.getByText(/Other items:/)).toBeVisible();
+
+    await page.goto("/settings");
+    await page.waitForLoadState("networkidle");
+    await page.getByRole("button", { name: "Configuration", exact: true }).click();
+    await page.getByRole("button", { name: /One page/ }).click();
+    await expectFormat(prisma, "compact");
+
+    await page.goto(`/monthly-bills/${billOne!.id}`);
+    await page.waitForLoadState("networkidle");
+    // The one-page format carries the round and stop the classic one never
+    // showed, and still itemises the ghee.
+    await expect(page.getByText("Stop no.")).toBeVisible();
+    await expect(page.getByText("How to pay")).toBeVisible();
+    await expect(page.getByText(/Other items:/)).toBeVisible();
+
+    // Put it back so the rest of the suite sees the default.
+    await page.goto("/settings");
+    await page.waitForLoadState("networkidle");
+    await page.getByRole("button", { name: "Configuration", exact: true }).click();
+    await page.getByRole("button", { name: /Classic/ }).click();
+    await expectFormat(prisma, "classic");
   });
 });

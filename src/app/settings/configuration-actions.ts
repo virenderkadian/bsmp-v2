@@ -6,7 +6,11 @@ import { getCurrentUser } from "@/lib/current-user";
 import { logAudit } from "@/lib/audit";
 import { prisma } from "@/lib/prisma";
 import { setCitySetting } from "@/lib/city-settings";
-import { CITY_SETTING_LABELS, isCitySettingKey } from "@/lib/city-settings.shared";
+import {
+  CITY_SETTING_FIELDS,
+  isCitySettingKey,
+  isValidCitySettingValue,
+} from "@/lib/city-settings.shared";
 
 export type ActionState = {
   status: "idle" | "success" | "error";
@@ -27,11 +31,15 @@ export async function updateCitySetting(
   void _prevState;
 
   const key = String(formData.get("key") ?? "");
-  const value = String(formData.get("value") ?? "") === "true";
+  const value = String(formData.get("value") ?? "");
   const token = crypto.randomUUID();
 
   if (!isCitySettingKey(key)) {
     return { status: "error", message: "That setting does not exist.", token };
+  }
+
+  if (!isValidCitySettingValue(key, value)) {
+    return { status: "error", message: "That is not a value this setting accepts.", token };
   }
 
   try {
@@ -46,16 +54,30 @@ export async function updateCitySetting(
     await logAudit(prisma, {
       cityId,
       entityType: "CitySetting",
-      entityId: key,
+      // AuditLog.entityId is a uuid column and a setting is keyed by name, not
+      // by id. The key rides in the summary and in `after` instead — passing it
+      // here made every write fail as an invalid uuid, and logAudit swallows
+      // its own errors, so Configuration changes went unrecorded in silence.
+      entityId: null,
       action: "UPDATE",
-      summary: `${CITY_SETTING_LABELS[key].label} turned ${value ? "on" : "off"}.`,
+      summary:
+        CITY_SETTING_FIELDS[key].kind === "boolean"
+          ? `${CITY_SETTING_FIELDS[key].label} turned ${value === "true" ? "on" : "off"}.`
+          : `${CITY_SETTING_FIELDS[key].label} set to ${value}.`,
       after: { key, value },
     });
 
     revalidatePath("/settings");
     revalidatePath("/monthly-bills");
 
-    return { status: "success", message: value ? "Turned on." : "Turned off.", token };
+    const message =
+      CITY_SETTING_FIELDS[key].kind === "boolean"
+        ? value === "true"
+          ? "Turned on."
+          : "Turned off."
+        : "Saved.";
+
+    return { status: "success", message, token };
   } catch (error) {
     return {
       status: "error",

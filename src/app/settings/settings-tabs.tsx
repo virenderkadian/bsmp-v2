@@ -11,7 +11,7 @@ import { BusinessProfileForm } from "@/app/settings/business-profile-form";
 import { CitiesPanel } from "@/app/settings/cities-panel";
 import { ConfigurationPanel } from "@/app/settings/configuration-panel";
 import { TeamPanel } from "@/app/settings/team-panel";
-import { MasterTabs } from "@/components/admin/master-tabs";
+import { SettingsLayout, SettingsNav } from "@/components/admin/settings-nav";
 import type { CitySettings } from "@/lib/city-settings.shared";
 import type {
   ArchivePayload,
@@ -55,31 +55,53 @@ export function SettingsTabs({
   const [activeTab, setActiveTab] = useState<SettingsTab>("profile");
 
   return (
-    <>
-      <MasterTabs
-        activeValue={activeTab}
-        tabs={[
-          { value: "profile", label: "Business profile" },
-          { value: "appearance", label: "Appearance" },
-          { value: "configuration", label: "Configuration" },
-          { value: "cities", label: "Cities", count: cities.length },
-          { value: "team", label: "Team", count: users.length },
-          {
-            value: "billing-routes",
-            label: "Billing routes",
-            count: billingRoutesPayload.customers.length,
-          },
-          {
-            value: "duplicate-names",
-            label: "Duplicate names",
-            count: duplicateNamesPayload.groups.length,
-          },
-          { value: "activity", label: "Activity", count: auditLogs.length },
-          { value: "archive", label: "Archive", count: archivePayload.candidates.length },
-        ]}
-        onChange={setActiveTab}
-      />
-
+    <SettingsLayout
+      nav={
+        <SettingsNav
+          activeValue={activeTab}
+          onChange={setActiveTab}
+          groups={[
+            {
+              heading: "Business",
+              items: [
+                { value: "profile", label: "Business profile" },
+                { value: "configuration", label: "Configuration" },
+                { value: "appearance", label: "Appearance" },
+              ],
+            },
+            {
+              heading: "Access",
+              items: [
+                { value: "team", label: "Team", count: users.length },
+                { value: "cities", label: "Cities", count: cities.length },
+              ],
+            },
+            {
+              heading: "Data",
+              items: [
+                {
+                  value: "billing-routes",
+                  label: "Billing routes",
+                  count: billingRoutesPayload.customers.length,
+                },
+                {
+                  value: "duplicate-names",
+                  label: "Duplicate names",
+                  count: duplicateNamesPayload.groups.length,
+                },
+              ],
+            },
+            {
+              heading: "System",
+              items: [
+                { value: "activity", label: "Activity", count: auditLogs.length },
+                { value: "archive", label: "Archive", count: archivePayload.candidates.length },
+              ],
+            },
+          ]}
+        />
+      }
+    >
       {activeTab === "profile" ? <BusinessProfileForm profile={profile} /> : null}
       {activeTab === "appearance" ? <AppearancePanel /> : null}
       {activeTab === "configuration" ? <ConfigurationPanel settings={citySettings} /> : null}
@@ -109,6 +131,6 @@ export function SettingsTabs({
         <ActivityPanel dbConnected={auditLogsConnected} logs={auditLogs} />
       ) : null}
       {activeTab === "archive" ? <ArchivePanel payload={archivePayload} /> : null}
-    </>
+    </SettingsLayout>
   );
 }

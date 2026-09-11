@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import {
   CITY_SETTING_DEFAULTS,
   CITY_SETTING_KEYS,
+  parseCitySetting,
   type CitySettingKey,
   type CitySettings,
 } from "@/lib/city-settings.shared";
@@ -10,10 +11,6 @@ import {
 // Reading is defaults-first: a missing row, an unknown key, or an unparseable
 // value all fall back to the declared default rather than failing. See
 // city-settings.shared.ts for the declarations themselves.
-
-function parse(value: string): boolean {
-  return value === "true";
-}
 
 export async function getCitySettings(cityId: string): Promise<CitySettings> {
   try {
@@ -28,7 +25,9 @@ export async function getCitySettings(cityId: string): Promise<CitySettings> {
     for (const key of CITY_SETTING_KEYS) {
       const value = stored.get(key);
       if (value !== undefined) {
-        settings[key] = parse(value);
+        // Assigning across a union of value types; parseCitySetting is what
+        // guarantees the value belongs to this key.
+        (settings as Record<string, unknown>)[key] = parseCitySetting(key, value);
       }
     }
 
@@ -40,10 +39,10 @@ export async function getCitySettings(cityId: string): Promise<CitySettings> {
   }
 }
 
-export async function setCitySetting(cityId: string, key: CitySettingKey, value: boolean) {
+export async function setCitySetting(cityId: string, key: CitySettingKey, value: string) {
   await prisma.citySetting.upsert({
     where: { cityId_key: { cityId, key } },
-    update: { value: String(value) },
-    create: { cityId, key, value: String(value) },
+    update: { value },
+    create: { cityId, key, value },
   });
 }

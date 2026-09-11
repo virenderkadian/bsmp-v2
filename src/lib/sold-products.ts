@@ -137,27 +137,6 @@ export function narrowSummaryToSoldProducts<
   };
 }
 
-// Columns for one customer's bill document.
-//
-// The union of two sources, deliberately: a bill's stored items survive the
-// daily entries being archived, and the delivery entries cover anything
-// recorded after the bill was generated. Taking only one of them would drop a
-// product from the calendar — and buildCalendarDays sums its gross over these
-// columns, so a dropped product loses its money too, not just its column.
-export function billDocumentProducts(
-  allProducts: ProductColumn[],
-  billItemProductIds: Iterable<string>,
-  deliveredProductIds: Iterable<string>,
-): ProductColumn[] {
-  const keep = new Set<string>([...billItemProductIds, ...deliveredProductIds]);
-
-  if (keep.size === 0) {
-    return allProducts;
-  }
-
-  return allProducts.filter((product) => keep.has(product.id));
-}
-
 // Everyday products get a calendar column; everything else is an occasional
 // sale.
 //
