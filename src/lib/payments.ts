@@ -610,6 +610,15 @@ export type BillQuickView = {
   paymentAmount: string;
   closingBalance: string;
   items: Array<{ productId: string; product: string; qty: string; rate: string; amount: string }>;
+  // Where this customer's next payment will actually settle.
+  //
+  // Money attaches to the customer's earliest bill that is not yet LOCKED —
+  // locking is what assigns it permanently. So the answer is not "the month you
+  // are standing in", and an operator should not have to work it out from lock
+  // status. If more than one month is open the money shows against all of them
+  // until the earliest is locked, which is worth saying plainly.
+  settlesOn: string | null;
+  alsoOpenMonths: string[];
   message?: string;
 };
 
@@ -634,6 +643,8 @@ export async function getBillQuickView(customerId: string, month: string): Promi
     paymentAmount: "0.00",
     closingBalance: "0.00",
     items: [],
+    settlesOn: null,
+    alsoOpenMonths: [],
   };
 
   try {
@@ -646,6 +657,19 @@ export async function getBillQuickView(customerId: string, month: string): Promi
     if (!customer) {
       return { ...empty, message: "Customer not found in this city." };
     }
+
+    // Every month this customer still has open, earliest first. A LOCKED bill
+    // has frozen its share of the money; anything else is still claiming it.
+    const openBills = await prisma.monthlyBill.findMany({
+      where: { customerId, route: { cityId }, status: { in: ["DRAFT", "GENERATED"] } },
+      orderBy: { billingMonth: "asc" },
+      select: { billingMonth: true },
+    });
+    const openMonths = openBills.map((row) => row.billingMonth.toISOString().slice(0, 7));
+    // With nothing open, the money lands on the month being worked in, as soon
+    // as that month is generated.
+    const settlesOn = openMonths[0] ?? getMonthInputValue(month);
+    const alsoOpenMonths = openMonths.slice(1);
 
     const bill = await prisma.monthlyBill.findFirst({
       where: { customerId, billingMonth, route: { cityId } },
@@ -674,6 +698,8 @@ export async function getBillQuickView(customerId: string, month: string): Promi
         ...empty,
         customerCode: customer.code,
         customerName: customer.name,
+        settlesOn,
+        alsoOpenMonths,
         message: "No bill generated for this month yet — the figure on the sheet is an estimate.",
       };
     }
@@ -685,6 +711,8 @@ export async function getBillQuickView(customerId: string, month: string): Promi
       billingMonth: getMonthInputValue(month),
       routeCode: bill.route.code,
       status: bill.status,
+      settlesOn,
+      alsoOpenMonths,
       openingBalance: toMoney(Number(bill.openingBalance)),
       deliveryAmount: toMoney(Number(bill.deliveryAmount)),
       paymentAmount: toMoney(Number(bill.paymentAmount)),

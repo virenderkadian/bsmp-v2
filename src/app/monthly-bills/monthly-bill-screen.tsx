@@ -51,10 +51,6 @@ const initialState: MonthlyBillActionState = { status: "idle" };
 // routes within this app, not third-party links.
 const PRINT_WINDOW_NAME = "bsm-print-preview";
 
-function formatMonthInput(value: Date) {
-  return new Date(value).toISOString().slice(0, 7);
-}
-
 function formatMonth(value: Date) {
   return new Date(value).toLocaleDateString("en-IN", {
     month: "short",
@@ -214,10 +210,23 @@ function GenerateBillsDialog({
           bills for the same customer-route-month will be updated.
         </div>
         {previousMonthUnlocked ? (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-            The previous month ({formatMonth(new Date(`${previousMonth}-01T00:00:00.000Z`))}) still has
-            bills that aren&apos;t Locked. Its closing balances — which carry forward as this month&apos;s
-            opening — may still change. You can generate now and regenerate later once it&apos;s locked.
+          <div className="space-y-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            <p className="font-semibold">
+              Lock {formatMonth(new Date(`${previousMonth}-01T00:00:00.000Z`))} first.
+            </p>
+            {/* Locking is what assigns a payment to a month. Until it happens
+                the money is unclaimed, and BOTH months take it — the closing
+                carried forward is short by it, and this month deducts it
+                again. */}
+            <p>
+              That month still has bills that aren&apos;t Locked, so any payment it hasn&apos;t
+              frozen will be counted against this month as well as that one — and its closing
+              balances, which carry forward as this month&apos;s opening, can still move.
+            </p>
+            <p>
+              You can generate now and regenerate once it is locked, but don&apos;t issue these
+              bills until you have.
+            </p>
           </div>
         ) : null}
         {state.status !== "idle" && state.message ? (
@@ -640,18 +649,17 @@ export function MonthlyBillScreen({
       }`
     : null;
 
-  // Months (YYYY-MM) that still have at least one non-final bill (Draft or
-  // Generated). Used to warn when generating a month whose prior month isn't
-  // fully locked yet — its carried-forward closings can still move.
-  const unlockedMonths = useMemo(() => {
-    const months = new Set<string>();
-    payload.bills.forEach((bill) => {
-      if (bill.status === "DRAFT" || bill.status === "GENERATED") {
-        months.add(formatMonthInput(bill.billingMonth));
-      }
-    });
-    return months;
-  }, [payload.bills]);
+  // Months still carrying a Draft or Generated bill, from the server.
+  //
+  // This used to be derived from the bills on screen, which silently stopped
+  // working when the bills query was bounded to one month: the set could only
+  // ever contain the selected month, so the "previous month isn't locked"
+  // warning below could never fire. It is the warning that would have caught
+  // the September carry-forward drift.
+  const unlockedMonths = useMemo(
+    () => new Set(payload.unlockedMonths),
+    [payload.unlockedMonths],
+  );
 
   const filteredBills = useMemo(() => {
     return payload.bills.filter((bill) => {

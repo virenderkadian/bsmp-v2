@@ -333,13 +333,76 @@ export async function saveDailyEntry(
         }
       }
 
+      // Occasional sales and hand-typed rates, named in the trail.
+      //
+      // These ship before any permission system exists, so any office user can
+      // sell anything at any price. The audit entry is therefore the entire
+      // control, and it has to be able to answer "who charged this customer
+      // 1,450 rupees for ghee, and when". One entry per save rather than one
+      // per cell — a line per changed row would make the trail unreadable on a
+      // six-hundred-customer round.
+      const catalogue = new Map(
+        (
+          await tx.product.findMany({
+            where: { cityId, isActive: true },
+            select: { id: true, name: true, defaultRate: true, showInDailyEntry: true },
+          })
+        ).map((product) => [product.id, product]),
+      );
+
+      const notable: Array<{
+        customerId: string;
+        product: string;
+        quantity: number;
+        rate: number;
+        catalogueRate: number;
+        reason: "occasional" | "rate override";
+      }> = [];
+
+      for (const line of parsed.data.lines) {
+        for (const product of line.products) {
+          const known = catalogue.get(product.productId);
+
+          if (!known || product.quantity <= 0) {
+            continue;
+          }
+
+          const catalogueRate = Number(known.defaultRate);
+          const occasional = !known.showInDailyEntry;
+          const overridden = Math.abs(product.rateSnapshot - catalogueRate) > 0.001;
+
+          if (occasional || overridden) {
+            notable.push({
+              customerId: line.customerId,
+              product: known.name,
+              quantity: product.quantity,
+              rate: product.rateSnapshot,
+              catalogueRate,
+              reason: occasional ? "occasional" : "rate override",
+            });
+          }
+        }
+      }
+
+      const lineCount = parsed.data.lines.length;
       await logAudit(tx, {
         cityId,
         entityType: "DailyRouteEntry",
         entityId: entry.id,
         action: "SAVE",
-        summary: `Saved daily entry for route ${parsed.data.routeId} on ${parsed.data.entryDate} (${parsed.data.lines.length} customer line${parsed.data.lines.length === 1 ? "" : "s"}).`,
-        after: { routeId: parsed.data.routeId, entryDate: parsed.data.entryDate, lineCount: parsed.data.lines.length },
+        summary:
+          `Saved daily entry for route ${parsed.data.routeId} on ${parsed.data.entryDate} ` +
+          `(${lineCount} customer line${lineCount === 1 ? "" : "s"}` +
+          (notable.length > 0
+            ? `, ${notable.length} occasional or hand-priced item${notable.length === 1 ? "" : "s"}`
+            : "") +
+          `).`,
+        after: {
+          routeId: parsed.data.routeId,
+          entryDate: parsed.data.entryDate,
+          lineCount,
+          ...(notable.length > 0 ? { notable } : {}),
+        },
       });
     });
 

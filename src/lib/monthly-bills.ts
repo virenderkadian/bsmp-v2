@@ -49,6 +49,12 @@ export type MonthlyBillPayload = {
   // options from the rows on screen.
   selectedMonth: string;
   availableMonths: string[];
+  // Months still carrying a Draft or Generated bill. A month is only settled
+  // once every bill in it is Locked — until then its closing balances can move,
+  // and, more seriously, a payment it has not frozen is still claimable by the
+  // next month too. Computed here rather than derived from `bills`, which holds
+  // one month and so could never answer a question about the previous one.
+  unlockedMonths: string[];
   statuses: Array<{ value: BillingStatus; label: string }>;
   error?: string;
 };
@@ -247,6 +253,7 @@ function fallbackPayload(error?: string, month?: string): MonthlyBillPayload {
     bills: [],
     selectedMonth: fallbackMonth,
     availableMonths: [fallbackMonth],
+    unlockedMonths: [],
     statuses,
     error,
   };
@@ -418,7 +425,7 @@ export async function getMonthlyBillsPayload(input?: {
 
   try {
     const cityId = await getCurrentCityId();
-    const [customers, routes, bills, monthRows] = await withDbTimeout(Promise.all([
+    const [customers, routes, bills, monthRows, unlockedMonthRows] = await withDbTimeout(Promise.all([
       prisma.customer.findMany({
         where: { cityId, isActive: true },
         orderBy: { code: "asc" },
@@ -487,6 +494,11 @@ export async function getMonthlyBillsPayload(input?: {
         where: { route: { cityId } },
         orderBy: { billingMonth: "desc" },
       }),
+      prisma.monthlyBill.groupBy({
+        by: ["billingMonth"],
+        where: { route: { cityId }, status: { in: ["DRAFT", "GENERATED"] } },
+        orderBy: { billingMonth: "desc" },
+      }),
     ]), "Monthly bill data request");
 
     // Which months exist at all. The dropdown used to build itself from the
@@ -504,6 +516,7 @@ export async function getMonthlyBillsPayload(input?: {
       routes,
       selectedMonth,
       availableMonths,
+      unlockedMonths: unlockedMonthRows.map((row) => row.billingMonth.toISOString().slice(0, 7)),
       bills: bills.map((bill) => ({
         id: bill.id,
         customerId: bill.customerId,

@@ -362,3 +362,115 @@ export async function createBulkRoutePayments(
 export async function fetchBillQuickView(customerId: string, month: string): Promise<BillQuickView> {
   return getBillQuickView(customerId, month);
 }
+
+const doorstepPaymentSchema = z.object({
+  // The dialog's own id for this attempt, used as the Payment's primary key so
+  // a retried request collides instead of writing the money twice. The same
+  // guard the bulk sheet uses, for the same reason.
+  submissionId: z.string().uuid("A valid submission id is required."),
+  customerId: z.string().trim().min(1, "Customer is required."),
+  routeId: z.string().trim().min(1, "Route is required."),
+  amount: z.coerce.number().positive("Amount must be greater than zero."),
+  paymentDate: z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "A valid date is required."),
+  mode: z.enum(["CASH", "UPI", "BANK_TRANSFER", "CHEQUE"]),
+  notes: z.string().trim().optional(),
+});
+
+// Money taken at the door, recorded from Daily Entry.
+//
+// VERIFIED, not pending: this is the office entering what it has in hand, not
+// a driver's claim from the mobile app — that distinction is why the driver
+// app's payments stay UNVERIFIED until someone here confirms them.
+//
+// No PaymentBatch. A single doorstep payment is not a collections run, and
+// Payment.batchId is nullable precisely so it doesn't have to invent one.
+export async function createDoorstepPayment(
+  _prevState: PaymentActionState = idleState,
+  formData: FormData,
+): Promise<PaymentActionState> {
+  void _prevState;
+
+  const token = crypto.randomUUID();
+  const parsed = doorstepPaymentSchema.safeParse({
+    submissionId: getValue(formData, "submissionId"),
+    customerId: getValue(formData, "customerId"),
+    routeId: getValue(formData, "routeId"),
+    amount: getValue(formData, "amount"),
+    paymentDate: getValue(formData, "paymentDate"),
+    mode: getValue(formData, "mode"),
+    notes: getValue(formData, "notes"),
+  });
+
+  if (!parsed.success) {
+    return { status: "error", message: parsed.error.issues[0]?.message, token };
+  }
+
+  const confirmDuplicate = getValue(formData, "confirmDuplicate") === "true";
+  const paymentDate = new Date(`${parsed.data.paymentDate}T00:00:00.000Z`);
+
+  try {
+    const cityId = await getCurrentCityId();
+    const collectedBy = await getCurrentUser();
+
+    // Eight customers were charged twice in September because a second screen
+    // showed a stale figure and nobody was told the money was already in. A
+    // third place to record a payment makes that easier, so it warns — and
+    // confirms rather than blocks, because two genuine payments in one day do
+    // happen.
+    if (!confirmDuplicate) {
+      const existing = await prisma.payment.findFirst({
+        where: {
+          customerId: parsed.data.customerId,
+          paymentDate,
+          status: "VERIFIED",
+          route: { cityId },
+        },
+        select: { amount: true },
+      });
+
+      if (existing) {
+        return {
+          status: "error",
+          message: `Already recorded ₹${Number(existing.amount).toLocaleString("en-IN")} from this customer today. Tick to record another.`,
+          token,
+        };
+      }
+    }
+
+    const payment = await prisma.payment.create({
+      data: {
+        id: parsed.data.submissionId,
+        customerId: parsed.data.customerId,
+        routeId: parsed.data.routeId,
+        amount: parsed.data.amount,
+        paymentDate,
+        mode: parsed.data.mode,
+        status: "VERIFIED",
+        notes: asOptional(parsed.data.notes ?? ""),
+        collectedById: collectedBy?.id ?? null,
+      },
+    });
+
+    await logAudit(prisma, {
+      cityId,
+      entityType: "Payment",
+      entityId: payment.id,
+      action: "CREATE",
+      summary: `Took ₹${payment.amount} at the door on ${parsed.data.paymentDate}.`,
+      after: payment,
+    });
+
+    revalidatePath("/daily-entry");
+    revalidatePath("/payments");
+
+    return { status: "success", message: `Recorded ₹${parsed.data.amount}.`, token };
+  } catch (error) {
+    // The same attempt arriving twice lands on the primary key. The money is
+    // already recorded, so this is a success, not a failure to report.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return { status: "success", message: `Recorded ₹${parsed.data.amount}.`, token };
+    }
+
+    return { status: "error", message: getErrorMessage(error), token };
+  }
+}

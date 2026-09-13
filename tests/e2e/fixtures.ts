@@ -81,13 +81,36 @@ export async function clearTestMonthData(routeId: string) {
       routeId,
       entryDate: { gte: new Date("2027-01-01T00:00:00.000Z"), lt: new Date("2027-02-01T00:00:00.000Z") },
     },
-    select: { id: true, lines: { select: { id: true } } },
+    select: { id: true },
   });
-  const lineIds = entries.flatMap((entry) => entry.lines.map((line) => line.id));
+  const entryIds = entries.map((entry) => entry.id);
 
-  await prisma.dailyRouteEntryLineProduct.deleteMany({ where: { lineId: { in: lineIds } } });
-  await prisma.dailyRouteEntryLine.deleteMany({ where: { entryId: { in: entries.map((e) => e.id) } } });
-  await prisma.dailyRouteEntry.deleteMany({ where: { id: { in: entries.map((e) => e.id) } } });
+  // One transaction, with lines resolved inside it rather than from a list read
+  // earlier: a save landing between the reads would leave a line pointing at an
+  // entry this is about to delete, and the entry delete then fails on the
+  // foreign key.
+  //
+  // Retried because the app's own save does these same deletes in its own
+  // transaction, and the two can deadlock when a spec saves and then tears down
+  // immediately. A deadlock is transient by definition — Postgres picks a
+  // victim precisely so one side can try again.
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await prisma.$transaction([
+        prisma.dailyRouteEntryLineProduct.deleteMany({
+          where: { line: { entryId: { in: entryIds } } },
+        }),
+        prisma.dailyRouteEntryLine.deleteMany({ where: { entryId: { in: entryIds } } }),
+        prisma.dailyRouteEntry.deleteMany({ where: { id: { in: entryIds } } }),
+      ]);
+      break;
+    } catch (error) {
+      if (attempt === 3) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250 * attempt));
+    }
+  }
 
   await prisma.monthlyBillItem.deleteMany({
     where: { monthlyBill: { routeId, billingMonth: TEST_MONTH_DATE } },

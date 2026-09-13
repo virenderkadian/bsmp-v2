@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useActionState, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type { DailyEntryPayload } from "@/lib/daily-entry";
 import {
@@ -8,12 +8,18 @@ import {
   saveDailyEntry,
   type DailyEntryActionState,
 } from "@/app/daily-entry/actions";
+import {
+  DoorstepPaymentDialog,
+  type DoorstepPaymentTarget,
+} from "@/app/daily-entry/doorstep-payment-dialog";
 import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { usePageMetric } from "@/components/admin/page-metric";
 import { Toast, type ToastTone } from "@/components/admin/toast";
 import { cn } from "@/lib/utils";
 
 const initialState: DailyEntryActionState = { status: "idle" };
+
+const ACTIONS_PREFERENCE = "daily-entry-show-actions";
 
 type ToastState = {
   tone: ToastTone;
@@ -23,6 +29,14 @@ type ToastState = {
 type Totals = {
   perProduct: Map<string, number>;
   grandAmount: number;
+};
+
+type ExtraRow = {
+  key: string;
+  customerId: string;
+  productId: string;
+  quantity: string;
+  rate: string;
 };
 
 function ActionMessage({ state }: { state: DailyEntryActionState }) {
@@ -86,6 +100,7 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
         perProduct.set(column.productId, (perProduct.get(column.productId) ?? 0) + qty);
         grandAmount += qty * rate;
       });
+
     });
 
     return { perProduct, grandAmount };
@@ -99,6 +114,139 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
   // mounted, so there's no case where these need to re-sync after mount.
   const [totals, setTotals] = useState<Totals>(() => initialTotals);
   const [isDirty, setIsDirty] = useState(false);
+
+  // Whether the at-the-door column is showing. A per-operator preference rather
+  // than a setting: it costs horizontal room on a wide round, and somebody
+  // entering quantities at speed may want it out of the way today and back
+  // tomorrow. Remembered in the browser, so it survives a reload without a
+  // server round trip.
+  //
+  // Hiding the column hides the BUTTONS, never the data: an occasional sale
+  // already recorded still shows under its customer, because a figure that
+  // vanishes from a screen is how money goes missing.
+  // Off unless asked for. Most rounds are milk and quantities, and the column
+  // costs width on a grid that is already wide — so it is opt-in, and the
+  // choice is remembered.
+  //
+  // Hidden on every render, server and first client paint alike, then synced
+  // from the saved preference right after mount — the same shape the sidebar's
+  // collapsed state uses, for the same reason: reading it in the initializer
+  // would desync the server-rendered HTML from the first client render.
+  const [showActions, setShowActions] = useState(false);
+  const [payingCustomer, setPayingCustomer] = useState<DoorstepPaymentTarget | null>(null);
+
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(ACTIONS_PREFERENCE) === "shown") {
+        // Reading an external system once on mount, not syncing derived state
+        // — the carve-out react-hooks/set-state-in-effect's own guidance makes.
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setShowActions(true);
+      }
+    } catch {
+      // Private windows and blocked site data both throw; the default stands.
+    }
+  }, []);
+
+  const toggleActions = (next: boolean) => {
+    setShowActions(next);
+    try {
+      window.localStorage.setItem(ACTIONS_PREFERENCE, next ? "shown" : "hidden");
+    } catch {
+      // Not being able to remember the choice is no reason to refuse it.
+    }
+  };
+
+  // Occasional sales, per customer. These are rows rather than columns: a kilo
+  // of paneer belongs to the one customer who bought it, not to a column
+  // standing empty against the other six hundred.
+  //
+  // Seeded from what is already saved, and ALWAYS posted back — a save rebuilds
+  // every line's product rows from what it receives, so an item left out here
+  // would be deleted by the next save of this round.
+  const [extraRows, setExtraRows] = useState<ExtraRow[]>(() =>
+    payload.lines.flatMap((line) =>
+      line.extraItems.map((item) => ({
+        key: `${line.customerId}:${item.productId}`,
+        customerId: line.customerId,
+        productId: item.productId,
+        quantity: item.quantity,
+        rate: item.rate,
+      })),
+    ),
+  );
+
+  // Derived, not toggled. Adding a row and removing it again leaves the form
+  // exactly as it was found, and the Save button has to agree — a flag set on
+  // add and never cleared on remove was offering to save nothing.
+  const extraSignature = (rows: ExtraRow[]) =>
+    rows
+      .map((row) => `${row.customerId}:${row.productId}:${Number(row.quantity)}:${Number(row.rate)}`)
+      .sort()
+      .join("|");
+
+  const savedExtras = useMemo(
+    () =>
+      extraSignature(
+        payload.lines.flatMap((line) =>
+          line.extraItems.map((item) => ({
+            key: "",
+            customerId: line.customerId,
+            productId: item.productId,
+            quantity: item.quantity,
+            rate: item.rate,
+          })),
+        ),
+      ),
+    [payload.lines],
+  );
+  // Moves forward on a successful save so Save settles again without a reload.
+  // Adjusted during render rather than in an effect — the codebase's usual
+  // shape for state that follows an action result, and the only one the hooks
+  // rules allow here (no setState inside an effect, no refs read while
+  // rendering).
+  const [savedExtrasBaseline, setSavedExtrasBaseline] = useState(savedExtras);
+  const [settledSaveKey, setSettledSaveKey] = useState<string | null>(null);
+  const saveKey =
+    state.status === "success" && state.message ? `${state.status}:${state.message}` : null;
+
+  if (saveKey && saveKey !== settledSaveKey) {
+    setSettledSaveKey(saveKey);
+    setSavedExtrasBaseline(extraSignature(extraRows));
+  }
+
+  const extrasDirty = extraSignature(extraRows) !== savedExtrasBaseline;
+  const extrasAmount = extraRows.reduce(
+    (total, row) => total + Number(row.quantity || 0) * Number(row.rate || 0),
+    0,
+  );
+
+  const addExtraRow = (customerId: string) => {
+    const product = payload.occasionalProducts[0];
+
+    if (!product) {
+      return;
+    }
+
+    setExtraRows((rows) => [
+      ...rows,
+      {
+        key: `${customerId}:new:${crypto.randomUUID()}`,
+        customerId,
+        productId: product.id,
+        quantity: "0",
+        rate: product.defaultRate,
+      },
+    ]);
+  };
+
+  const updateExtraRow = (key: string, patch: Partial<ExtraRow>) => {
+    setExtraRows((rows) => rows.map((row) => (row.key === key ? { ...row, ...patch } : row)));
+  };
+
+  const removeExtraRow = (key: string) => {
+    setExtraRows((rows) => rows.filter((row) => row.key !== key));
+  };
 
   // Quantity inputs are uncontrolled (defaultValue) for performance with
   // large routes — recomputing totals/dirty state via a single delegated
@@ -218,7 +366,8 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
   // bills; offer the one-click revert until it's actually cleared.
   const showRevertBanner = state.blockedByBill === true && revertState.status !== "success";
 
-  const canSave = payload.lines.length > 0 && isDirty && !pending;
+  const dirty = isDirty || extrasDirty;
+  const canSave = payload.lines.length > 0 && dirty && !pending;
 
   return (
     <div className="space-y-4">
@@ -249,6 +398,17 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
               )}
             </select>
           </form>
+          {payload.lines.length > 0 ? (
+            <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-secondary transition hover:bg-surface-muted">
+              <input
+                type="checkbox"
+                checked={showActions}
+                onChange={(event) => toggleActions(event.target.checked)}
+                className="h-4 w-4 accent-[var(--accent)]"
+              />
+              At the door
+            </label>
+          ) : null}
           <SecondaryButton
             type="button"
             onClick={fillUsual}
@@ -264,7 +424,7 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
             disabled={!canSave}
             className="h-10 rounded-md px-5 text-sm font-semibold"
           >
-            {pending ? "Saving..." : isDirty ? "Save changes" : "Saved"}
+            {pending ? "Saving..." : dirty ? "Save changes" : "Saved"}
           </PrimaryButton>
         </div>
       </div>
@@ -365,14 +525,25 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
                         {product.productShortName ?? product.productName}
                       </th>
                     ))}
+                    {/* Everything an operator does for one customer beyond
+                        typing a quantity — sold at the door, collected at the
+                        door. One fixed place at the end of the row, so the
+                        hand goes to the same spot on every line. */}
+                    {showActions ? (
+                      <th className="w-28 bg-surface-muted px-5 py-3 text-left text-xs font-semibold uppercase tracking-[0.14em] text-text-secondary">
+                        At the door
+                      </th>
+                    ) : null}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-surface-border bg-surface">
                   {payload.lines.map((line) => {
                     const productMap = new Map(line.products.map((product) => [product.productId, product]));
+                    const lineExtras = extraRows.filter((row) => row.customerId === line.customerId);
 
                     return (
-                      <tr key={line.customerId}>
+                      <Fragment key={line.customerId}>
+                      <tr>
                         <td className="px-5 py-3.5 text-[1.05rem] font-medium text-text-secondary">
                           {line.sequenceNo}
                         </td>
@@ -382,6 +553,7 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
                           <input type="hidden" name="customerId" value={line.customerId} readOnly />
                           <input type="hidden" name="sequenceNo" value={line.sequenceNo} readOnly />
                           <input type="hidden" name="remarks" value={line.remarks} readOnly />
+
                         </td>
                         {productColumns.map((column) => {
                           const product = productMap.get(column.productId);
@@ -423,7 +595,127 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
                             </td>
                           );
                         })}
+                        {showActions ? (
+                        <td className="px-5 py-3.5">
+                          {/* Only where there is something to add — a city with
+                              every product on the grid has no occasional items,
+                              and an empty picker is worse than no button. */}
+                          {payload.occasionalProducts.length > 0 ? (
+                            <button
+                              type="button"
+                              onClick={() => addExtraRow(line.customerId)}
+                              title={`Sell a one-off item to ${line.customerName}`}
+                              className="inline-flex h-8 items-center gap-1 rounded-md border border-surface-border-strong bg-surface px-2.5 text-xs font-semibold text-accent transition hover:bg-surface-muted"
+                            >
+                              <span aria-hidden>+</span> Item
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPayingCustomer({
+                                customerId: line.customerId,
+                                customerName: line.customerName,
+                                customerCode: line.customerCode,
+                              })
+                            }
+                            title={`Take a payment from ${line.customerName}`}
+                            className="ml-1.5 inline-flex h-8 items-center gap-1 rounded-md border border-surface-border-strong bg-surface px-2.5 text-xs font-semibold text-accent transition hover:bg-surface-muted"
+                          >
+                            <span aria-hidden>₹</span> Pay
+                          </button>
+                        </td>
+                        ) : null}
                       </tr>
+
+                      {/* One row per occasional sale, directly under the
+                          customer who bought it. The rate is typed, because the
+                          whole point of these is a price agreed at the door. */}
+                      {lineExtras.map((row) => {
+                        const product = payload.occasionalProducts.find(
+                          (item) => item.id === row.productId,
+                        );
+
+                        return (
+                          <tr key={row.key} className="bg-surface-muted/40">
+                            <td className="px-5 py-2" />
+                            <td className="px-5 py-2" colSpan={productColumns.length + (showActions ? 2 : 1)}>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-text-secondary">&#8627;</span>
+                                <select
+                                  value={row.productId}
+                                  onChange={(event) => {
+                                    const next = payload.occasionalProducts.find(
+                                      (item) => item.id === event.target.value,
+                                    );
+                                    updateExtraRow(row.key, {
+                                      productId: event.target.value,
+                                      // Follow the new product's rate unless one
+                                      // has already been typed for this row.
+                                      rate: next?.defaultRate ?? row.rate,
+                                    });
+                                  }}
+                                  className="h-9 rounded-md border border-surface-border-strong bg-surface px-2 text-sm text-text-primary outline-none focus:border-accent"
+                                  aria-label={`Item for ${line.customerName}`}
+                                >
+                                  {payload.occasionalProducts.map((item) => (
+                                    <option key={item.id} value={item.id}>
+                                      {item.name}
+                                    </option>
+                                  ))}
+                                </select>
+                                <input
+                                  name="quantity"
+                                  type="number"
+                                  step="0.001"
+                                  min="0"
+                                  value={row.quantity}
+                                  onChange={(event) =>
+                                    updateExtraRow(row.key, { quantity: event.target.value })
+                                  }
+                                  aria-label={`Quantity of ${product?.name ?? "item"} for ${line.customerName}`}
+                                  className="h-9 w-20 rounded-md border border-surface-border-strong bg-surface px-2 text-sm text-text-primary outline-none focus:border-accent"
+                                />
+                                <span className="text-xs text-text-secondary">{product?.unit}</span>
+                                <span className="text-sm text-text-secondary">&#215;</span>
+                                <span className="text-sm text-text-secondary">&#8377;</span>
+                                <input
+                                  name="rateSnapshot"
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  value={row.rate}
+                                  onChange={(event) =>
+                                    updateExtraRow(row.key, { rate: event.target.value })
+                                  }
+                                  aria-label={`Rate for ${product?.name ?? "item"} for ${line.customerName}`}
+                                  className="h-9 w-24 rounded-md border border-surface-border-strong bg-surface px-2 text-sm text-text-primary outline-none focus:border-accent"
+                                />
+                                <input
+                                  type="hidden"
+                                  name="productId"
+                                  value={row.productId}
+                                  readOnly
+                                />
+                                <input
+                                  type="hidden"
+                                  name="productCustomerId"
+                                  value={line.customerId}
+                                  readOnly
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => removeExtraRow(row.key)}
+                                  className="text-xs font-semibold text-rose-700 underline underline-offset-2"
+                                >
+                                  Remove
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      </Fragment>
                     );
                   })}
                 </tbody>
@@ -443,11 +735,14 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
                         {formatQty(totals.perProduct.get(column.productId) ?? 0)}
                       </td>
                     ))}
+                    {showActions ? <td className="bg-surface-muted px-5 py-3" /> : null}
                   </tr>
                   <tr className="border-t border-surface-border">
-                    <td className="bg-surface-muted px-5 py-2.5 text-right text-sm" colSpan={productColumns.length + 2}>
+                    <td className="bg-surface-muted px-5 py-2.5 text-right text-sm" colSpan={productColumns.length + (showActions ? 3 : 2)}>
                       <span className="text-text-secondary">Total amount</span>{" "}
-                      <span className="ml-1 font-semibold text-text-primary">₹{totals.grandAmount.toFixed(2)}</span>
+                      <span className="ml-1 font-semibold text-text-primary">
+                        ₹{(totals.grandAmount + extrasAmount).toFixed(2)}
+                      </span>
                     </td>
                   </tr>
                 </tfoot>
@@ -457,8 +752,20 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
         )}
 
         <ActionMessage state={state} />
-        {toast ? <Toast tone={toast.tone}>{toast.message}</Toast> : null}
       </form>
+
+      {/* Outside the form above: nesting one form in another is invalid, and a
+          payment has to save on its own — never lost because the sheet failed
+          validation, never re-sent when the sheet is saved again. */}
+      <DoorstepPaymentDialog
+        target={payingCustomer}
+        routeId={payload.selectedRouteId}
+        paymentDate={payload.selectedDate}
+        onClose={() => setPayingCustomer(null)}
+        onRecorded={(message) => setToast({ tone: "success", message })}
+      />
+
+      {toast ? <Toast tone={toast.tone}>{toast.message}</Toast> : null}
     </div>
   );
 }
