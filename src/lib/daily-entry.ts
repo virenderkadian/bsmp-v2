@@ -25,6 +25,23 @@ export type DailyEntryProductRecord = {
   lastQuantity: string;
 };
 
+// An occasional sale already recorded against this customer today — a kilo of
+// paneer, a one-off ghee order. Kept separate from `products` because those are
+// the grid's columns: these appear only on the customer who bought them.
+//
+// They MUST round-trip through the screen. A save rebuilds every line's product
+// rows from what was posted, so an item the screen doesn't send back is
+// silently deleted by the next save of that round.
+export type DailyEntryExtraItem = {
+  productId: string;
+  productCode: string;
+  productName: string;
+  productShortName: string | null;
+  unit: string;
+  quantity: string;
+  rate: string;
+};
+
 export type DailyEntryLineRecord = {
   customerId: string;
   customerCode: string;
@@ -34,6 +51,17 @@ export type DailyEntryLineRecord = {
   skipped: boolean;
   remarks: string;
   products: DailyEntryProductRecord[];
+  extraItems: DailyEntryExtraItem[];
+};
+
+// Products that are not on the grid, offered when adding an occasional item.
+export type DailyEntryOccasionalProduct = {
+  id: string;
+  code: string;
+  name: string;
+  shortName: string | null;
+  unit: string;
+  defaultRate: string;
 };
 
 export type DailyEntryPayload = {
@@ -47,6 +75,7 @@ export type DailyEntryPayload = {
   syncStatus: EntrySyncStatus;
   notes: string;
   lines: DailyEntryLineRecord[];
+  occasionalProducts: DailyEntryOccasionalProduct[];
   error?: string;
 };
 
@@ -78,6 +107,7 @@ function fallbackPayload(selectedDate?: string, error?: string): DailyEntryPaylo
     error,
     routes: [],
     lines: [],
+    occasionalProducts: [],
   };
 }
 
@@ -106,11 +136,13 @@ export async function getDailyEntryPayload(input?: {
       },
     }), "Daily entry route request");
 
-    const products = await withDbTimeout(prisma.product.findMany({
+    // Every active product, not just the grid's: the ones switched off still
+    // need to be offered when adding an occasional item, and a saved one has
+    // to be readable to round-trip through a save.
+    const allProducts = await withDbTimeout(prisma.product.findMany({
       where: {
         cityId,
         isActive: true,
-        showInDailyEntry: true,
       },
       orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
       select: {
@@ -120,8 +152,22 @@ export async function getDailyEntryPayload(input?: {
         shortName: true,
         unit: true,
         defaultRate: true,
+        showInDailyEntry: true,
       },
     }), "Daily entry product request");
+
+    const products = allProducts.filter((product) => product.showInDailyEntry);
+    const occasionalProducts: DailyEntryOccasionalProduct[] = allProducts
+      .filter((product) => !product.showInDailyEntry)
+      .map((product) => ({
+        id: product.id,
+        code: product.code,
+        name: product.name,
+        shortName: product.shortName,
+        unit: product.unit,
+        defaultRate: String(product.defaultRate),
+      }));
+    const productById = new Map(allProducts.map((product) => [product.id, product]));
 
     if (routes.length === 0) {
       return {
@@ -135,6 +181,7 @@ export async function getDailyEntryPayload(input?: {
         syncStatus: "DRAFT",
         notes: "",
         lines: [],
+        occasionalProducts: [],
       };
     }
 
@@ -299,8 +346,26 @@ export async function getDailyEntryPayload(input?: {
               lastQuantity: String(recentOrder?.get(product.id) ?? 0),
             };
           }),
+          // Anything saved against this customer that is not a grid column.
+          // Round-tripped so the next save doesn't delete it.
+          extraItems: [...savedProducts.values()]
+            .filter((saved) => productById.get(saved.productId)?.showInDailyEntry === false)
+            .map((saved) => {
+              const product = productById.get(saved.productId)!;
+
+              return {
+                productId: saved.productId,
+                productCode: product.code,
+                productName: product.name,
+                productShortName: product.shortName,
+                unit: product.unit,
+                quantity: String(saved.quantity),
+                rate: String(saved.rateSnapshot),
+              };
+            }),
         };
       }),
+      occasionalProducts,
     };
   } catch (error) {
     const message =
