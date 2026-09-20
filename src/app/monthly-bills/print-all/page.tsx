@@ -3,6 +3,7 @@ import { PageHeader } from "@/components/admin/page-header";
 import { PrintButton } from "@/components/admin/print-button";
 import { getMonthlyBillsForRoutePrint } from "@/lib/monthly-bills";
 import { billFiltersFromParams, describeBillFilters, matchesBillFilters } from "@/lib/bill-filters";
+import { buildBillPaymentQr } from "@/lib/bill-payment-qr";
 import { getCitySettings } from "@/lib/city-settings";
 import { getCurrentCityId } from "@/lib/current-city";
 import { BillDocument } from "@/app/monthly-bills/bill-document";
@@ -68,7 +69,8 @@ export default async function MonthlyBillsPrintAllPage({
   };
   const filterNotice = describeBillFilters(filters);
   const { billFormat } = await getCitySettings(await getCurrentCityId());
-  const qrDataUrl = payload.bills[0]?.businessProfile?.upiQrDataUrl ?? null;
+  // One per bill, each carrying that customer's amount and code.
+  const qrDataUrls = await Promise.all(payload.bills.map((bill) => buildBillPaymentQr(bill)));
 
   return (
     <>
@@ -109,7 +111,7 @@ export default async function MonthlyBillsPrintAllPage({
             <BillDocument
               key={bill.id}
               bill={bill}
-              qrDataUrl={qrDataUrl}
+              qrDataUrl={qrDataUrls[index]}
               format={billFormat}
               className={index > 0 ? "print:break-before-page" : undefined}
             />

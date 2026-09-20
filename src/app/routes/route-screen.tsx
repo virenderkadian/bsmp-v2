@@ -52,6 +52,7 @@ type VehicleDraft = {
   code: string;
   name: string;
   registration: string;
+  upiId: string;
   hasPin: boolean;
 };
 
@@ -68,6 +69,7 @@ const emptyVehicleDraft: VehicleDraft = {
   code: "",
   name: "",
   registration: "",
+  upiId: "",
   hasPin: false,
 };
 
@@ -244,15 +246,25 @@ function VehicleDialog({
         <div className="grid gap-4 md:grid-cols-2">
           <FormInput label="Code" name="code" placeholder="VH-04" defaultValue={draft.code} autoFocus />
           <FormInput label="Vehicle name" name="name" placeholder="Delivery Van 4" defaultValue={draft.name} />
-          <div className="md:col-span-2">
-            <FormInput
-              label="Registration"
-              name="registration"
-              placeholder="RJ14 XX 4411"
-              defaultValue={draft.registration}
-            />
-          </div>
+          <FormInput
+            label="Registration"
+            name="registration"
+            placeholder="RJ14 XX 4411"
+            defaultValue={draft.registration}
+          />
+          <FormInput
+            label="UPI id for this round"
+            name="upiId"
+            placeholder="Leave empty to use the city's"
+            defaultValue={draft.upiId}
+          />
         </div>
+        {/* Not the driver's id — the business's own, one per round, so a credit
+            arriving says which round it came from. */}
+        <p className="text-xs text-text-secondary">
+          Bills for this vehicle&apos;s routes print a QR paying this id, with the amount owed
+          and the customer&apos;s code filled in.
+        </p>
         {state.status !== "idle" && state.message ? (
           <p className={state.status === "success" ? "text-sm text-emerald-700" : "text-sm text-rose-700"}>
             {state.message}
@@ -626,6 +638,7 @@ export function RouteScreen({ dbConnected, routes, vehicles }: RouteScreenProps)
         code: selectedVehicle.code,
         name: selectedVehicle.name,
         registration: selectedVehicle.registration ?? "",
+        upiId: selectedVehicle.upiId ?? "",
         hasPin: selectedVehicle.hasPin,
       }
     : emptyVehicleDraft;

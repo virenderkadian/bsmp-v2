@@ -6,7 +6,7 @@ import { z } from "zod";
 import { getCurrentCityId } from "@/lib/current-city";
 import { prisma } from "@/lib/prisma";
 import { logAudit } from "@/lib/audit";
-import { getCityCustomerLedger, receivedAgainstOpenBill } from "@/lib/bill-ledger";
+import { getCityCustomerLedger, getSingleCustomerLedger, receivedAgainstOpenBill } from "@/lib/bill-ledger";
 import { buildBillPairs, computeClosingBalance, selectStaleDuplicateBills } from "@/lib/monthly-bills-math";
 
 export type MonthlyBillActionState = {
@@ -18,6 +18,10 @@ const idleState: MonthlyBillActionState = { status: "idle" };
 
 const generateSchema = z.object({
   billingMonth: z.string().trim().min(1, "Billing month is required."),
+  // Present only for the "one customer" mode. Same action, same audit trail —
+  // just every query in it scoped down to this one person instead of the
+  // whole city.
+  customerId: z.string().trim().optional(),
 });
 
 const updateSchema = z.object({
@@ -25,9 +29,29 @@ const updateSchema = z.object({
   status: z.enum(["DRAFT", "GENERATED", "LOCKED", "CANCELLED"]),
 });
 
+const revertGeneratedSchema = z
+  .object({
+    billingMonth: z.string().trim().min(1, "Billing month is required."),
+    scope: z.enum(["all", "route", "vehicle"]),
+    routeId: z.string().trim().optional(),
+    vehicleId: z.string().trim().optional(),
+  })
+  .refine((value) => value.scope !== "route" || !!value.routeId, {
+    message: "Pick a route.",
+    path: ["routeId"],
+  })
+  .refine((value) => value.scope !== "vehicle" || !!value.vehicleId, {
+    message: "Pick a vehicle.",
+    path: ["vehicleId"],
+  });
+
 function getValue(formData: FormData, key: string) {
   const value = formData.get(key);
   return typeof value === "string" ? value : "";
+}
+
+function asOptional(value: string) {
+  return value.trim() === "" ? undefined : value.trim();
 }
 
 function getMonthBounds(monthValue: string) {
@@ -69,6 +93,7 @@ export async function generateMonthlyBills(
 
   const parsed = generateSchema.safeParse({
     billingMonth: getValue(formData, "billingMonth"),
+    customerId: asOptional(getValue(formData, "customerId")),
   });
 
   if (!parsed.success) {
@@ -78,6 +103,46 @@ export async function generateMonthlyBills(
   return runAction(async () => {
     const { start, end } = getMonthBounds(parsed.data.billingMonth);
     const cityId = await getCurrentCityId();
+    const customerId = parsed.data.customerId;
+
+    // "One customer" mode: refuse before touching a single row rather than
+    // silently falling back to their earliest sequence row. That fallback
+    // exists for the whole-month batch, where nobody is looking at any one
+    // person — here someone deliberately picked this customer, which is
+    // exactly the moment to catch a missing billsHere instead of guessing.
+    let targetCustomer: { code: string; name: string } | null = null;
+    if (customerId) {
+      const [customer, activeRows] = await Promise.all([
+        prisma.customer.findFirst({
+          where: { id: customerId, cityId },
+          select: { code: true, name: true },
+        }),
+        prisma.monthlyRouteCustomerSequence.findMany({
+          where: { customerId, route: { cityId }, sequenceMonth: start, status: "ACTIVE" },
+          select: { billsHere: true },
+        }),
+      ]);
+
+      if (!customer) {
+        throw new Error("Customer not found in this city.");
+      }
+
+      targetCustomer = customer;
+
+      // Refuse only the case that is actually ambiguous: on two or more routes
+      // this month with none flagged billsHere. One route resolves on its own
+      // (the same fallback the whole-month batch already relies on), and zero
+      // rows is the ordinary "removed mid-month, still delivered" case, billed
+      // on the delivery route by design — neither needs a human to intervene.
+      const isAmbiguous = activeRows.length >= 2 && !activeRows.some((row) => row.billsHere);
+
+      if (isAmbiguous) {
+        throw new Error(
+          `${customer.name} (${customer.code}) is on ${activeRows.length} routes this month with none ` +
+            `confirmed as their billing route. Set it in Settings → Billing routes first.`,
+        );
+      }
+    }
 
     const entries = await prisma.dailyRouteEntry.findMany({
       where: {
@@ -86,10 +151,12 @@ export async function generateMonthlyBills(
           gte: start,
           lt: end,
         },
+        ...(customerId ? { lines: { some: { customerId } } } : {}),
       },
       select: {
         routeId: true,
         lines: {
+          where: customerId ? { customerId } : undefined,
           select: {
             customerId: true,
             productEntries: {
@@ -107,10 +174,17 @@ export async function generateMonthlyBills(
     // Collection ledger: how much each customer has paid that isn't already
     // frozen into a locked bill (see src/lib/bill-ledger.ts). This — not the
     // payment date — is what the open bill being generated collects.
-    const customerLedger = await getCityCustomerLedger(prisma, cityId);
+    // City-wide for the whole-month batch — every customer's own entry is read
+    // exactly once out of it. For one customer, that same shape (VERIFIED
+    // payments and LOCKED bills across the whole city) would pull hundreds of
+    // rows nobody reads to answer a question about one person, so this scopes
+    // the equivalent lookup to just them instead of calling the shared helper.
+    const customerLedger = customerId
+      ? new Map([[customerId, await getSingleCustomerLedger(prisma, cityId, customerId)]])
+      : await getCityCustomerLedger(prisma, cityId);
 
     const customers = await prisma.customer.findMany({
-      where: { cityId },
+      where: { cityId, ...(customerId ? { id: customerId } : {}) },
       select: {
         id: true,
         openingBalance: true,
@@ -128,6 +202,7 @@ export async function generateMonthlyBills(
       where: {
         route: { cityId },
         billingMonth: { lt: start },
+        ...(customerId ? { customerId } : {}),
       },
       orderBy: { billingMonth: "desc" },
       select: { customerId: true, closingBalance: true },
@@ -149,6 +224,7 @@ export async function generateMonthlyBills(
         route: { cityId },
         sequenceMonth: start,
         status: "ACTIVE",
+        ...(customerId ? { customerId } : {}),
       },
       // Oldest-first is REQUIRED, not cosmetic: when a multi-route customer has
       // no row flagged billsHere (nothing forces one to exist — the partial
@@ -311,7 +387,12 @@ export async function generateMonthlyBills(
         // must never be deleted by a routine regeneration. Those are surfaced
         // for a human decision instead.
         const draftBills = await tx.monthlyBill.findMany({
-          where: { route: { cityId }, billingMonth: start, status: "DRAFT" },
+          where: {
+            route: { cityId },
+            billingMonth: start,
+            status: "DRAFT",
+            ...(customerId ? { customerId } : {}),
+          },
           select: { id: true, customerId: true, routeId: true },
         });
         const staleBillIds = selectStaleDuplicateBills(
@@ -324,13 +405,19 @@ export async function generateMonthlyBills(
           await tx.monthlyBill.deleteMany({ where: { id: { in: staleBillIds } } });
         }
 
+        const summary = targetCustomer
+          ? `Generated the ${parsed.data.billingMonth} bill for ${targetCustomer.name} (${targetCustomer.code})` +
+            `${generatedCount === 0 ? " — nothing to bill" : ""}${skippedLocked > 0 ? " — their bill is Locked, left unchanged" : ""}.`
+          : `Generated/refreshed ${generatedCount} monthly bill${generatedCount === 1 ? "" : "s"} for ${parsed.data.billingMonth}${skippedLocked > 0 ? `, ${skippedLocked} locked bill(s) skipped` : ""}${staleBillIds.length > 0 ? `, ${staleBillIds.length} stale duplicate(s) removed` : ""}.`;
+
         await logAudit(tx, {
           cityId,
           entityType: "MonthlyBillBatch",
           action: "GENERATE",
-          summary: `Generated/refreshed ${generatedCount} monthly bill${generatedCount === 1 ? "" : "s"} for ${parsed.data.billingMonth}${skippedLocked > 0 ? `, ${skippedLocked} locked bill(s) skipped` : ""}${staleBillIds.length > 0 ? `, ${staleBillIds.length} stale duplicate(s) removed` : ""}.`,
+          summary,
           after: {
             billingMonth: parsed.data.billingMonth,
+            ...(customerId ? { customerId } : {}),
             generatedCount,
             skippedLocked,
             staleDuplicatesRemoved: staleBillIds.length,
@@ -339,6 +426,16 @@ export async function generateMonthlyBills(
       },
       { timeout: 30_000, maxWait: 10_000 },
     );
+
+    if (targetCustomer) {
+      if (skippedLocked > 0) {
+        return { message: `${targetCustomer.name}'s bill is Locked — left unchanged.` };
+      }
+      if (generatedCount === 0) {
+        return { message: `${targetCustomer.name} has no deliveries to bill for ${parsed.data.billingMonth}.` };
+      }
+      return { message: `Bill generated for ${targetCustomer.name}.` };
+    }
 
     if (skippedLocked > 0) {
       return {
@@ -413,3 +510,96 @@ export async function updateMonthlyBillStatus(
     });
   }, "Monthly bill updated.", [`/monthly-bills/${parsed.data.id}`]);
 }
+
+// Bulk-reopen a month's bills for a fresh Generate — GENERATED only, never
+// LOCKED. Locking is a deliberate freeze (money settled, the statement
+// handed out); this is meant for "I generated too early / on the wrong
+// scope", not for undoing a lock. Scoped to the whole city, one route, or
+// every route under one vehicle (a vehicle can run a morning and an evening
+// route, and both need to come back together).
+export async function revertGeneratedBillsToDraft(
+  _prevState: MonthlyBillActionState = idleState,
+  formData: FormData,
+): Promise<MonthlyBillActionState> {
+  void _prevState;
+
+  const parsed = revertGeneratedSchema.safeParse({
+    billingMonth: getValue(formData, "billingMonth"),
+    scope: getValue(formData, "scope"),
+    routeId: getValue(formData, "routeId"),
+    vehicleId: getValue(formData, "vehicleId"),
+  });
+
+  if (!parsed.success) {
+    return { status: "error", message: parsed.error.issues[0]?.message };
+  }
+
+  return runAction(async () => {
+    const cityId = await getCurrentCityId();
+    const { start: billingMonth } = getMonthBounds(parsed.data.billingMonth);
+
+    let routeIds: string[] | null = null;
+    let scopeLabel = "the whole city";
+
+    if (parsed.data.scope === "route") {
+      routeIds = [parsed.data.routeId as string];
+      const route = await prisma.route.findFirst({
+        where: { id: parsed.data.routeId, cityId },
+        select: { code: true, name: true },
+      });
+      if (!route) {
+        throw new Error("Route not found in this city.");
+      }
+      scopeLabel = `route ${route.code} - ${route.name}`;
+    } else if (parsed.data.scope === "vehicle") {
+      const vehicle = await prisma.vehicle.findFirst({
+        where: { id: parsed.data.vehicleId, cityId },
+        select: { code: true, name: true, routes: { select: { id: true } } },
+      });
+      if (!vehicle) {
+        throw new Error("Vehicle not found in this city.");
+      }
+      routeIds = vehicle.routes.map((route) => route.id);
+      scopeLabel = `vehicle ${vehicle.code} - ${vehicle.name}`;
+
+      if (routeIds.length === 0) {
+        return { message: `No routes are assigned to ${scopeLabel}.` };
+      }
+    }
+
+    const result = await prisma.monthlyBill.updateMany({
+      where: {
+        route: { cityId, ...(routeIds ? { id: { in: routeIds } } : {}) },
+        billingMonth,
+        // GENERATED only. A LOCKED bill has already been handed to someone —
+        // reopening it is a per-bill decision made from the bill itself
+        // (updateMonthlyBillStatus above), never a bulk sweep.
+        status: "GENERATED",
+      },
+      data: { status: "DRAFT" },
+    });
+
+    if (result.count === 0) {
+      return { message: `No Generated bills to revert for ${scopeLabel}.` };
+    }
+
+    await logAudit(prisma, {
+      cityId,
+      entityType: "MonthlyBill",
+      action: "STATUS_CHANGE",
+      summary:
+        `Reverted ${result.count} Generated bill${result.count === 1 ? "" : "s"} to Draft ` +
+        `for ${scopeLabel}, ${parsed.data.billingMonth}. Locked bills were left unchanged.`,
+      after: {
+        billingMonth: parsed.data.billingMonth,
+        scope: parsed.data.scope,
+        routeId: parsed.data.routeId ?? null,
+        vehicleId: parsed.data.vehicleId ?? null,
+        revertedCount: result.count,
+      },
+    });
+
+    return { message: `Reverted ${result.count} bill${result.count === 1 ? "" : "s"} to Draft.` };
+  }, "", ["/monthly-bills", "/daily-entry"]);
+}
+
