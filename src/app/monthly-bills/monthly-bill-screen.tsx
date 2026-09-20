@@ -6,9 +6,11 @@ import { useActionState, useCallback, useEffect, useMemo, useState } from "react
 import {
   generateMonthlyBills,
   type MonthlyBillActionState,
+  revertGeneratedBillsToDraft,
   updateMonthlyBillStatus,
 } from "@/app/monthly-bills/actions";
 import { MonthlyBillSummaryControls } from "@/app/monthly-bills/monthly-bill-summary-controls";
+import { cn } from "@/lib/utils";
 import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { DataTable } from "@/components/admin/data-table";
@@ -151,49 +153,162 @@ function getPreviousMonth(monthValue: string) {
   return prev.toISOString().slice(0, 7);
 }
 
-function GenerateBillsDialog({
+// A filterable customer picker.
+//
+// Not a live server search: `customers` is already loaded on the page (the
+// same list every other filter on this screen already has), so filtering it
+// in the browser costs nothing extra and needs no debounce.
+function CustomerPicker({
+  customers,
+  selected,
+  onSelect,
+}: {
+  customers: Array<{ id: string; code: string; name: string }>;
+  selected: { id: string; name: string; code: string } | null;
+  onSelect: (customer: { id: string; name: string; code: string } | null) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+
+  const matches = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (needle === "") {
+      return [];
+    }
+    return customers
+      .filter(
+        (customer) =>
+          customer.name.toLowerCase().includes(needle) || customer.code.toLowerCase().includes(needle),
+      )
+      .slice(0, 8);
+  }, [customers, query]);
+
+  if (selected) {
+    return (
+      <div className="flex items-center justify-between gap-2 rounded-md border border-surface-border-strong bg-surface px-3 py-2 text-sm">
+        <span>
+          <span className="font-medium text-text-primary">{selected.name}</span>{" "}
+          <span className="text-text-secondary">{selected.code}</span>
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            onSelect(null);
+            setQuery("");
+          }}
+          className="text-xs font-semibold text-accent underline underline-offset-2"
+        >
+          Change
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="relative">
+      <label className="mb-1 block text-sm font-medium text-text-secondary" htmlFor="generate-bill-customer">
+        Customer
+      </label>
+      <input
+        id="generate-bill-customer"
+        type="text"
+        value={query}
+        onChange={(event) => {
+          setQuery(event.target.value);
+          setOpen(true);
+        }}
+        onFocus={() => setOpen(true)}
+        onBlur={() => {
+          // A small delay so a click on a suggestion registers before the
+          // list unmounts.
+          setTimeout(() => setOpen(false), 150);
+        }}
+        placeholder="Type a name or code"
+        autoComplete="off"
+        className="h-10 w-full rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
+      />
+      {open && matches.length > 0 ? (
+        <ul className="absolute z-10 mt-1 w-full max-h-56 overflow-y-auto rounded-md border border-surface-border bg-surface shadow-lg">
+          {matches.map((customer) => (
+            <li key={customer.id}>
+              <button
+                type="button"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  onSelect(customer);
+                  setQuery("");
+                  setOpen(false);
+                }}
+                className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-surface-muted"
+              >
+                <span className="text-text-primary">{customer.name}</span>
+                <span className="text-text-secondary">{customer.code}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {open && query.trim() !== "" && matches.length === 0 ? (
+        <p className="absolute z-10 mt-1 w-full rounded-md border border-surface-border bg-surface px-3 py-2 text-sm text-text-secondary shadow-lg">
+          No matching customer.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+// Reopen a month's Generated bills for a fresh Generate — scoped to the whole
+// city, one route, or every route under one vehicle. Never touches a Locked
+// bill: locking is a deliberate freeze, and undoing one is a per-bill decision
+// made from the bill itself, not a bulk sweep. See revertGeneratedBillsToDraft.
+function RevertGeneratedDialog({
   open,
-  dbConnected,
   defaultMonth,
-  unlockedMonths,
+  routes,
+  vehicles,
   onClose,
 }: {
   open: boolean;
-  dbConnected: boolean;
   defaultMonth: string;
-  unlockedMonths: Set<string>;
+  routes: Array<{ id: string; code: string; name: string }>;
+  vehicles: Array<{ id: string; code: string; name: string }>;
   onClose: () => void;
 }) {
-  const [state, action, pending] = useActionState(generateMonthlyBills, initialState);
+  const [state, action, pending] = useActionState(revertGeneratedBillsToDraft, initialState);
   const [billingMonth, setBillingMonth] = useState(defaultMonth);
+  const [scope, setScope] = useState<"all" | "route" | "vehicle">("all");
+  const [routeId, setRouteId] = useState("");
+  const [vehicleId, setVehicleId] = useState("");
 
+  // Reset on close, not on open: setting local state from an effect on open
+  // trips react-hooks/set-state-in-effect, and resetting when the dialog
+  // closes leaves it exactly as clean the next time it opens.
+  const handleClose = useCallback(() => {
+    setScope("all");
+    setRouteId("");
+    setVehicleId("");
+    onClose();
+  }, [onClose]);
+
+  // Bare onClose, not handleClose — see the identical note in
+  // GenerateBillsDialog above.
   useEffect(() => {
     if (!open || state.status !== "success") {
       return;
     }
+    const timer = setTimeout(onClose, 1500);
+    return () => clearTimeout(timer);
+  }, [onClose, open, state.status]);
 
-    // Give the user a moment to read messages like "N locked bills left
-    // unchanged" before the dialog disappears.
-    if (state.message && state.message.includes("locked")) {
-      const timer = setTimeout(onClose, 1800);
-      return () => clearTimeout(timer);
-    }
-
-    onClose();
-  }, [onClose, open, state.status, state.message]);
-
-  // Carry-forward opening balances come from the previous month's CLOSING. If
-  // that month still has unlocked bills, its closings can still move, so this
-  // month's openings aren't final yet. Warn — but allow (they can regenerate).
-  const previousMonth = getPreviousMonth(billingMonth);
-  const previousMonthUnlocked = previousMonth !== "" && unlockedMonths.has(previousMonth);
+  const canSubmit =
+    !pending && (scope === "all" || (scope === "route" && routeId !== "") || (scope === "vehicle" && vehicleId !== ""));
 
   return (
     <Dialog
       open={open}
-      onClose={onClose}
-      title="Generate monthly bills"
-      description="Build customer-route bills from saved Daily Entry rows and verified payments."
+      onClose={handleClose}
+      title="Revert to Draft"
+      description="Reopens Generated bills so Daily Entry can be edited again. Locked bills are never touched."
       footer={null}
     >
       <KeyboardForm action={action} className="space-y-4">
@@ -205,11 +320,229 @@ function GenerateBillsDialog({
           onChange={(event) => setBillingMonth(event.target.value)}
           autoFocus
         />
-        <div className="rounded-lg bg-surface-muted px-3 py-2 text-sm text-text-secondary">
-          This will create or refresh bill snapshots for the selected month. Existing generated
-          bills for the same customer-route-month will be updated.
+
+        <div>
+          <span className="mb-1 block text-sm font-medium text-text-secondary">Scope</span>
+          <div className="flex flex-col gap-2">
+            <label className="flex items-center gap-2 text-sm text-text-primary">
+              <input
+                type="radio"
+                name="scope"
+                value="all"
+                checked={scope === "all"}
+                onChange={() => setScope("all")}
+              />
+              Every route in the city
+            </label>
+            <label className="flex items-center gap-2 text-sm text-text-primary">
+              <input
+                type="radio"
+                name="scope"
+                value="route"
+                checked={scope === "route"}
+                onChange={() => setScope("route")}
+              />
+              One route
+            </label>
+            {scope === "route" ? (
+              <select
+                name="routeId"
+                value={routeId}
+                onChange={(event) => setRouteId(event.target.value)}
+                className="ml-6 h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
+              >
+                <option value="">Select a route</option>
+                {routes.map((route) => (
+                  <option key={route.id} value={route.id}>
+                    {route.code} - {route.name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            <label className="flex items-center gap-2 text-sm text-text-primary">
+              <input
+                type="radio"
+                name="scope"
+                value="vehicle"
+                checked={scope === "vehicle"}
+                onChange={() => setScope("vehicle")}
+              />
+              One vehicle (every route it runs)
+            </label>
+            {scope === "vehicle" ? (
+              <select
+                name="vehicleId"
+                value={vehicleId}
+                onChange={(event) => setVehicleId(event.target.value)}
+                className="ml-6 h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
+              >
+                <option value="">Select a vehicle</option>
+                {vehicles.map((vehicle) => (
+                  <option key={vehicle.id} value={vehicle.id}>
+                    {vehicle.code} - {vehicle.name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+          </div>
         </div>
-        {previousMonthUnlocked ? (
+
+        <div className="rounded-lg bg-surface-muted px-3 py-2 text-sm text-text-secondary">
+          Only bills currently Generated revert to Draft. Locked bills — already handed to
+          someone — are always left exactly as they are.
+        </div>
+
+        {state.status !== "idle" && state.message ? (
+          <p className={state.status === "success" ? "text-sm text-emerald-700" : "text-sm text-rose-700"}>
+            {state.message}
+          </p>
+        ) : null}
+
+        <div className="flex flex-wrap items-center justify-end gap-3 border-t border-surface-border pt-4">
+          <SecondaryButton type="button" onClick={handleClose} disabled={pending}>
+            Cancel
+          </SecondaryButton>
+          <PrimaryButton type="submit" disabled={!canSubmit}>
+            {pending ? "Reverting..." : "Revert to Draft"}
+          </PrimaryButton>
+        </div>
+      </KeyboardForm>
+    </Dialog>
+  );
+}
+
+function GenerateBillsDialog({
+  open,
+  dbConnected,
+  defaultMonth,
+  unlockedMonths,
+  customers,
+  onClose,
+}: {
+  open: boolean;
+  dbConnected: boolean;
+  defaultMonth: string;
+  unlockedMonths: Set<string>;
+  customers: Array<{ id: string; code: string; name: string }>;
+  onClose: () => void;
+}) {
+  const [state, action, pending] = useActionState(generateMonthlyBills, initialState);
+  const [billingMonth, setBillingMonth] = useState(defaultMonth);
+  // "One customer" is a mode within this same dialog and the same action —
+  // the generate pipeline is unchanged, every query in it is just scoped down
+  // to whoever is picked here. See generateMonthlyBills.
+  const [mode, setMode] = useState<"month" | "customer">("month");
+  const [selectedCustomer, setSelectedCustomer] = useState<{ id: string; name: string; code: string } | null>(
+    null,
+  );
+
+  // Reset on close, not on open: setting local state from an effect on open
+  // trips react-hooks/set-state-in-effect, and resetting when the dialog
+  // closes leaves it exactly as clean — no stale picker selection — the next
+  // time it opens.
+  const handleClose = useCallback(() => {
+    setMode("month");
+    setSelectedCustomer(null);
+    onClose();
+  }, [onClose]);
+
+  useEffect(() => {
+    if (!open || state.status !== "success") {
+      return;
+    }
+
+    // Bare onClose, not handleClose: this effect only tells the PARENT to
+    // close, which is fine from an effect. handleClose additionally resets
+    // this component's own state, and calling that from an effect is what
+    // react-hooks/set-state-in-effect forbids — even indirectly through a
+    // wrapper. Local state is clean anyway the next time this mounts fresh,
+    // and Cancel/backdrop-close still go through handleClose to reset eagerly.
+    //
+    // "One customer" mode always lingers: every one of its messages — success,
+    // locked, no-deliveries — is specific to the person just picked and is
+    // worth reading, unlike the whole-month mode's plain "Monthly bills
+    // generated.", which says nothing an operator couldn't already see on the
+    // screen behind it.
+    if (mode === "customer" || (state.message && (state.message.includes("locked") || state.message.includes("Locked")))) {
+      const timer = setTimeout(onClose, 1800);
+      return () => clearTimeout(timer);
+    }
+
+    onClose();
+  }, [onClose, open, state.status, state.message, mode]);
+
+  // Carry-forward opening balances come from the previous month's CLOSING. If
+  // that month still has unlocked bills, its closings can still move, so this
+  // month's openings aren't final yet. Warn — but allow (they can regenerate).
+  const previousMonth = getPreviousMonth(billingMonth);
+  const previousMonthUnlocked = previousMonth !== "" && unlockedMonths.has(previousMonth);
+
+  return (
+    <Dialog
+      open={open}
+      onClose={handleClose}
+      title="Generate monthly bills"
+      description="Build customer-route bills from saved Daily Entry rows and verified payments."
+      footer={null}
+    >
+      <KeyboardForm action={action} className="space-y-4">
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setMode("month")}
+            className={cn(
+              "flex-1 rounded-md border px-3 py-2 text-sm font-medium transition",
+              mode === "month"
+                ? "border-accent bg-accent-soft text-accent-soft-text"
+                : "border-surface-border-strong bg-surface text-text-secondary hover:bg-surface-muted",
+            )}
+          >
+            Whole month
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("customer")}
+            className={cn(
+              "flex-1 rounded-md border px-3 py-2 text-sm font-medium transition",
+              mode === "customer"
+                ? "border-accent bg-accent-soft text-accent-soft-text"
+                : "border-surface-border-strong bg-surface text-text-secondary hover:bg-surface-muted",
+            )}
+          >
+            One customer
+          </button>
+        </div>
+
+        <FormInput
+          label="Billing month"
+          name="billingMonth"
+          type="month"
+          value={billingMonth}
+          onChange={(event) => setBillingMonth(event.target.value)}
+          autoFocus={mode === "month"}
+        />
+
+        {mode === "customer" ? (
+          <>
+            <input type="hidden" name="customerId" value={selectedCustomer?.id ?? ""} readOnly />
+            <CustomerPicker
+              customers={customers}
+              selected={selectedCustomer}
+              onSelect={setSelectedCustomer}
+            />
+            <div className="rounded-lg bg-surface-muted px-3 py-2 text-sm text-text-secondary">
+              Generates one bill for this customer, combining deliveries from every route they run —
+              the same rule every bill already follows. It lands on whichever route is confirmed as
+              their billing route, the same route it will show on the bill itself.
+            </div>
+          </>
+        ) : (
+          <div className="rounded-lg bg-surface-muted px-3 py-2 text-sm text-text-secondary">
+            This will create or refresh bill snapshots for the selected month. Existing generated
+            bills for the same customer-route-month will be updated.
+          </div>
+        )}
+        {mode === "month" && previousMonthUnlocked ? (
           <div className="space-y-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
             <p className="font-semibold">
               Lock {formatMonth(new Date(`${previousMonth}-01T00:00:00.000Z`))} first.
@@ -238,11 +571,15 @@ function GenerateBillsDialog({
           <StatusBadge tone={dbConnected ? "success" : "warning"}>
             {dbConnected ? "Live data" : "Offline fallback"}
           </StatusBadge>
-          <SecondaryButton type="button" onClick={onClose} disabled={pending}>
+          <SecondaryButton type="button" onClick={handleClose} disabled={pending}>
             Cancel
           </SecondaryButton>
-          <PrimaryButton type="submit" disabled={pending}>
-            {pending ? "Generating..." : "Generate bills"}
+          <PrimaryButton type="submit" disabled={pending || (mode === "customer" && !selectedCustomer)}>
+            {pending
+              ? "Generating..."
+              : mode === "customer"
+                ? "Generate bill"
+                : "Generate bills"}
           </PrimaryButton>
         </div>
       </KeyboardForm>
@@ -619,6 +956,7 @@ export function MonthlyBillScreen({
   const [routeId, setRouteId] = useState("");
   const [status, setStatus] = useState("");
   const [generateOpen, setGenerateOpen] = useState(false);
+  const [revertOpen, setRevertOpen] = useState(false);
   const [printSummaryOpen, setPrintSummaryOpen] = useState(false);
 
   const { selectedMonth: summaryMonth, selectedRouteId: summaryRouteId } = summaryPayload;
@@ -785,6 +1123,13 @@ export function MonthlyBillScreen({
         >
           Generate bills
         </PrimaryButton>
+        <SecondaryButton
+          type="button"
+          onClick={() => setRevertOpen(true)}
+          title="Reopen Generated bills for editing — Locked bills are never touched"
+        >
+          Revert to Draft
+        </SecondaryButton>
       </PageActions>
 
       <div className="sticky top-[65px] z-10 -mx-4 border-b border-surface-border bg-app-bg/95 px-4 py-3 backdrop-blur transition-colors duration-200 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
@@ -1036,7 +1381,16 @@ export function MonthlyBillScreen({
         dbConnected={payload.dbConnected}
         defaultMonth={defaultMonth}
         unlockedMonths={unlockedMonths}
+        customers={payload.customers}
         onClose={() => setGenerateOpen(false)}
+      />
+
+      <RevertGeneratedDialog
+        open={revertOpen}
+        defaultMonth={defaultMonth}
+        routes={payload.routes}
+        vehicles={payload.vehicles}
+        onClose={() => setRevertOpen(false)}
       />
 
       <PrintSummaryDialog

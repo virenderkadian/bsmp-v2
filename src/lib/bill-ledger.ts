@@ -81,3 +81,48 @@ export function receivedAgainstOpenBill(ledger: CustomerLedger | undefined): num
   }
   return Math.max(0, ledger.totalVerified - ledger.lockedPaid);
 }
+
+// A minimal client type for the single-customer path — the where clauses carry
+// customerId as well as cityId, so it is not the same shape as LedgerClient
+// above and can't reuse it.
+type SingleCustomerLedgerClient = {
+  payment: {
+    findMany: (args: {
+      where: { status: "VERIFIED"; customerId: string; route: { cityId: string } };
+      select: { amount: true };
+    }) => Promise<Array<{ amount: unknown }>>;
+  };
+  monthlyBill: {
+    findMany: (args: {
+      where: { status: "LOCKED"; customerId: string; route: { cityId: string } };
+      select: { paymentAmount: true };
+    }) => Promise<Array<{ paymentAmount: unknown }>>;
+  };
+};
+
+// The same totals as getCityCustomerLedger's per-customer entry, scoped to one
+// customer at the query level rather than pulling every payment and locked
+// bill in the city to read a single entry back out of the map. Used where a
+// caller only ever needs one customer's figures — a single-customer bill
+// generate, most immediately.
+export async function getSingleCustomerLedger(
+  client: SingleCustomerLedgerClient,
+  cityId: string,
+  customerId: string,
+): Promise<CustomerLedger> {
+  const [payments, lockedBills] = await Promise.all([
+    client.payment.findMany({
+      where: { status: "VERIFIED", customerId, route: { cityId } },
+      select: { amount: true },
+    }),
+    client.monthlyBill.findMany({
+      where: { status: "LOCKED", customerId, route: { cityId } },
+      select: { paymentAmount: true },
+    }),
+  ]);
+
+  return {
+    totalVerified: payments.reduce((total, payment) => total + Number(payment.amount), 0),
+    lockedPaid: lockedBills.reduce((total, bill) => total + Number(bill.paymentAmount), 0),
+  };
+}
