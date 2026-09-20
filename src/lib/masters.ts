@@ -17,7 +17,7 @@ export type ProductRecord = Pick<
 > & {
   defaultRate: string;
 };
-export type VehicleRecord = Pick<Vehicle, "id" | "code" | "name" | "registration" | "isActive"> & {
+export type VehicleRecord = Pick<Vehicle, "id" | "code" | "name" | "registration" | "upiId" | "isActive"> & {
   // Whether a driver mobile-app PIN has been set (derived from pinUpdatedAt —
   // the hash itself is never sent to the client).
   hasPin: boolean;
@@ -86,6 +86,7 @@ export async function getMastersPayload(): Promise<MastersPayload> {
         registration: true,
         isActive: true,
         pinUpdatedAt: true,
+        upiId: true,
       },
     }), "Vehicle master request");
     const vehicles: VehicleRecord[] = vehicleRows.map((vehicle) => ({
@@ -93,6 +94,7 @@ export async function getMastersPayload(): Promise<MastersPayload> {
       code: vehicle.code,
       name: vehicle.name,
       registration: vehicle.registration,
+      upiId: vehicle.upiId,
       isActive: vehicle.isActive,
       hasPin: vehicle.pinUpdatedAt != null,
     }));

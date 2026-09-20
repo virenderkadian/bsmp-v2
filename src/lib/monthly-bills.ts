@@ -43,6 +43,10 @@ export type MonthlyBillPayload = {
   dbConnected: boolean;
   customers: Array<{ id: string; code: string; name: string }>;
   routes: Array<{ id: string; code: string; name: string }>;
+  // For the bulk "revert Generated bills to Draft" scope picker — a vehicle
+  // can run more than one route (a morning and an evening), so reverting by
+  // vehicle needs its own list rather than routing through routes.
+  vehicles: Array<{ id: string; code: string; name: string }>;
   bills: MonthlyBillRecord[];
   // The month whose bills are loaded, and every month that has any. Bills are
   // fetched one month at a time, so the picker can no longer derive its
@@ -147,6 +151,10 @@ export type MonthlyBillDetail = MonthlyBillRecord & {
   otherItems: OtherItemLine[];
   otherItemsTotal: string;
   businessProfile: MonthlyBillBusinessProfile | null;
+  // The payee id money for this bill should go to: the round's vehicle when it
+  // has one, otherwise the city's. Resolved here so both bill layouts and both
+  // pages cannot disagree about it.
+  payeeUpiId: string | null;
   deliveryRows: MonthlyBillDeliveryRow[];
   payments: MonthlyBillPaymentRecord[];
 };
@@ -250,6 +258,7 @@ function fallbackPayload(error?: string, month?: string): MonthlyBillPayload {
     dbConnected: false,
     customers: [],
     routes: [],
+    vehicles: [],
     bills: [],
     selectedMonth: fallbackMonth,
     availableMonths: [fallbackMonth],
@@ -425,7 +434,7 @@ export async function getMonthlyBillsPayload(input?: {
 
   try {
     const cityId = await getCurrentCityId();
-    const [customers, routes, bills, monthRows, unlockedMonthRows] = await withDbTimeout(Promise.all([
+    const [customers, routes, vehicles, bills, monthRows, unlockedMonthRows] = await withDbTimeout(Promise.all([
       prisma.customer.findMany({
         where: { cityId, isActive: true },
         orderBy: { code: "asc" },
@@ -436,6 +445,15 @@ export async function getMonthlyBillsPayload(input?: {
         },
       }),
       prisma.route.findMany({
+        where: { cityId, isActive: true },
+        orderBy: { code: "asc" },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+        },
+      }),
+      prisma.vehicle.findMany({
         where: { cityId, isActive: true },
         orderBy: { code: "asc" },
         select: {
@@ -514,6 +532,7 @@ export async function getMonthlyBillsPayload(input?: {
       dbConnected: true,
       customers,
       routes,
+      vehicles,
       selectedMonth,
       availableMonths,
       unlockedMonths: unlockedMonthRows.map((row) => row.billingMonth.toISOString().slice(0, 7)),
@@ -1074,6 +1093,9 @@ export async function getMonthlyBillDetail(id: string): Promise<MonthlyBillDetai
             shift: true,
             driverName: true,
             driverPhone: true,
+            // Payments for this round land on the vehicle's own payee id when
+            // it has one, so an incoming credit says which round it came from.
+            vehicle: { select: { upiId: true } },
           },
         },
         items: {
@@ -1270,6 +1292,7 @@ export async function getMonthlyBillDetail(id: string): Promise<MonthlyBillDetai
         calendarDays,
         calendarTotals,
         businessProfile,
+        payeeUpiId: bill.route.vehicle?.upiId?.trim() || businessProfile?.upiId || null,
         itemSummary: items
           .map((item) => `${item.productShortName ?? item.productCode} ${item.totalQty} / ₹${item.totalAmount}`)
           .join(", "),
@@ -1346,7 +1369,10 @@ export async function getMonthlyBillsForRoutePrint(
     const route = await withDbTimeout(
       prisma.route.findUnique({
         where: { id: routeId },
-        select: { cityId: true, code: true, name: true, shift: true, driverName: true, driverPhone: true },
+        select: {
+          cityId: true, code: true, name: true, shift: true, driverName: true, driverPhone: true,
+          vehicle: { select: { upiId: true } },
+        },
       }),
       "Route request",
     );
@@ -1504,6 +1530,7 @@ export async function getMonthlyBillsForRoutePrint(
           calendarDays,
           calendarTotals,
           businessProfile,
+          payeeUpiId: route.vehicle?.upiId?.trim() || businessProfile?.upiId || null,
           itemSummary: "",
           items: [],
           deliveryRows: [],

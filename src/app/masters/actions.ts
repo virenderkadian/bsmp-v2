@@ -45,6 +45,10 @@ const vehicleSchema = z.object({
   code: z.string().trim().min(2, "Code is required."),
   name: z.string().trim().min(2, "Vehicle name is required."),
   registration: z.string().trim().optional(),
+  // The business's own payee id for this round, not the driver's — it exists
+  // so an incoming credit says which round it came from. Empty falls back to
+  // the city's business profile.
+  upiId: z.string().trim().optional(),
 });
 
 const routeSchema = z.object({
@@ -238,6 +242,7 @@ export async function createVehicle(_prevState: ActionState = idleState, formDat
     code: getValue(formData, "code"),
     name: getValue(formData, "name"),
     registration: getValue(formData, "registration"),
+    upiId: getValue(formData, "upiId"),
   });
 
   if (!parsed.success) {
@@ -251,6 +256,7 @@ export async function createVehicle(_prevState: ActionState = idleState, formDat
         code: parsed.data.code,
         name: parsed.data.name,
         registration: asOptional(parsed.data.registration ?? ""),
+        upiId: asOptional(parsed.data.upiId ?? ""),
       },
     });
   }, "Vehicle created.");
@@ -263,6 +269,7 @@ export async function updateVehicle(_prevState: ActionState = idleState, formDat
     code: getValue(formData, "code"),
     name: getValue(formData, "name"),
     registration: getValue(formData, "registration"),
+    upiId: getValue(formData, "upiId"),
   });
 
   if (!parsed.success) {
@@ -276,6 +283,7 @@ export async function updateVehicle(_prevState: ActionState = idleState, formDat
         code: parsed.data.code,
         name: parsed.data.name,
         registration: asOptional(parsed.data.registration ?? ""),
+        upiId: asOptional(parsed.data.upiId ?? ""),
       },
     });
   }, "Vehicle updated.");

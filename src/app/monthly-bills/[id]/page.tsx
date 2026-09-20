@@ -4,6 +4,7 @@ import { PageHeader } from "@/components/admin/page-header";
 import { PrintButton } from "@/components/admin/print-button";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { getMonthlyBillDetail } from "@/lib/monthly-bills";
+import { buildBillPaymentQr } from "@/lib/bill-payment-qr";
 import { getCitySettings } from "@/lib/city-settings";
 import { getCurrentCityId } from "@/lib/current-city";
 import { BillDocument } from "@/app/monthly-bills/bill-document";
@@ -60,7 +61,8 @@ export default async function MonthlyBillDetailPage({
   }
 
   const bill = payload.bill;
-  const qrDataUrl = bill.businessProfile?.upiQrDataUrl ?? null;
+  // Built for this bill: carries the amount owed and the customer code.
+  const qrDataUrl = await buildBillPaymentQr(bill);
 
   return (
     <>

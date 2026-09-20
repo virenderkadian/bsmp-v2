@@ -119,6 +119,11 @@ model Vehicle {
   name             String
   registration     String?
   isActive         Boolean                  @default(true)
+  // A UPI id of the business's own, per vehicle — not the driver's. The point
+  // is telling incoming payments apart: money arriving for this round lands on
+  // an id that identifies the round. Null falls back to the city's business
+  // profile, so a city that wants one id for everything simply leaves it empty.
+  upiId            String?
   // Driver mobile-app login credential: scrypt hash of the vehicle's PIN
   // (never the PIN itself). Null = no driver login set up yet. See
   // src/lib/driver-auth.ts.
