@@ -1,6 +1,7 @@
 import type { EntrySyncStatus, RouteShift } from "@prisma/client";
 import { getCurrentCityId } from "@/lib/current-city";
 import { withDbTimeout } from "@/lib/db-timeout";
+import { computeModeQuantity, computeQuantityBand } from "@/lib/quantity-baseline";
 import { prisma } from "@/lib/prisma";
 
 export type DailyEntryRouteOption = {
@@ -23,6 +24,23 @@ export type DailyEntryProductRecord = {
   // the screen can show their usual order while entering. "0" when there's no
   // recent delivery to go on.
   lastQuantity: string;
+  // The band a typed quantity should fall inside to look normal for this
+  // customer — see src/lib/quantity-baseline.ts for exactly how it's built
+  // and why. Null when there isn't enough history yet — no band means no
+  // check, never a guess dressed up as one.
+  unusualBandMin: string | null;
+  unusualBandMax: string | null;
+  // This customer's own last several non-zero deliveries of this product,
+  // comma-separated, newest first — sent down so the screen can exempt an
+  // exact repeat from the unusual check even when it sits outside the band
+  // (see the "seen before" exemption in quantity-baseline.ts). Empty string
+  // when there's no history.
+  recentQuantities: string;
+  // The most frequent of those recent quantities — a real number this
+  // customer has actually ordered, shown as "usually takes X" instead of the
+  // median, which can land on a value they've never once taken. Null when
+  // there isn't enough history yet.
+  modeQuantity: string | null;
 };
 
 // An occasional sale already recorded against this customer today — a kilo of
@@ -301,6 +319,31 @@ export async function getDailyEntryPayload(input?: {
       }
     }
 
+    // Up to the last 10 non-zero deliveries per customer+product, from the
+    // SAME 45-day window already fetched above — no second query. This is
+    // deliberately more than the single "most recent" value above: a median
+    // needs several points, and capping at 10 means a long-standing regular
+    // costs no more to process than someone with just enough history to
+    // register at all.
+    const RECENT_QUANTITIES_LIMIT = 10;
+    const recentQuantitiesByCustomerProduct = new Map<string, number[]>();
+    for (const entry of recentEntries) {
+      for (const line of entry.lines) {
+        for (const productEntry of line.productEntries) {
+          const quantity = Number(productEntry.quantity);
+          if (quantity <= 0) {
+            continue;
+          }
+          const key = `${line.customerId}:${productEntry.productId}`;
+          const values = recentQuantitiesByCustomerProduct.get(key) ?? [];
+          if (values.length < RECENT_QUANTITIES_LIMIT) {
+            values.push(quantity);
+            recentQuantitiesByCustomerProduct.set(key, values);
+          }
+        }
+      }
+    }
+
     return {
       dbConnected: true,
       selectedRouteId: routePacket.id,
@@ -334,6 +377,10 @@ export async function getDailyEntryPayload(input?: {
           remarks: savedLine?.remarks ?? "",
           products: products.map((product) => {
             const saved = savedProducts.get(product.id);
+            const recentQuantities =
+              recentQuantitiesByCustomerProduct.get(`${sequenceLine.customerId}:${product.id}`) ?? [];
+            const band = computeQuantityBand(recentQuantities);
+            const modeQuantity = computeModeQuantity(recentQuantities);
 
             return {
               productId: product.id,
@@ -344,6 +391,10 @@ export async function getDailyEntryPayload(input?: {
               quantity: String(saved?.quantity ?? 0),
               defaultRate: String(saved?.rateSnapshot ?? product.defaultRate),
               lastQuantity: String(recentOrder?.get(product.id) ?? 0),
+              unusualBandMin: band ? String(band.min) : null,
+              unusualBandMax: band ? String(band.max) : null,
+              recentQuantities: recentQuantities.join(","),
+              modeQuantity: modeQuantity !== null ? String(modeQuantity) : null,
             };
           }),
           // Anything saved against this customer that is not a grid column.
