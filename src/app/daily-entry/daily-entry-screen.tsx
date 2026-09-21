@@ -196,14 +196,27 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
   // Rebuilt on every recompute(), which already runs on every keystroke, so
   // this rides an existing re-render rather than adding a new one.
   const [unusualCells, setUnusualCells] = useState<Map<string, UnusualCell>>(new Map());
-  const [confirmUnusual, setConfirmUnusual] = useState(false);
-  // The set of unusual cells the operator last actually confirmed. If it
-  // stops matching the current set — they fixed one, or a new one appeared —
-  // the confirmation no longer covers what's on screen, so it's withdrawn
-  // automatically rather than silently covering a cell nobody looked at.
-  // State, not a ref: it's read during render (below) to decide whether to
-  // withdraw the confirmation, and refs can't be read while rendering.
-  const [confirmedUnusualSignature, setConfirmedUnusualSignature] = useState("");
+  // Whether the warning card is hidden. NOT tied to a checkbox anymore — an
+  // earlier version used a checkbox plus reusing the toolbar's Save button,
+  // which needed the operator to notice the checkbox, check it, then find
+  // and re-click a button that gave no sign anything had changed. Reported
+  // as "it isn't letting me save". The warning card now carries its own
+  // "Save anyway" button (a real submit button naming its own confirm value
+  // — see below — so there's no dependency on React state having re-rendered
+  // before the click is handled) and its own "Cancel".
+  const [unusualWarningDismissed, setUnusualWarningDismissed] = useState(false);
+  // Un-dismisses on every new save attempt, not just when the flagged set
+  // changes — otherwise clicking the plain Save button again (still
+  // unconfirmed) after dismissing would silently refuse to show the warning
+  // again, which is exactly the "not letting me save, and I can't tell why"
+  // failure mode being fixed here. Compared by reference: useActionState
+  // hands back a genuinely new object on every action result, even when the
+  // message text repeats.
+  const [lastHandledActionState, setLastHandledActionState] = useState(state);
+  if (state !== lastHandledActionState) {
+    setLastHandledActionState(state);
+    setUnusualWarningDismissed(false);
+  }
 
   const customerNameById = useMemo(
     () => new Map(payload.lines.map((line) => [line.customerId, line.customerName])),
@@ -320,25 +333,12 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
     0,
   );
 
-  // Occasional items are meant to carry a price agreed at the door — a typed
-  // rate that differs from the catalogue is the NORMAL case, not an anomaly
-  // (see the row below: it's what the whole feature is for). So this stays a
-  // soft visual cue only (amber highlight + tooltip on the rate input,
-  // computed inline per-row) — it must never block or require confirming a
-  // save, unlike the quantity check. Confirmed by the existing occasional-
-  // items test suite, which types a rate that differs from the catalogue and
-  // expects the save to go straight through.
-  //
-  // Adjusted during render, not in an effect — the codebase's usual shape for
-  // state that follows a changing dependency (see savedExtrasBaseline above).
-  // If the flagged set has changed since the operator last confirmed it —
-  // they fixed one, or a new one appeared — that confirmation no longer
-  // covers what's on screen and is withdrawn.
-  const unusualSignature = [...unusualCells.keys()].sort().join("|");
-
-  if (confirmUnusual && unusualSignature !== confirmedUnusualSignature) {
-    setConfirmUnusual(false);
-  }
+  // Occasional-item rates never gate the save — a typed rate that differs
+  // from the catalogue is the NORMAL case, not an anomaly, the whole point of
+  // that feature. So they stay a soft visual cue only (amber highlight +
+  // tooltip on the rate input, computed inline per-row). Confirmed by the
+  // existing occasional-items test suite, which types a rate that differs
+  // from the catalogue and expects the save to go straight through.
 
   const addExtraRow = (customerId: string) => {
     const product = payload.occasionalProducts[0];
@@ -420,8 +420,6 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
 
     setIsDirty(dirty);
     setTotals({ perProduct, grandAmount });
-    // Whether this invalidates a standing confirmation is handled where
-    // unusualSignature is computed during render (see its own comment above).
     setUnusualCells(nextUnusualCells);
   };
 
@@ -503,7 +501,19 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
     recompute();
   };
 
-  const lastMessageRef = useRef("");
+  // The actual bug: this used to be keyed on a stringified `state.message` +
+  // `state.status`. Two separate blocked save attempts return the EXACT SAME
+  // message text ("Some quantities on this route still look unusual..."), so
+  // React saw no dependency change on the second attempt and never re-ran
+  // this effect at all — meaning the restore-quantities logic below never
+  // fired, while the browser's native form-reset (which isn't gated by this
+  // effect) still ran, silently wiping the typed quantity to 0 on the SECOND
+  // save click. Confirmed by testing the exact reported flow: Cancel, then
+  // Save again — the cell read back 0, and what got saved on the next
+  // confirm was nothing. Keying on the whole `state` object fixes it:
+  // useActionState hands back a genuinely new object every dispatch, even
+  // when its content is textually identical, so this now re-runs every time.
+  const lastHandledStateRef = useRef<DailyEntryActionState | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
 
   // React resets every uncontrolled field in the form once its action
@@ -532,13 +542,11 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
       return;
     }
 
-    const key = `${state.status}:${state.message}`;
-
-    if (lastMessageRef.current === key) {
+    if (lastHandledStateRef.current === state) {
       return;
     }
 
-    lastMessageRef.current = key;
+    lastHandledStateRef.current = state;
     setToast({ tone: state.status === "success" ? "success" : "error", message: state.message });
 
     if (state.status === "success") {
@@ -565,27 +573,30 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
     }
     // recompute is intentionally not memoized (see its own comment) and not
     // listed here — this should only re-run when the save result changes,
-    // not on every render.
+    // not on every render. Depending on `state` as a whole (not its
+    // destructured fields) is deliberate — see lastHandledStateRef's comment.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.message, state.status]);
+  }, [state]);
 
-  const lastRevertMessageRef = useRef("");
+  // Same fix as lastHandledStateRef above, same reason: two revert attempts
+  // can return identical text, and a stringified dedup key would silently
+  // swallow the second toast.
+  const lastHandledRevertStateRef = useRef<DailyEntryActionState | null>(null);
   useEffect(() => {
     if (revertState.status === "idle" || !revertState.message) {
       return;
     }
 
-    const key = `${revertState.status}:${revertState.message}`;
-    if (lastRevertMessageRef.current === key) {
+    if (lastHandledRevertStateRef.current === revertState) {
       return;
     }
 
-    lastRevertMessageRef.current = key;
+    lastHandledRevertStateRef.current = revertState;
     setToast({
       tone: revertState.status === "success" ? "success" : "error",
       message: revertState.message,
     });
-  }, [revertState.message, revertState.status]);
+  }, [revertState]);
 
   useEffect(() => {
     if (!toast) {
@@ -733,12 +744,6 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
           type="hidden"
           name="hasUnusualQuantities"
           value={unusualCells.size > 0 ? "true" : "false"}
-          readOnly
-        />
-        <input
-          type="hidden"
-          name="confirmUnusualQuantities"
-          value={confirmUnusual ? "true" : "false"}
           readOnly
         />
 
@@ -1035,9 +1040,16 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
         )}
 
         {/* Confirms rather than blocks — some of these genuinely are correct,
-            unusual orders. Lists what's actually flagged so the confirmation
-            is an informed one, not a reflex click past a wall of text. */}
-        {state.status === "error" && state.needsUnusualConfirm ? (
+            unusual orders. Lists what's actually flagged so the choice is an
+            informed one, not a reflex click past a wall of text.
+            "Save anyway" is a real submit button naming its own confirm
+            value, not a checkbox plus a click on the toolbar's Save button —
+            that two-step version reached the server correctly in testing,
+            but in real use read as "it won't let me save": nothing near the
+            checkbox visibly changed, and the actual Save button could be
+            scrolled out of view on a long route. This can't have that
+            problem — the button IS the save. */}
+        {state.status === "error" && state.needsUnusualConfirm && !unusualWarningDismissed ? (
           <div className="rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-3 text-sm text-amber-900">
             <p className="font-medium">
               {unusualCells.size} quantit{unusualCells.size === 1 ? "y looks" : "ies look"} unusual:
@@ -1053,21 +1065,23 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
             {unusualCells.size > 8 ? (
               <p className="mt-1 text-xs text-amber-800">and {unusualCells.size - 8} more…</p>
             ) : null}
-            <label className="mt-2.5 flex items-center gap-2 font-medium">
-              <input
-                type="checkbox"
-                checked={confirmUnusual}
-                onChange={(event) => {
-                  const checked = event.target.checked;
-                  setConfirmUnusual(checked);
-                  if (checked) {
-                    setConfirmedUnusualSignature(unusualSignature);
-                  }
-                }}
-                className="h-4 w-4"
-              />
-              These are correct — save anyway
-            </label>
+            <div className="mt-2.5 flex items-center gap-3">
+              <PrimaryButton
+                type="submit"
+                name="confirmUnusualQuantities"
+                value="true"
+                className="h-9 px-4 text-sm"
+              >
+                Save anyway
+              </PrimaryButton>
+              <SecondaryButton
+                type="button"
+                onClick={() => setUnusualWarningDismissed(true)}
+                className="h-9 px-4 text-sm"
+              >
+                Cancel
+              </SecondaryButton>
+            </div>
           </div>
         ) : null}
 
