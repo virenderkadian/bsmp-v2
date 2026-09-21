@@ -15,11 +15,78 @@ import {
 import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { usePageMetric } from "@/components/admin/page-metric";
 import { Toast, type ToastTone } from "@/components/admin/toast";
+import { isQuantityUnusual } from "@/lib/quantity-baseline";
 import { cn } from "@/lib/utils";
 
 const initialState: DailyEntryActionState = { status: "idle" };
 
 const ACTIONS_PREFERENCE = "daily-entry-show-actions";
+
+// Amber, not the blue used for "usual product" — this flags the TYPED value
+// itself as worth a second look, a different signal from "they normally buy
+// this at all".
+const UNUSUAL_QUANTITY_CLASSES = ["border-amber-500", "bg-amber-50", "ring-1", "ring-amber-400"];
+
+// Module-level (not component-scoped) so the focus/scroll effect below can
+// use them with a stable identity and an empty dependency array, instead of
+// re-registering its listeners on every keystroke's re-render.
+//
+// Reads a cell's current value and its server-provided history data, applies
+// the unusual/usual visual state directly to the input (classes + title),
+// and returns the same text so the always-visible focus tooltip can show it
+// without recomputing anything.
+function applyQuantityState(input: HTMLInputElement) {
+  const current = Number(input.value || 0);
+  const bandMin = input.dataset.bandMin;
+  const bandMax = input.dataset.bandMax;
+  const band = bandMin && bandMax ? { median: 0, min: Number(bandMin), max: Number(bandMax) } : null;
+  const recentQuantities = (input.dataset.recentQuantities || "")
+    .split(",")
+    .filter(Boolean)
+    .map(Number);
+  const unusual = isQuantityUnusual(current, band, recentQuantities);
+
+  UNUSUAL_QUANTITY_CLASSES.forEach((cls) => input.classList.toggle(cls, unusual));
+
+  // Mode over the raw last-delivered quantity: a real number this customer
+  // has actually ordered more than once, not just whatever they happened to
+  // take most recently.
+  const modeQuantity = input.dataset.modeQuantity;
+  const usualQuantity = modeQuantity ? Number(modeQuantity) : Number(input.dataset.lastQuantity ?? 0);
+  const usualText = usualQuantity > 0 ? `Usually takes ${formatQty(usualQuantity)}` : "";
+  const text = unusual
+    ? usualText
+      ? `Unusual — ${usualText.toLowerCase()}`
+      : "Unusual — different from their recent orders"
+    : usualText;
+
+  input.title = text;
+  return { unusual, text };
+}
+
+// The tooltip is one shared, fixed-position element reused across every
+// cell — not one per cell — so showing it is just repositioning and
+// restyling a single node, matching this screen's usual grid-scale-friendly
+// approach of touching the DOM directly instead of per-cell React state.
+function showQuantityTooltip(tooltip: HTMLDivElement, input: HTMLInputElement, unusual: boolean, text: string) {
+  if (!text) {
+    tooltip.classList.add("hidden");
+    return;
+  }
+
+  tooltip.textContent = text;
+  tooltip.classList.toggle("border-amber-400", unusual);
+  tooltip.classList.toggle("bg-amber-50", unusual);
+  tooltip.classList.toggle("text-amber-900", unusual);
+  tooltip.classList.toggle("border-surface-border-strong", !unusual);
+  tooltip.classList.toggle("bg-surface", !unusual);
+  tooltip.classList.toggle("text-text-primary", !unusual);
+
+  const rect = input.getBoundingClientRect();
+  tooltip.style.left = `${rect.left}px`;
+  tooltip.style.top = `${rect.bottom + 6}px`;
+  tooltip.classList.remove("hidden");
+}
 
 type ToastState = {
   tone: ToastTone;
@@ -29,6 +96,13 @@ type ToastState = {
 type Totals = {
   perProduct: Map<string, number>;
   grandAmount: number;
+};
+
+type UnusualCell = {
+  customerName: string;
+  productLabel: string;
+  quantity: number;
+  detail: string;
 };
 
 type ExtraRow = {
@@ -59,6 +133,7 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
 
   const toolbarFormRef = useRef<HTMLFormElement>(null);
   const entryFormRef = useRef<HTMLFormElement>(null);
+  const activeCellTooltipRef = useRef<HTMLDivElement>(null);
 
   usePageMetric(
     payload.lines.length > 0
@@ -114,6 +189,30 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
   // mounted, so there's no case where these need to re-sync after mount.
   const [totals, setTotals] = useState<Totals>(() => initialTotals);
   const [isDirty, setIsDirty] = useState(false);
+
+  // Cells currently flagged unusual, keyed by customer+product — tracked in
+  // state (not just DOM classes) so the save flow can show exactly which
+  // ones, and gate the submit on the operator actually confirming them.
+  // Rebuilt on every recompute(), which already runs on every keystroke, so
+  // this rides an existing re-render rather than adding a new one.
+  const [unusualCells, setUnusualCells] = useState<Map<string, UnusualCell>>(new Map());
+  const [confirmUnusual, setConfirmUnusual] = useState(false);
+  // The set of unusual cells the operator last actually confirmed. If it
+  // stops matching the current set — they fixed one, or a new one appeared —
+  // the confirmation no longer covers what's on screen, so it's withdrawn
+  // automatically rather than silently covering a cell nobody looked at.
+  // State, not a ref: it's read during render (below) to decide whether to
+  // withdraw the confirmation, and refs can't be read while rendering.
+  const [confirmedUnusualSignature, setConfirmedUnusualSignature] = useState("");
+
+  const customerNameById = useMemo(
+    () => new Map(payload.lines.map((line) => [line.customerId, line.customerName])),
+    [payload.lines],
+  );
+  const productLabelById = useMemo(
+    () => new Map(productColumns.map((product) => [product.productId, product.productShortName ?? product.productName])),
+    [productColumns],
+  );
 
   // Whether the at-the-door column is showing. A per-operator preference rather
   // than a setting: it costs horizontal room on a wide round, and somebody
@@ -221,6 +320,26 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
     0,
   );
 
+  // Occasional items are meant to carry a price agreed at the door — a typed
+  // rate that differs from the catalogue is the NORMAL case, not an anomaly
+  // (see the row below: it's what the whole feature is for). So this stays a
+  // soft visual cue only (amber highlight + tooltip on the rate input,
+  // computed inline per-row) — it must never block or require confirming a
+  // save, unlike the quantity check. Confirmed by the existing occasional-
+  // items test suite, which types a rate that differs from the catalogue and
+  // expects the save to go straight through.
+  //
+  // Adjusted during render, not in an effect — the codebase's usual shape for
+  // state that follows a changing dependency (see savedExtrasBaseline above).
+  // If the flagged set has changed since the operator last confirmed it —
+  // they fixed one, or a new one appeared — that confirmation no longer
+  // covers what's on screen and is withdrawn.
+  const unusualSignature = [...unusualCells.keys()].sort().join("|");
+
+  if (confirmUnusual && unusualSignature !== confirmedUnusualSignature) {
+    setConfirmUnusual(false);
+  }
+
   const addExtraRow = (customerId: string) => {
     const product = payload.occasionalProducts[0];
 
@@ -251,7 +370,10 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
   // Quantity inputs are uncontrolled (defaultValue) for performance with
   // large routes — recomputing totals/dirty state via a single delegated
   // input listener over the DOM avoids re-rendering every cell on every
-  // keystroke, which a fully controlled table of inputs would require.
+  // keystroke, which a fully controlled table of inputs would require. The
+  // "looks unusual for this customer" highlight rides the same listener for
+  // the same reason: it has to reflect what's currently TYPED, so it can only
+  // be decided here, not baked into the cell's className at render time.
   const recompute = () => {
     const inputs = entryFormRef.current?.querySelectorAll<HTMLInputElement>("[data-daily-entry-quantity='true']");
 
@@ -262,6 +384,7 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
     let dirty = false;
     const perProduct = new Map<string, number>();
     let grandAmount = 0;
+    const nextUnusualCells = new Map<string, UnusualCell>();
 
     inputs.forEach((input) => {
       const current = Number(input.value || 0);
@@ -275,11 +398,86 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
 
       perProduct.set(productId, (perProduct.get(productId) ?? 0) + current);
       grandAmount += current * rate;
+
+      const { unusual, text } = applyQuantityState(input);
+      // Typing changes what the tooltip should say (a value can flip in or
+      // out of "unusual" mid-keystroke), so keep it in sync for whichever
+      // cell is actually focused right now.
+      if (document.activeElement === input && activeCellTooltipRef.current) {
+        showQuantityTooltip(activeCellTooltipRef.current, input, unusual, text);
+      }
+
+      if (unusual) {
+        const customerId = input.dataset.customerId ?? "";
+        nextUnusualCells.set(`${customerId}:${productId}`, {
+          customerName: customerNameById.get(customerId) ?? "Customer",
+          productLabel: productLabelById.get(productId) ?? "Product",
+          quantity: current,
+          detail: text,
+        });
+      }
     });
 
     setIsDirty(dirty);
     setTotals({ perProduct, grandAmount });
+    // Whether this invalidates a standing confirmation is handled where
+    // unusualSignature is computed during render (see its own comment above).
+    setUnusualCells(nextUnusualCells);
   };
+
+  // The "usually takes X" / "Unusual — ..." hint used to only surface on
+  // mouse hover (the native `title` attribute) — easy to miss in a fast,
+  // mostly-keyboard entry flow where a cell is tabbed into and typed in
+  // without ever being hovered. This mirrors it into a small floating
+  // tooltip that shows whenever a quantity cell is focused, keyboard or
+  // mouse either way, and re-reads it live if the customer's route data
+  // hasn't changed but the viewport has (scroll/resize).
+  useEffect(() => {
+    const form = entryFormRef.current;
+    const tooltip = activeCellTooltipRef.current;
+
+    if (!form || !tooltip) {
+      return;
+    }
+
+    const showForInput = (input: HTMLInputElement) => {
+      const { unusual, text } = applyQuantityState(input);
+      showQuantityTooltip(tooltip, input, unusual, text);
+    };
+
+    const handleFocusIn = (event: FocusEvent) => {
+      const target = event.target;
+      if (target instanceof HTMLInputElement && target.dataset.dailyEntryQuantity === "true") {
+        showForInput(target);
+      }
+    };
+
+    const handleFocusOut = (event: FocusEvent) => {
+      const target = event.target;
+      if (target instanceof HTMLInputElement && target.dataset.dailyEntryQuantity === "true") {
+        tooltip.classList.add("hidden");
+      }
+    };
+
+    const reposition = () => {
+      const active = document.activeElement;
+      if (active instanceof HTMLInputElement && active.dataset.dailyEntryQuantity === "true") {
+        showForInput(active);
+      }
+    };
+
+    form.addEventListener("focusin", handleFocusIn);
+    form.addEventListener("focusout", handleFocusOut);
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("resize", reposition);
+
+    return () => {
+      form.removeEventListener("focusin", handleFocusIn);
+      form.removeEventListener("focusout", handleFocusOut);
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("resize", reposition);
+    };
+  }, []);
 
   // Applies each customer's usual order to the cells still sitting at 0.
   // Deliberately does NOT overwrite a value someone has already typed, and is
@@ -308,6 +506,27 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
   const lastMessageRef = useRef("");
   const [toast, setToast] = useState<ToastState | null>(null);
 
+  // React resets every uncontrolled field in the form once its action
+  // returns — success OR error (see the near-identical note in
+  // doorstep-payment-dialog.tsx, which hit this for the same reason). That's
+  // fine on success, but an error asking the operator to confirm and resubmit
+  // — the whole point of the unusual-quantity gate below — would otherwise
+  // wipe every quantity on the route right as they're being asked to look at
+  // them. The grid can't switch to controlled inputs for this (uncontrolled
+  // is deliberate, for performance on a large route), so instead: snapshot
+  // every quantity right before the browser submits, and put it back if the
+  // action comes back with an error.
+  const pendingQuantitySnapshotRef = useRef<Map<string, string>>(new Map());
+
+  const snapshotQuantitiesBeforeSubmit = () => {
+    const inputs = entryFormRef.current?.querySelectorAll<HTMLInputElement>("[data-daily-entry-quantity='true']");
+    const snapshot = new Map<string, string>();
+    inputs?.forEach((input) => {
+      snapshot.set(`${input.dataset.customerId ?? ""}:${input.dataset.productId ?? ""}`, input.value);
+    });
+    pendingQuantitySnapshotRef.current = snapshot;
+  };
+
   useEffect(() => {
     if (state.status === "idle" || !state.message) {
       return;
@@ -331,7 +550,23 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
         input.dataset.originalValue = input.value;
       });
       recompute();
+    } else if (state.status === "error" && pendingQuantitySnapshotRef.current.size > 0) {
+      // Put back what the browser just reset — see the ref's own comment.
+      const inputs = entryFormRef.current?.querySelectorAll<HTMLInputElement>("[data-daily-entry-quantity='true']");
+      inputs?.forEach((input) => {
+        const snapshotValue = pendingQuantitySnapshotRef.current.get(
+          `${input.dataset.customerId ?? ""}:${input.dataset.productId ?? ""}`,
+        );
+        if (snapshotValue !== undefined) {
+          input.value = snapshotValue;
+        }
+      });
+      recompute();
     }
+    // recompute is intentionally not memoized (see its own comment) and not
+    // listed here — this should only re-run when the save result changes,
+    // not on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.message, state.status]);
 
   const lastRevertMessageRef = useRef("");
@@ -447,6 +682,7 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
         ref={entryFormRef}
         action={formAction}
         className="space-y-4"
+        onSubmit={snapshotQuantitiesBeforeSubmit}
         onInput={(event) => {
           if ((event.target as HTMLElement).dataset.dailyEntryQuantity === "true") {
             recompute();
@@ -488,6 +724,23 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
         <input type="hidden" name="routeId" value={payload.selectedRouteId} readOnly />
         <input type="hidden" name="entryDate" value={payload.selectedDate} readOnly />
         <input type="hidden" name="notes" value={payload.notes} readOnly />
+        {/* Computed entirely client-side from data the page already has — no
+            extra query. This is an advisory nudge, not an integrity check, so
+            trusting what the browser reports is the right tradeoff: the worst
+            a stale/bypassed value costs is a skipped confirmation prompt, not
+            a wrong save. */}
+        <input
+          type="hidden"
+          name="hasUnusualQuantities"
+          value={unusualCells.size > 0 ? "true" : "false"}
+          readOnly
+        />
+        <input
+          type="hidden"
+          name="confirmUnusualQuantities"
+          value={confirmUnusual ? "true" : "false"}
+          readOnly
+        />
 
         {payload.lines.length === 0 ? (
           <div className="rounded-md border border-dashed border-surface-border-strong bg-surface px-4 py-10 text-center">
@@ -572,17 +825,33 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
                                 data-daily-entry-quantity="true"
                                 data-original-value={product?.quantity ?? "0"}
                                 data-product-id={column.productId}
+                                data-customer-id={line.customerId}
                                 data-rate={product?.defaultRate ?? "0"}
                                 data-last-quantity={product?.lastQuantity ?? "0"}
+                                // Band this customer's own recent deliveries of
+                                // this product normally fall inside — absent
+                                // when there isn't enough history yet. Read live
+                                // by recompute() below, since whether a cell
+                                // counts as unusual depends on what's currently
+                                // TYPED, not on anything known at render time.
+                                data-band-min={product?.unusualBandMin ?? ""}
+                                data-band-max={product?.unusualBandMax ?? ""}
+                                // This customer's own recent quantities of this
+                                // product, and the single most common one — see
+                                // applyQuantityState() above for how both feed
+                                // into the unusual check and the tooltip text.
+                                data-recent-quantities={product?.recentQuantities ?? ""}
+                                data-mode-quantity={product?.modeQuantity ?? ""}
                                 // The quantity is NOT prefilled — every cell
                                 // starts at 0 and the highlight alone says
                                 // "this is a product they normally take", so
                                 // nobody saves last week's numbers by tabbing
-                                // past. Hovering gives the actual figure, and
+                                // past. Hovering (or focusing — see the tooltip
+                                // effect above) gives the actual figure, and
                                 // "Fill usual" applies them deliberately.
                                 title={
-                                  Number(product?.lastQuantity ?? 0) > 0
-                                    ? `Usually takes ${formatQty(Number(product?.lastQuantity ?? 0))}`
+                                  Number(product?.modeQuantity ?? product?.lastQuantity ?? 0) > 0
+                                    ? `Usually takes ${formatQty(Number(product?.modeQuantity ?? product?.lastQuantity ?? 0))}`
                                     : undefined
                                 }
                                 className={cn(
@@ -635,6 +904,10 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
                         const product = payload.occasionalProducts.find(
                           (item) => item.id === row.productId,
                         );
+                        const rateOverridden =
+                          product !== undefined &&
+                          Number(row.rate || 0) > 0 &&
+                          Math.abs(Number(row.rate) - Number(product.defaultRate)) > 0.001;
 
                         return (
                           <tr key={row.key} className="bg-surface-muted/40">
@@ -689,7 +962,17 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
                                     updateExtraRow(row.key, { rate: event.target.value })
                                   }
                                   aria-label={`Rate for ${product?.name ?? "item"} for ${line.customerName}`}
-                                  className="h-9 w-24 rounded-md border border-surface-border-strong bg-surface px-2 text-sm text-text-primary outline-none focus:border-accent"
+                                  title={
+                                    rateOverridden
+                                      ? `Catalogue rate is ₹${formatQty(Number(product?.defaultRate ?? 0))} — confirm this door price is correct`
+                                      : undefined
+                                  }
+                                  className={cn(
+                                    "h-9 w-24 rounded-md border px-2 text-sm text-text-primary outline-none focus:border-accent",
+                                    rateOverridden
+                                      ? "border-amber-500 bg-amber-50 ring-1 ring-amber-400"
+                                      : "border-surface-border-strong bg-surface",
+                                  )}
                                 />
                                 <input
                                   type="hidden"
@@ -751,6 +1034,43 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
           </div>
         )}
 
+        {/* Confirms rather than blocks — some of these genuinely are correct,
+            unusual orders. Lists what's actually flagged so the confirmation
+            is an informed one, not a reflex click past a wall of text. */}
+        {state.status === "error" && state.needsUnusualConfirm ? (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-3 text-sm text-amber-900">
+            <p className="font-medium">
+              {unusualCells.size} quantit{unusualCells.size === 1 ? "y looks" : "ies look"} unusual:
+            </p>
+            <ul className="mt-1.5 list-disc space-y-0.5 pl-5">
+              {[...unusualCells.values()].slice(0, 8).map((cell, index) => (
+                <li key={`qty-${index}`}>
+                  <span className="font-medium">{cell.customerName}</span> — {cell.productLabel}:{" "}
+                  {formatQty(cell.quantity)} ({cell.detail.replace("Unusual — ", "")})
+                </li>
+              ))}
+            </ul>
+            {unusualCells.size > 8 ? (
+              <p className="mt-1 text-xs text-amber-800">and {unusualCells.size - 8} more…</p>
+            ) : null}
+            <label className="mt-2.5 flex items-center gap-2 font-medium">
+              <input
+                type="checkbox"
+                checked={confirmUnusual}
+                onChange={(event) => {
+                  const checked = event.target.checked;
+                  setConfirmUnusual(checked);
+                  if (checked) {
+                    setConfirmedUnusualSignature(unusualSignature);
+                  }
+                }}
+                className="h-4 w-4"
+              />
+              These are correct — save anyway
+            </label>
+          </div>
+        ) : null}
+
         <ActionMessage state={state} />
       </form>
 
@@ -766,6 +1086,13 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
       />
 
       {toast ? <Toast tone={toast.tone}>{toast.message}</Toast> : null}
+
+      {/* One shared floating tooltip, repositioned over whichever quantity
+          cell is currently focused — see the focusin/focusout effect above. */}
+      <div
+        ref={activeCellTooltipRef}
+        className="hidden fixed z-50 max-w-xs rounded-md border px-2.5 py-1.5 text-xs shadow-lg"
+      />
     </div>
   );
 }

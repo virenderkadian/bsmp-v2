@@ -15,6 +15,10 @@ export type DailyEntryActionState = {
   // Generated/Locked bills. The screen uses it to offer a one-click revert of
   // those bills to Draft (revertMonthBillsToDraft) instead of a dead end.
   blockedByBill?: boolean;
+  // Set when the save was refused because at least one quantity still looks
+  // unusual for that customer and hasn't been confirmed. The screen shows the
+  // confirm checkbox and resubmits; see the "unusual quantities" check below.
+  needsUnusualConfirm?: boolean;
 };
 
 const idleState: DailyEntryActionState = { status: "idle" };
@@ -104,6 +108,24 @@ export async function saveDailyEntry(
 
     if (!parsed.success) {
       return { status: "error", message: parsed.error.issues[0]?.message };
+    }
+
+    // Whether any quantity is unusual is computed entirely client-side (the
+    // screen already has each customer's recent history and band, and
+    // re-deriving that here would mean a second copy of the same DB query
+    // this page's own load just ran). Trusting the client is the right
+    // tradeoff for an advisory nudge — confirms rather than blocks, and the
+    // worst a stale/bypassed report costs is a skipped prompt, not a wrong
+    // save; nothing about what gets written depends on it.
+    const hasUnusualQuantities = String(formData.get("hasUnusualQuantities") ?? "") === "true";
+    const confirmUnusualQuantities = String(formData.get("confirmUnusualQuantities") ?? "") === "true";
+
+    if (hasUnusualQuantities && !confirmUnusualQuantities) {
+      return {
+        status: "error",
+        needsUnusualConfirm: true,
+        message: "Some quantities on this route still look unusual for those customers.",
+      };
     }
 
     // Daily entry is destructive on save (deletes and rebuilds every line for
