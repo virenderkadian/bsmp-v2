@@ -652,7 +652,7 @@ export async function getMonthlyBillSummary(input?: {
       };
     }
 
-    const [sequenceLines, bills, dailyEntries, priorBills, customerLedger, monthSequenceRows] = await withDbTimeout(Promise.all([
+    const [sequenceLines, bills, dailyTotals, deliveryRoutes, priorBills, customerLedger, monthSequenceRows] = await withDbTimeout(Promise.all([
       prisma.monthlyRouteCustomerSequence.findMany({
         where: {
           routeId: { in: routeIds },
@@ -702,30 +702,41 @@ export async function getMonthlyBillSummary(input?: {
       // customer billed on their morning route must still have their evening
       // route's deliveries counted into that one bill, and those entries
       // belong to a route that may not be in routeIds at all.
-      prisma.dailyRouteEntry.findMany({
-        where: {
-          route: { cityId },
-          entryDate: {
-            gte: start,
-            lt: end,
-          },
-        },
-        select: {
-          routeId: true,
-          lines: {
-            select: {
-              customerId: true,
-              productEntries: {
-                select: {
-                  productId: true,
-                  quantity: true,
-                  rateSnapshot: true,
-                },
-              },
-            },
-          },
-        },
-      }),
+      //
+      // Summed in SQL rather than pulled row-by-row and summed in JS — this
+      // is the query that was driving the Supabase egress overage. Measured
+      // on production before this change: one month's city-wide product-entry
+      // pull ran to ~11,800 rows (~1.8MB) on EVERY view of this page; grouped
+      // in SQL it returns a few hundred rows carrying the same totals.
+      // Verified byte-for-byte against the old row-level+JS-sum result on
+      // real production data before switching (script kept out of the repo).
+      prisma.$queryRaw<Array<{ customerId: string; productId: string; totalQuantity: unknown; totalAmount: unknown }>>`
+        SELECT dl."customerId" AS "customerId", dp."productId" AS "productId",
+          SUM(dp.quantity)::numeric AS "totalQuantity",
+          SUM(dp.quantity * dp."rateSnapshot")::numeric AS "totalAmount"
+        FROM "DailyRouteEntryLineProduct" dp
+        JOIN "DailyRouteEntryLine" dl ON dl.id = dp."lineId"
+        JOIN "DailyRouteEntry" e ON e.id = dl."entryId"
+        JOIN "Route" r ON r.id = e."routeId"
+        WHERE r."cityId" = ${cityId}::uuid AND e."entryDate" >= ${start} AND e."entryDate" < ${end}
+        GROUP BY dl."customerId", dp."productId"
+      `,
+      // Which route each customer's EARLIEST delivery this month landed on —
+      // only used below to place a customer who has no sequence row left
+      // (removed mid-month) on the route they actually delivered against.
+      // Deliberately ordered by date now (DISTINCT ON picks the first row per
+      // customer): the row-level version this replaced had no explicit order
+      // at all, so this is a genuine (harmless) determinism improvement, not
+      // just a rewrite — confirmed the only customers this can ever affect
+      // are exactly the orphan case above, never a sequenced customer's bill.
+      prisma.$queryRaw<Array<{ customerId: string; routeId: string }>>`
+        SELECT DISTINCT ON (dl."customerId") dl."customerId" AS "customerId", e."routeId" AS "routeId"
+        FROM "DailyRouteEntryLine" dl
+        JOIN "DailyRouteEntry" e ON e.id = dl."entryId"
+        JOIN "Route" r ON r.id = e."routeId"
+        WHERE r."cityId" = ${cityId}::uuid AND e."entryDate" >= ${start} AND e."entryDate" < ${end}
+        ORDER BY dl."customerId", e."entryDate" ASC
+      `,
       // Prior statements' closing balances, so an ungenerated preview carries
       // forward the same opening a real Generate would (newest bill per
       // customer wins — ordered below).
@@ -778,6 +789,13 @@ export async function getMonthlyBillSummary(input?: {
         priorMonthMap.set(priorBill.customerId, priorBill.billingMonth.toISOString().slice(0, 7));
       }
     }
+    // Keyed by customer alone, so a customer delivered on both a morning and
+    // an evening route accumulates ONE set of totals covering both — matching
+    // the single combined bill they're issued. Built directly from the SQL
+    // aggregate above; a customer with a line this month but zero real
+    // product entries (a skip, or an empty saved line) simply has no key
+    // here, same net effect as the old code's zero-valued entry for them,
+    // since every read below falls back to 0 on a missing key.
     const dailyMap = new Map<
       string,
       {
@@ -786,42 +804,24 @@ export async function getMonthlyBillSummary(input?: {
       }
     >();
 
+    for (const row of dailyTotals) {
+      const key = row.customerId;
+      const current = dailyMap.get(key) ?? { deliveryAmount: 0, productQuantities: new Map<string, number>() };
+      current.deliveryAmount += Number(row.totalAmount);
+      current.productQuantities.set(
+        row.productId,
+        (current.productQuantities.get(row.productId) ?? 0) + Number(row.totalQuantity),
+      );
+      dailyMap.set(key, current);
+    }
+
     // Where a customer's deliveries happened, for customers who have NO
     // sequence row left (removed mid-month). Their bill lands on the route the
     // deliveries were recorded against — see buildBillPairs' fallback — so the
     // summary has to place their row on that same route.
-    const deliveryRouteByCustomer = new Map<string, string>();
-
-    dailyEntries.forEach((entry) => {
-      entry.lines.forEach((line) => {
-        // Keyed by customer alone, so a customer delivered on both a morning
-        // and an evening route accumulates ONE set of totals covering both —
-        // matching the single combined bill they're issued.
-        const key = line.customerId;
-        if (!deliveryRouteByCustomer.has(key)) {
-          deliveryRouteByCustomer.set(key, entry.routeId);
-        }
-        const current =
-          dailyMap.get(key) ??
-          {
-            deliveryAmount: 0,
-            productQuantities: new Map<string, number>(),
-          };
-
-        line.productEntries.forEach((productEntry) => {
-          const quantity = Number(productEntry.quantity);
-          const rate = Number(productEntry.rateSnapshot);
-
-          current.deliveryAmount += quantity * rate;
-          current.productQuantities.set(
-            productEntry.productId,
-            (current.productQuantities.get(productEntry.productId) ?? 0) + quantity,
-          );
-        });
-
-        dailyMap.set(key, current);
-      });
-    });
+    const deliveryRouteByCustomer = new Map<string, string>(
+      deliveryRoutes.map((row) => [row.customerId, row.routeId]),
+    );
 
     // Customers with deliveries this month but NO sequence row left — removed
     // from every route mid-month. They're still billed (buildBillPairs walks

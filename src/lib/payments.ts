@@ -364,7 +364,7 @@ export async function getBulkPaymentPayload(input?: {
     // round against a real ₹8,187.50 — an operator collecting at the door
     // would have taken the smaller figure.
     // Order matters — it must match the array below.
-    const [sequenceLines, bills, priorBills, dailyEntries, allCustomers, customerLedger] =
+    const [sequenceLines, bills, priorBills, dailyTotals, allCustomers, customerLedger] =
       await withDbTimeout(Promise.all([
       // The whole city's rows for the month, not just this route's: resolving
       // which route bills a customer needs to see all of their rows.
@@ -423,28 +423,24 @@ export async function getBulkPaymentPayload(input?: {
       }),
       // Across every route in the city, so the estimate sums a customer's
       // whole month rather than one round of it.
-      prisma.dailyRouteEntry.findMany({
-        where: {
-          route: { cityId },
-          entryDate: {
-            gte: start,
-            lt: end,
-          },
-        },
-        select: {
-          lines: {
-            select: {
-              customerId: true,
-              productEntries: {
-                select: {
-                  quantity: true,
-                  rateSnapshot: true,
-                },
-              },
-            },
-          },
-        },
-      }),
+      //
+      // Summed in SQL, not pulled row-by-row — this and the equivalent query
+      // in getMonthlyBillSummary were the two heaviest queries on the app's
+      // busiest screens, together the main driver of a Supabase egress
+      // overage. This one only ever needed one number per customer (total
+      // amount), so the win is even bigger here: what used to be one row per
+      // delivered product is now one row per customer. Verified against the
+      // old row-level+JS-sum result on real production data before switching.
+      prisma.$queryRaw<Array<{ customerId: string; totalAmount: unknown }>>`
+        SELECT dl."customerId" AS "customerId",
+          SUM(dp.quantity * dp."rateSnapshot")::numeric AS "totalAmount"
+        FROM "DailyRouteEntryLineProduct" dp
+        JOIN "DailyRouteEntryLine" dl ON dl.id = dp."lineId"
+        JOIN "DailyRouteEntry" e ON e.id = dl."entryId"
+        JOIN "Route" r ON r.id = e."routeId"
+        WHERE r."cityId" = ${cityId}::uuid AND e."entryDate" >= ${start} AND e."entryDate" < ${end}
+        GROUP BY dl."customerId"
+      `,
       prisma.customer.findMany({
         where: { cityId, isActive: true },
         select: { id: true, code: true, name: true, area: true, openingBalance: true },
@@ -471,17 +467,10 @@ export async function getBulkPaymentPayload(input?: {
 
     // Deliveries summed across EVERY route in the city, so a multi-route
     // customer's estimate covers their whole month rather than one round.
-    const dailyAmountMap = new Map<string, number>();
-    dailyEntries.forEach((entry) => {
-      entry.lines.forEach((line) => {
-        const total = line.productEntries.reduce(
-          (sum, productEntry) =>
-            sum + Number(productEntry.quantity) * Number(productEntry.rateSnapshot),
-          0,
-        );
-        dailyAmountMap.set(line.customerId, (dailyAmountMap.get(line.customerId) ?? 0) + total);
-      });
-    });
+    // Built directly from the SQL aggregate above.
+    const dailyAmountMap = new Map<string, number>(
+      dailyTotals.map((row) => [row.customerId, Number(row.totalAmount)]),
+    );
 
     // Money per customer, assembled once and handed to the pure sheet builder
     // in collections-sheet.ts (which is where the rules are tested).
