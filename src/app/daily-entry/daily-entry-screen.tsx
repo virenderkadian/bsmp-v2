@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useActionState, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useActionState, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
 import type { DailyEntryPayload } from "@/lib/daily-entry";
 import {
@@ -13,6 +13,7 @@ import {
   type DoorstepPaymentTarget,
 } from "@/app/daily-entry/doorstep-payment-dialog";
 import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
+import { Dialog } from "@/components/admin/dialog";
 import { usePageMetric } from "@/components/admin/page-metric";
 import { Toast, type ToastTone } from "@/components/admin/toast";
 import { isQuantityUnusual } from "@/lib/quantity-baseline";
@@ -196,27 +197,24 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
   // Rebuilt on every recompute(), which already runs on every keystroke, so
   // this rides an existing re-render rather than adding a new one.
   const [unusualCells, setUnusualCells] = useState<Map<string, UnusualCell>>(new Map());
-  // Whether the warning card is hidden. NOT tied to a checkbox anymore — an
-  // earlier version used a checkbox plus reusing the toolbar's Save button,
-  // which needed the operator to notice the checkbox, check it, then find
-  // and re-click a button that gave no sign anything had changed. Reported
-  // as "it isn't letting me save". The warning card now carries its own
-  // "Save anyway" button (a real submit button naming its own confirm value
-  // — see below — so there's no dependency on React state having re-rendered
-  // before the click is handled) and its own "Cancel".
-  const [unusualWarningDismissed, setUnusualWarningDismissed] = useState(false);
-  // Un-dismisses on every new save attempt, not just when the flagged set
-  // changes — otherwise clicking the plain Save button again (still
-  // unconfirmed) after dismissing would silently refuse to show the warning
-  // again, which is exactly the "not letting me save, and I can't tell why"
-  // failure mode being fixed here. Compared by reference: useActionState
-  // hands back a genuinely new object on every action result, even when the
-  // message text repeats.
-  const [lastHandledActionState, setLastHandledActionState] = useState(state);
-  if (state !== lastHandledActionState) {
-    setLastHandledActionState(state);
-    setUnusualWarningDismissed(false);
-  }
+  // Whether the confirm dialog is open. Caught client-side, before the form
+  // ever submits (see the form's onSubmit below) — an earlier version let
+  // the save reach the server and rendered the warning inline at the bottom
+  // of the page. That read as disconnected from the actual Save click (easy
+  // to scroll past, easy to miss that a second click was even needed) and,
+  // worse, meant the fast keyboard flow's own Enter-to-advance could carry
+  // an accidental confirm past it. A modal, caught before submission, fixes
+  // both: it appears right where the click happened, and Cancel is the
+  // keyboard default (see the dialog's footer below), so a stray Enter from
+  // that same fast-entry habit can't confirm anything by accident.
+  const [showUnusualDialog, setShowUnusualDialog] = useState(false);
+  // Sidesteps the interceptor on the ONE resubmission that follows an
+  // explicit "Save anyway" click — see handleSaveAnyway.
+  const bypassUnusualCheckRef = useRef(false);
+  // Uncontrolled (not bound to React state) so handleSaveAnyway can set it
+  // and call requestSubmit() in the same synchronous call, with no
+  // dependency on a re-render landing before the browser reads the form.
+  const confirmUnusualInputRef = useRef<HTMLInputElement>(null);
 
   const customerNameById = useMemo(
     () => new Map(payload.lines.map((line) => [line.customerId, line.customerName])),
@@ -537,6 +535,36 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
     pendingQuantitySnapshotRef.current = snapshot;
   };
 
+  // Catches an attempted save before it ever reaches the server: if anything
+  // is still unusual, stop the submit and open the dialog instead. Both the
+  // toolbar's Save button AND the fast-entry keyboard flow's Enter-at-the-
+  // last-cell (below) go through this same native submit event, so neither
+  // path can slip an unconfirmed unusual quantity through.
+  const handleFormSubmit = (event: FormEvent<HTMLFormElement>) => {
+    snapshotQuantitiesBeforeSubmit();
+
+    if (unusualCells.size > 0 && !bypassUnusualCheckRef.current) {
+      event.preventDefault();
+      setShowUnusualDialog(true);
+      return;
+    }
+
+    bypassUnusualCheckRef.current = false;
+  };
+
+  // The dialog's own "Save anyway": sets the confirm flag directly on the
+  // DOM (not through React state — see confirmUnusualInputRef's comment),
+  // then resubmits. That resubmission runs through handleFormSubmit again,
+  // where bypassUnusualCheckRef lets it through this time.
+  const handleSaveAnyway = () => {
+    bypassUnusualCheckRef.current = true;
+    if (confirmUnusualInputRef.current) {
+      confirmUnusualInputRef.current.value = "true";
+    }
+    setShowUnusualDialog(false);
+    entryFormRef.current?.requestSubmit();
+  };
+
   useEffect(() => {
     if (state.status === "idle" || !state.message) {
       return;
@@ -693,7 +721,7 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
         ref={entryFormRef}
         action={formAction}
         className="space-y-4"
-        onSubmit={snapshotQuantitiesBeforeSubmit}
+        onSubmit={handleFormSubmit}
         onInput={(event) => {
           if ((event.target as HTMLElement).dataset.dailyEntryQuantity === "true") {
             recompute();
@@ -746,6 +774,11 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
           value={unusualCells.size > 0 ? "true" : "false"}
           readOnly
         />
+        {/* Uncontrolled — see confirmUnusualInputRef's own comment. Starts
+            false on every fresh render (a route/date change, a reload, a
+            successful save) so a stale confirmation never silently carries
+            forward onto a different set of unusual cells. */}
+        <input type="hidden" name="confirmUnusualQuantities" defaultValue="false" ref={confirmUnusualInputRef} />
 
         {payload.lines.length === 0 ? (
           <div className="rounded-md border border-dashed border-surface-border-strong bg-surface px-4 py-10 text-center">
@@ -1039,52 +1072,10 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
           </div>
         )}
 
-        {/* Confirms rather than blocks — some of these genuinely are correct,
-            unusual orders. Lists what's actually flagged so the choice is an
-            informed one, not a reflex click past a wall of text.
-            "Save anyway" is a real submit button naming its own confirm
-            value, not a checkbox plus a click on the toolbar's Save button —
-            that two-step version reached the server correctly in testing,
-            but in real use read as "it won't let me save": nothing near the
-            checkbox visibly changed, and the actual Save button could be
-            scrolled out of view on a long route. This can't have that
-            problem — the button IS the save. */}
-        {state.status === "error" && state.needsUnusualConfirm && !unusualWarningDismissed ? (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-3 text-sm text-amber-900">
-            <p className="font-medium">
-              {unusualCells.size} quantit{unusualCells.size === 1 ? "y looks" : "ies look"} unusual:
-            </p>
-            <ul className="mt-1.5 list-disc space-y-0.5 pl-5">
-              {[...unusualCells.values()].slice(0, 8).map((cell, index) => (
-                <li key={`qty-${index}`}>
-                  <span className="font-medium">{cell.customerName}</span> — {cell.productLabel}:{" "}
-                  {formatQty(cell.quantity)} ({cell.detail.replace("Unusual — ", "")})
-                </li>
-              ))}
-            </ul>
-            {unusualCells.size > 8 ? (
-              <p className="mt-1 text-xs text-amber-800">and {unusualCells.size - 8} more…</p>
-            ) : null}
-            <div className="mt-2.5 flex items-center gap-3">
-              <PrimaryButton
-                type="submit"
-                name="confirmUnusualQuantities"
-                value="true"
-                className="h-9 px-4 text-sm"
-              >
-                Save anyway
-              </PrimaryButton>
-              <SecondaryButton
-                type="button"
-                onClick={() => setUnusualWarningDismissed(true)}
-                className="h-9 px-4 text-sm"
-              >
-                Cancel
-              </SecondaryButton>
-            </div>
-          </div>
-        ) : null}
-
+        {/* A backstop only — the dialog above catches this before the form
+            ever submits, in the normal case. This still renders if the
+            server ever disagrees with the client's own count (stale data,
+            JS quirk), so the operator isn't left looking at nothing. */}
         <ActionMessage state={state} />
       </form>
 
@@ -1100,6 +1091,38 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
       />
 
       {toast ? <Toast tone={toast.tone}>{toast.message}</Toast> : null}
+
+      {/* Caught before the form submits — see handleFormSubmit. Cancel is
+          the autofocused default (and Escape/backdrop both do the same
+          thing) so a stray Enter from the fast keyboard entry flow, or
+          anyone just reflexively hitting Enter on a dialog, can't confirm
+          something nobody actually looked at. */}
+      <Dialog
+        open={showUnusualDialog}
+        title="Some quantities look unusual"
+        description="These don't match what these customers usually take. Save anyway, or go back and check them."
+        onClose={() => setShowUnusualDialog(false)}
+        footer={
+          <>
+            <SecondaryButton autoFocus onClick={() => setShowUnusualDialog(false)}>
+              Cancel
+            </SecondaryButton>
+            <PrimaryButton onClick={handleSaveAnyway}>Save anyway</PrimaryButton>
+          </>
+        }
+      >
+        <ul className="list-disc space-y-1 pl-5 text-sm text-text-primary">
+          {[...unusualCells.values()].slice(0, 12).map((cell, index) => (
+            <li key={index}>
+              <span className="font-medium">{cell.customerName}</span> — {cell.productLabel}:{" "}
+              {formatQty(cell.quantity)} ({cell.detail.replace("Unusual — ", "")})
+            </li>
+          ))}
+        </ul>
+        {unusualCells.size > 12 ? (
+          <p className="mt-2 text-xs text-text-secondary">and {unusualCells.size - 12} more…</p>
+        ) : null}
+      </Dialog>
 
       {/* One shared floating tooltip, repositioned over whichever quantity
           cell is currently focused — see the focusin/focusout effect above. */}
