@@ -683,6 +683,13 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
               At the door
             </label>
           ) : null}
+          <Link
+            href="/daily-entry/unusual"
+            className="inline-flex h-10 items-center justify-center rounded-md border border-surface-border-strong bg-surface px-4 text-sm font-medium text-text-secondary transition hover:bg-surface-muted"
+            title="Every quantity this month that looked unusual, gathered in one place"
+          >
+            Unusual this month
+          </Link>
           <SecondaryButton
             type="button"
             onClick={fillUsual}
