@@ -185,19 +185,19 @@ export function CompactBillDocument({
     <article
       className={`bill-document flex flex-col rounded-lg border border-slate-300 bg-white p-4 text-[10px] text-slate-900 print:rounded-none print:border-0 print:p-0 ${className ?? ""}`}
     >
-      <header className="relative border-b-2 border-slate-900 pb-2 text-center">
-        {profile?.contactPhone ? (
-          <p className="absolute right-0 top-0 text-[8px] text-slate-500">{profile.contactPhone}</p>
-        ) : null}
+      <header className="border-b-2 border-slate-900 pb-2 text-center">
         <h1 className="text-lg font-bold uppercase leading-tight tracking-tight">
           {profile?.businessName ?? "Business name not set"}
         </h1>
         {address ? <p className="mt-0.5 text-[9px] leading-snug text-slate-600">{address}</p> : null}
-        <p className="mt-1.5 text-left text-[7.5px] uppercase tracking-[0.14em] text-slate-500">
-          Bill for the month of{" "}
-          <span className="text-sm normal-case tracking-normal text-slate-900">
-            {formatMonthTitle(bill.billingMonth)}
+        <p className="mt-1.5 flex items-baseline justify-between text-[7.5px] uppercase tracking-[0.14em] text-slate-500">
+          <span>
+            Bill for the month of{" "}
+            <span className="text-sm normal-case tracking-normal text-slate-900">
+              {formatMonthTitle(bill.billingMonth)}
+            </span>
           </span>
+          {profile?.contactPhone ? <span className="normal-case tracking-normal">{profile.contactPhone}</span> : null}
         </p>
       </header>
 
