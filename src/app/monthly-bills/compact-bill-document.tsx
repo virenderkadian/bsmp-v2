@@ -70,10 +70,10 @@ function CalendarHalf({
   const days = bill.calendarDays.filter((day) => day.day >= from && day.day <= to);
 
   return (
-    <table className="w-full border-collapse text-[8.5px] print:text-[8px]">
+    <table className="w-full border-collapse text-[10px] print:text-[9.5px]">
       <thead>
         <tr className="bg-slate-100">
-          <th className="border border-slate-300 px-1 py-0.5 text-left">Dt</th>
+          <th className="border border-slate-300 px-1.5 py-1 text-left">Dt</th>
           {bill.calendarProducts.map((product) => {
             const rates = ratesFor(bill, product.id);
 
@@ -81,7 +81,7 @@ function CalendarHalf({
               <th
                 key={product.id}
                 colSpan={showAmt.has(product.id) ? 2 : 1}
-                className="border border-slate-300 px-1 py-0.5"
+                className="border border-slate-300 px-1.5 py-1"
               >
                 {product.shortName ?? product.name}
                 {rates.length === 1 ? (
@@ -90,59 +90,59 @@ function CalendarHalf({
               </th>
             );
           })}
-          <th className="border border-slate-300 px-1 py-0.5">Amt</th>
+          <th className="border border-slate-300 px-1.5 py-1">Amt</th>
         </tr>
       </thead>
       <tbody>
         {days.map((day) => (
           <tr key={day.day} className={!day.hasEntry || day.skipped ? "text-slate-400" : undefined}>
-            <td className="border border-slate-300 px-1 py-0.5">{day.day}</td>
+            <td className="border border-slate-300 px-1.5 py-1">{day.day}</td>
             {bill.calendarProducts.map((product) => {
               const cell = day.products[product.id];
               const has = Number(cell?.quantity ?? 0) > 0;
 
               return showAmt.has(product.id) ? (
                 <Fragment key={product.id}>
-                  <td className="border border-slate-300 px-1 py-0.5 text-right">
+                  <td className="border border-slate-300 px-1.5 py-1 text-right">
                     {has ? formatQuantity(cell.quantity) : ""}
                   </td>
-                  <td className="border border-slate-300 px-1 py-0.5 text-right">
+                  <td className="border border-slate-300 px-1.5 py-1 text-right">
                     {has ? formatMoney(cell.amount) : ""}
                   </td>
                 </Fragment>
               ) : (
-                <td key={product.id} className="border border-slate-300 px-1 py-0.5 text-right">
+                <td key={product.id} className="border border-slate-300 px-1.5 py-1 text-right">
                   {has ? formatQuantity(cell.quantity) : ""}
                 </td>
               );
             })}
-            <td className="border border-slate-300 px-1 py-0.5 text-right">
+            <td className="border border-slate-300 px-1.5 py-1 text-right">
               {Number(day.grossAmount) > 0 ? formatMoney(day.grossAmount) : ""}
             </td>
           </tr>
         ))}
         {withTotals ? (
           <tr className="bg-slate-100 font-semibold">
-            <td className="border border-slate-300 px-1 py-0.5">Tot</td>
+            <td className="border border-slate-300 px-1.5 py-1">Tot</td>
             {bill.calendarProducts.map((product) => {
               const totals = bill.calendarTotals.products[product.id];
 
               return showAmt.has(product.id) ? (
                 <Fragment key={product.id}>
-                  <td className="border border-slate-300 px-1 py-0.5 text-right">
+                  <td className="border border-slate-300 px-1.5 py-1 text-right">
                     {formatQuantity(totals?.quantity ?? "0")}
                   </td>
-                  <td className="border border-slate-300 px-1 py-0.5 text-right">
+                  <td className="border border-slate-300 px-1.5 py-1 text-right">
                     {formatMoney(totals?.amount ?? "0")}
                   </td>
                 </Fragment>
               ) : (
-                <td key={product.id} className="border border-slate-300 px-1 py-0.5 text-right">
+                <td key={product.id} className="border border-slate-300 px-1.5 py-1 text-right">
                   {formatQuantity(totals?.quantity ?? "0")}
                 </td>
               );
             })}
-            <td className="border border-slate-300 px-1 py-0.5 text-right">
+            <td className="border border-slate-300 px-1.5 py-1 text-right">
               {formatMoney(bill.calendarTotals.grossAmount)}
             </td>
           </tr>
@@ -185,23 +185,20 @@ export function CompactBillDocument({
     <article
       className={`bill-document flex flex-col rounded-lg border border-slate-300 bg-white p-4 text-[10px] text-slate-900 print:rounded-none print:border-0 print:p-0 ${className ?? ""}`}
     >
-      <header className="flex items-start justify-between gap-4 border-b-2 border-slate-900 pb-2">
-        <div>
-          <h1 className="text-lg font-bold uppercase leading-tight tracking-tight">
-            {profile?.businessName ?? "Business name not set"}
-          </h1>
-          <p className="mt-0.5 text-[9px] leading-snug text-slate-600">
-            {address}
-            {address && profile?.contactPhone ? <br /> : null}
-            {profile?.contactPhone}
-          </p>
-        </div>
-        <div className="text-right">
-          <p className="text-[7.5px] uppercase tracking-[0.14em] text-slate-500">
-            Bill for the month of
-          </p>
-          <p className="text-sm font-bold leading-tight">{formatMonthTitle(bill.billingMonth)}</p>
-        </div>
+      <header className="relative border-b-2 border-slate-900 pb-2 text-center">
+        {profile?.contactPhone ? (
+          <p className="absolute right-0 top-0 text-[8px] text-slate-500">{profile.contactPhone}</p>
+        ) : null}
+        <h1 className="text-lg font-bold uppercase leading-tight tracking-tight">
+          {profile?.businessName ?? "Business name not set"}
+        </h1>
+        {address ? <p className="mt-0.5 text-[9px] leading-snug text-slate-600">{address}</p> : null}
+        <p className="mt-1.5 text-left text-[7.5px] uppercase tracking-[0.14em] text-slate-500">
+          Bill for the month of{" "}
+          <span className="text-sm normal-case tracking-normal text-slate-900">
+            {formatMonthTitle(bill.billingMonth)}
+          </span>
+        </p>
       </header>
 
       {/* Everything here is already in the database and was simply never
@@ -217,6 +214,7 @@ export function CompactBillDocument({
             <Field label="Code" value={bill.customerCode} />
             {bill.customerArea ? <Field label="Area" value={bill.customerArea} /> : null}
             {bill.customerMobile ? <Field label="Mobile" value={bill.customerMobile} /> : null}
+            <Field label="Stop no." value={String(bill.customerSequenceNo ?? "-")} />
           </dl>
         </div>
         <div className="flex-1 border-l border-slate-300 px-2 py-1.5">
@@ -237,7 +235,6 @@ export function CompactBillDocument({
                 value={[bill.driverName, bill.driverPhone].filter(Boolean).join(" · ")}
               />
             ) : null}
-            <Field label="Stop no." value={String(bill.customerSequenceNo ?? "-")} />
           </dl>
         </div>
       </div>
@@ -294,61 +291,61 @@ export function CompactBillDocument({
       </div>
 
       {profile ? (
-        <div className="mt-auto pt-2">
-          <div className="flex items-stretch gap-3 border-[1.5px] border-slate-900 p-2">
+        <div className="mt-auto pt-3">
+          <div className="flex items-stretch gap-4 border-[1.5px] border-slate-900 p-3">
             {qrDataUrl ? (
               <div className="shrink-0">
                 {/* eslint-disable-next-line @next/next/no-img-element -- printed document, no optimization to do */}
-                <img src={qrDataUrl} alt="UPI QR code" className="h-24 w-24 border-2 border-slate-900" />
-                <p className="mt-0.5 text-center text-[7.5px] uppercase tracking-[0.08em] text-slate-600">
+                <img src={qrDataUrl} alt="UPI QR code" className="h-28 w-28 border-2 border-slate-900" />
+                <p className="mt-1 text-center text-[8px] uppercase tracking-[0.08em] text-slate-600">
                   Scan to pay
                 </p>
               </div>
             ) : null}
             <div className="min-w-0 flex-1">
-              <p className="m-0 mb-1 text-[8px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <p className="m-0 mb-1.5 text-[9px] font-semibold uppercase tracking-[0.16em] text-slate-500">
                 How to pay
               </p>
-              <dl className="m-0 grid grid-cols-[70px_1fr] gap-x-2.5 gap-y-0.5">
+              <dl className="m-0 grid grid-cols-[76px_1fr] gap-x-2.5 gap-y-1">
                 {profile.upiId ? (
                   <>
-                    <dt className="text-[8px] uppercase tracking-wide text-slate-500">UPI ID</dt>
-                    <dd className="m-0 font-mono text-[11px] font-semibold">{profile.upiId}</dd>
+                    <dt className="text-[9px] uppercase tracking-wide text-slate-500">UPI ID</dt>
+                    <dd className="m-0 font-mono text-[13px] font-semibold">{profile.upiId}</dd>
                   </>
                 ) : null}
                 {profile.bankName ? (
                   <>
-                    <dt className="text-[8px] uppercase tracking-wide text-slate-500">Bank</dt>
-                    <dd className="m-0 font-mono text-[9.5px] font-semibold">{profile.bankName}</dd>
+                    <dt className="text-[9px] uppercase tracking-wide text-slate-500">Bank</dt>
+                    <dd className="m-0 font-mono text-[11px] font-semibold">{profile.bankName}</dd>
                   </>
                 ) : null}
                 {profile.bankAccountName ? (
                   <>
-                    <dt className="text-[8px] uppercase tracking-wide text-slate-500">A/C Name</dt>
-                    <dd className="m-0 font-mono text-[9.5px] font-semibold">
+                    <dt className="text-[9px] uppercase tracking-wide text-slate-500">A/C Name</dt>
+                    <dd className="m-0 font-mono text-[11px] font-semibold">
                       {profile.bankAccountName}
                     </dd>
                   </>
                 ) : null}
                 {profile.bankAccountNumber ? (
                   <>
-                    <dt className="text-[8px] uppercase tracking-wide text-slate-500">A/C No.</dt>
-                    <dd className="m-0 font-mono text-[9.5px] font-semibold">
+                    <dt className="text-[9px] uppercase tracking-wide text-slate-500">A/C No.</dt>
+                    <dd className="m-0 font-mono text-[11px] font-semibold">
                       {profile.bankAccountNumber}
                     </dd>
                   </>
                 ) : null}
                 {profile.bankIfsc ? (
                   <>
-                    <dt className="text-[8px] uppercase tracking-wide text-slate-500">IFSC</dt>
-                    <dd className="m-0 font-mono text-[9.5px] font-semibold">{profile.bankIfsc}</dd>
+                    <dt className="text-[9px] uppercase tracking-wide text-slate-500">IFSC</dt>
+                    <dd className="m-0 font-mono text-[11px] font-semibold">{profile.bankIfsc}</dd>
                   </>
                 ) : null}
               </dl>
             </div>
           </div>
           {profile.footerNote ? (
-            <p className="mt-1.5 border-t border-dashed border-slate-400 pt-1 text-[9px] text-slate-700">
+            <p className="mt-2 border-t border-dashed border-slate-400 pt-1.5 text-[11px] text-slate-700">
               {profile.footerNote}
             </p>
           ) : null}
