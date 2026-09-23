@@ -104,20 +104,20 @@ function CalendarHalf({
               return showAmt.has(product.id) ? (
                 <Fragment key={product.id}>
                   <td className="border border-slate-300 px-1.5 py-1 text-right">
-                    {has ? formatQuantity(cell.quantity) : ""}
+                    {has ? formatQuantity(cell.quantity) : "–"}
                   </td>
                   <td className="border border-slate-300 px-1.5 py-1 text-right">
-                    {has ? formatMoney(cell.amount) : ""}
+                    {has ? formatMoney(cell.amount) : "–"}
                   </td>
                 </Fragment>
               ) : (
                 <td key={product.id} className="border border-slate-300 px-1.5 py-1 text-right">
-                  {has ? formatQuantity(cell.quantity) : ""}
+                  {has ? formatQuantity(cell.quantity) : "–"}
                 </td>
               );
             })}
             <td className="border border-slate-300 px-1.5 py-1 text-right">
-              {Number(day.grossAmount) > 0 ? formatMoney(day.grossAmount) : ""}
+              {Number(day.grossAmount) > 0 ? formatMoney(day.grossAmount) : "–"}
             </td>
           </tr>
         ))}
@@ -189,7 +189,7 @@ export function CompactBillDocument({
         <h1 className="text-lg font-bold uppercase leading-tight tracking-tight">
           {profile?.businessName ?? "Business name not set"}
         </h1>
-        {address ? <p className="mt-0.5 text-[9px] leading-snug text-slate-600">{address}</p> : null}
+        {address ? <p className="mt-0.5 text-[10.5px] leading-snug text-slate-600">{address}</p> : null}
         <p className="mt-1.5 flex items-baseline justify-between text-[7.5px] uppercase tracking-[0.14em] text-slate-500">
           <span>
             Bill for the month of{" "}
@@ -284,9 +284,9 @@ export function CompactBillDocument({
           <span>Payment Received (−)</span>
           <span>{formatMoney(bill.paymentAmount)}</span>
         </div>
-        <div className="flex justify-between border-t-2 border-slate-900 pt-1 text-xs font-bold">
-          <span>BALANCE AMOUNT</span>
-          <span>{formatMoney(bill.closingBalance)}</span>
+        <div className="mt-1.5 flex items-center justify-between rounded-md bg-slate-900 px-2.5 py-2 text-white">
+          <span className="text-[9px] font-semibold uppercase tracking-[0.1em]">Balance Amount</span>
+          <span className="text-base font-bold">{formatMoney(bill.closingBalance)}</span>
         </div>
       </div>
 
