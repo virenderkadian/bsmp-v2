@@ -57,24 +57,24 @@ function TotalsRow({
 }) {
   return (
     <tr className="bg-slate-100 text-sm font-bold text-slate-900 print:text-[11px]">
-      <td className="border-t border-slate-300 px-3 py-2 text-center print:px-1 print:py-1" colSpan={2}>
+      <td className="border-t border-slate-300 px-3 py-1.5 text-center print:px-1 print:py-0.5" colSpan={2}>
         {label}
       </td>
       {productIds.map((productId) => (
-        <td key={productId} className="border-t border-slate-300 px-3 py-2 text-right print:px-1 print:py-1">
+        <td key={productId} className="border-t border-slate-300 px-3 py-1.5 text-right print:px-1 print:py-0.5">
           {formatQty(totals.productQuantities[productId] ?? "0", false)}
         </td>
       ))}
-      <td className="border-t border-slate-300 px-3 py-2 text-right print:px-1 print:py-1">
+      <td className="border-t border-slate-300 px-3 py-1.5 text-right print:px-1 print:py-0.5">
         {formatMoney(totals.deliveryAmount)}
       </td>
-      <td className="border-t border-slate-300 px-3 py-2 text-right print:px-1 print:py-1">
+      <td className="border-t border-slate-300 px-3 py-1.5 text-right print:px-1 print:py-0.5">
         {formatMoney(totals.openingBalance)}
       </td>
-      <td className="border-t border-slate-300 px-3 py-2 text-right print:px-1 print:py-1">
+      <td className="border-t border-slate-300 px-3 py-1.5 text-right print:px-1 print:py-0.5">
         {formatMoney(totals.paymentAmount)}
       </td>
-      <td className="border-t border-slate-300 px-3 py-2 text-right print:px-1 print:py-1">
+      <td className="border-t border-slate-300 px-3 py-1.5 text-right print:px-1 print:py-0.5">
         {formatMoney(totals.pendingAmount)}
       </td>
     </tr>
@@ -144,21 +144,23 @@ export default async function MonthlyBillSummaryPage({
       </div>
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm print:border-0 print:p-0 print:shadow-none">
-        <div className="mb-4 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 border-b border-slate-300 pb-3 print:mb-3 print:pb-2">
-          <div>
+        <div className="mb-3 border-b border-slate-300 pb-2 print:mb-2 print:pb-1.5">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
             <h1 className="text-xl font-bold text-slate-900 print:text-lg">
               {payload.selectedRouteLabel}
             </h1>
-            <p className="mt-0.5 text-sm text-slate-600">
+            <p className="text-xs text-slate-600">Printed {printedAt}</p>
+          </div>
+          <div className="mt-0.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5">
+            <p className="text-sm text-slate-600">
               {formatMonth(payload.selectedMonth)} · {rowCount} customer{rowCount === 1 ? "" : "s"}
             </p>
             {/* A filtered sheet has to say so. Someone handed this page has no
                 way to tell a partial list from the whole month otherwise. */}
             {filterNotice ? (
-              <p className="mt-0.5 text-sm font-semibold text-amber-700">{filterNotice}</p>
+              <p className="text-sm font-semibold text-amber-700">{filterNotice}</p>
             ) : null}
           </div>
-          <p className="text-xs text-slate-600">Printed {printedAt}</p>
         </div>
 
         {payload.error ? (
@@ -195,30 +197,30 @@ export default async function MonthlyBillSummaryPage({
                   <table className="min-w-full border-collapse text-sm print:w-full print:min-w-0 print:table-auto print:text-[11px]">
                     <thead>
                       <tr className="bg-slate-100 text-xs font-semibold uppercase tracking-[0.12em] text-slate-600 print:text-[9px]">
-                        <th className="w-16 border-b border-slate-200 px-3 py-2 text-left print:w-auto print:px-1 print:py-1">
+                        <th className="w-16 border-b border-slate-200 px-3 py-1.5 text-left print:w-auto print:px-1 print:py-0.5">
                           Sr
                         </th>
-                        <th className="min-w-52 border-b border-slate-200 px-3 py-2 text-left print:min-w-0 print:px-1 print:py-1">
+                        <th className="min-w-52 border-b border-slate-200 px-3 py-1.5 text-left print:min-w-0 print:px-1 print:py-0.5">
                           Customer
                         </th>
                         {payload.products.map((product) => (
                           <th
                             key={product.id}
-                            className="min-w-24 border-b border-slate-200 px-3 py-2 text-right print:min-w-0 print:px-1 print:py-1"
+                            className="min-w-24 border-b border-slate-200 px-3 py-1.5 text-right print:min-w-0 print:px-1 print:py-0.5"
                           >
                             {product.shortName ?? product.code}
                           </th>
                         ))}
-                        <th className="min-w-28 border-b border-slate-200 px-3 py-2 text-right print:min-w-0 print:px-1 print:py-1">
+                        <th className="min-w-28 border-b border-slate-200 px-3 py-1.5 text-right print:min-w-0 print:px-1 print:py-0.5">
                           Amount
                         </th>
-                        <th className="min-w-28 border-b border-slate-200 px-3 py-2 text-right print:min-w-0 print:px-1 print:py-1">
+                        <th className="min-w-28 border-b border-slate-200 px-3 py-1.5 text-right print:min-w-0 print:px-1 print:py-0.5">
                           Opening
                         </th>
-                        <th className="min-w-28 border-b border-slate-200 px-3 py-2 text-right print:min-w-0 print:px-1 print:py-1">
+                        <th className="min-w-28 border-b border-slate-200 px-3 py-1.5 text-right print:min-w-0 print:px-1 print:py-0.5">
                           Paid
                         </th>
-                        <th className="min-w-28 border-b border-slate-200 px-3 py-2 text-right print:min-w-0 print:px-1 print:py-1">
+                        <th className="min-w-28 border-b border-slate-200 px-3 py-1.5 text-right print:min-w-0 print:px-1 print:py-0.5">
                           Pending
                         </th>
                       </tr>
@@ -226,33 +228,33 @@ export default async function MonthlyBillSummaryPage({
                     <tbody className="divide-y divide-slate-200">
                       {route.rows.map((row) => (
                         <tr key={row.key} className="text-slate-900">
-                          <td className="px-3 py-2 text-slate-600 print:px-1 print:py-1">
+                          <td className="px-3 py-1.5 text-slate-600 print:px-1 print:py-0.5">
                             {row.sequenceNo}
                           </td>
-                          <td className="px-3 py-2 print:px-1 print:py-1">
-                            <div className="font-semibold text-slate-900">{row.customerName}</div>
-                            <div className="text-xs text-slate-600 print:text-[9px]">
-                              {row.customerCode}
-                              {row.customerArea ? ` · ${row.customerArea}` : ""}
-                              {row.customerMobile ? ` · ${row.customerMobile}` : ""}
-                              {row.source === "DAILY_ENTRY" ? " · live fallback" : ""}
-                            </div>
+                          <td className="px-3 py-1.5 print:px-1 print:py-0.5">
+                            <span className="font-semibold text-slate-900">{row.customerName}</span>
+                            {row.customerMobile ? (
+                              <span className="text-xs text-slate-600 print:text-[9px]"> · {row.customerMobile}</span>
+                            ) : null}
+                            {row.source === "DAILY_ENTRY" ? (
+                              <span className="text-xs text-slate-600 print:text-[9px]"> · live fallback</span>
+                            ) : null}
                           </td>
                           {productIds.map((productId) => (
-                            <td key={productId} className="px-3 py-2 text-right print:px-1 print:py-1">
+                            <td key={productId} className="px-3 py-1.5 text-right print:px-1 print:py-0.5">
                               {formatQty(row.productQuantities[productId] ?? "0")}
                             </td>
                           ))}
-                          <td className="px-3 py-2 text-right font-medium text-slate-900 print:px-1 print:py-1">
+                          <td className="px-3 py-1.5 text-right font-medium text-slate-900 print:px-1 print:py-0.5">
                             {formatMoney(row.deliveryAmount)}
                           </td>
-                          <td className="px-3 py-2 text-right print:px-1 print:py-1">
+                          <td className="px-3 py-1.5 text-right print:px-1 print:py-0.5">
                             {formatMoney(row.openingBalance)}
                           </td>
-                          <td className="px-3 py-2 text-right print:px-1 print:py-1">
+                          <td className="px-3 py-1.5 text-right print:px-1 print:py-0.5">
                             {formatMoney(row.paymentAmount)}
                           </td>
-                          <td className="px-3 py-2 text-right font-semibold text-slate-900 print:px-1 print:py-1">
+                          <td className="px-3 py-1.5 text-right font-semibold text-slate-900 print:px-1 print:py-0.5">
                             {formatMoney(row.pendingAmount)}
                           </td>
                         </tr>
