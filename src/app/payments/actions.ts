@@ -7,7 +7,19 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentCityId } from "@/lib/current-city";
 import { getCurrentUser } from "@/lib/current-user";
 import { logAudit } from "@/lib/audit";
-import { getBillQuickView, type BillQuickView } from "@/lib/payments";
+import {
+  getBillQuickView,
+  getCustomerRoutesForMonth as getCustomerRoutesForMonthQuery,
+  type BillQuickView,
+  type PaymentRouteOption,
+} from "@/lib/payments";
+
+// Thin wrapper so the client payment dialog can call this as a server action
+// (a plain exported function from lib/payments.ts isn't one — only exports
+// from a "use server" file are).
+export async function getCustomerRoutesForMonth(customerId: string, month: string): Promise<PaymentRouteOption[]> {
+  return getCustomerRoutesForMonthQuery(customerId, month);
+}
 
 export type PaymentActionState = {
   status: "idle" | "success" | "error";

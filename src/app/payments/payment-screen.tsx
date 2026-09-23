@@ -1,8 +1,10 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useState, type FormEvent } from "react";
+import { useActionState, useEffect, useRef, useState, type FormEvent } from "react";
 import Link from "next/link";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
+  getCustomerRoutesForMonth,
   setPaymentStatus,
   type PaymentActionState,
   updatePayment,
@@ -12,16 +14,18 @@ import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { DataTable } from "@/components/admin/data-table";
 import { Dialog } from "@/components/admin/dialog";
 import { FormInput } from "@/components/admin/form-input";
+import { HighlightMatch } from "@/components/admin/highlight-match";
 import { PencilSquareIcon } from "@/components/admin/icons";
 import { KeyboardForm } from "@/components/admin/keyboard-form";
+import { useLoadingBar } from "@/components/admin/loading-bar";
 import { usePageMetric } from "@/components/admin/page-metric";
 import { Pagination } from "@/components/admin/pagination";
-import { usePagination } from "@/lib/use-pagination";
 import { SearchInput } from "@/components/admin/search-input";
 import { SelectInput } from "@/components/admin/select-input";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { SummaryStatBar } from "@/components/admin/summary-stat-bar";
-import type { PaymentRecord, PaymentsPayload } from "@/lib/payments";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
+import type { PaymentRecord, PaymentRouteOption, PaymentsPayload } from "@/lib/payments";
 
 const initialState: PaymentActionState = { status: "idle" };
 
@@ -168,36 +172,44 @@ function PaymentDialog({
     }
   }, [onClose, open, state.status]);
 
-  const routeOptions = useMemo(() => {
-    const month = paymentDate.slice(0, 7);
-    const linkedRouteIds = new Set(
-      payload.customerRouteLinks
-        .filter((link) => link.customerId === customerId && link.month === month)
-        .map((link) => link.routeId),
-    );
-    const linkedRoutes = payload.routes.filter((route) => linkedRouteIds.has(route.id));
+  // Which route(s) this customer was actually on for the picked month — used
+  // to be a client-side lookup into every customer's route for every month
+  // ever assigned (unbounded, growing every month); now resolved on demand
+  // for just this one customer/month, since that's all a single dialog needs.
+  const [linkedRoutes, setLinkedRoutes] = useState<PaymentRouteOption[] | null>(null);
+  const routeRequestId = useRef(0);
 
-    return linkedRoutes.length > 0 ? linkedRoutes : payload.routes;
-  }, [customerId, paymentDate, payload.customerRouteLinks, payload.routes]);
-
-  // Auto-select the only linked route, or clear a route that no longer applies
-  // to the picked customer/month. Done during render (React's "adjust state
-  // while rendering" pattern), keyed on the option set so it only re-runs when
-  // the available routes actually change — no effect, no cascading render.
-  const routeOptionKey = routeOptions.map((route) => route.id).join(",");
-  const [lastRouteOptionKey, setLastRouteOptionKey] = useState(routeOptionKey);
-  if (routeOptionKey !== lastRouteOptionKey) {
-    setLastRouteOptionKey(routeOptionKey);
-    if (routeOptions.length === 1 && routeId !== routeOptions[0].id) {
-      setRouteId(routeOptions[0].id);
-    } else if (
-      routeOptions.length > 1 &&
-      routeId &&
-      !routeOptions.some((route) => route.id === routeId)
-    ) {
-      setRouteId("");
+  useEffect(() => {
+    if (!customerId) {
+      // Clearing a stale result when there's no customer to resolve a route
+      // for — not syncing derived state from this render, the carve-out
+      // react-hooks/set-state-in-effect's own guidance makes.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setLinkedRoutes(null);
+      return;
     }
-  }
+
+    const requestId = ++routeRequestId.current;
+    const month = paymentDate.slice(0, 7);
+
+    getCustomerRoutesForMonth(customerId, month).then((routes) => {
+      if (routeRequestId.current !== requestId) {
+        return;
+      }
+
+      setLinkedRoutes(routes);
+
+      // Auto-select the only linked route, or clear a route that no longer
+      // applies to the picked customer/month.
+      if (routes.length === 1) {
+        setRouteId(routes[0].id);
+      } else if (routes.length > 1) {
+        setRouteId((current) => (routes.some((route) => route.id === current) ? current : ""));
+      }
+    });
+  }, [customerId, paymentDate]);
+
+  const routeOptions = linkedRoutes && linkedRoutes.length > 0 ? linkedRoutes : payload.routes;
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     const formData = new FormData(event.currentTarget);
@@ -386,80 +398,72 @@ function PaymentStatusButton({
 }
 
 export function PaymentScreen({ payload }: PaymentScreenProps) {
-  const [search, setSearch] = useState("");
-  const [routeId, setRouteId] = useState("");
-  const [mode, setMode] = useState("");
-  const [status, setStatus] = useState("");
-  const [date, setDate] = useState("");
+  const { navigate } = useLoadingBar();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const urlSearch = searchParams.get("search") ?? "";
+  const urlRouteId = searchParams.get("routeId") ?? "";
+  const urlMode = searchParams.get("mode") ?? "";
+  const urlStatus = searchParams.get("status") ?? "";
+  const urlDate = searchParams.get("date") ?? "";
+
+  const [searchInput, setSearchInput] = useState(urlSearch);
+  const debouncedSearch = useDebouncedValue(searchInput, 350);
+
   const [dialogMode, setDialogMode] = useState<PaymentDialogMode>(null);
   const [selectedPaymentId, setSelectedPaymentId] = useState<string | null>(null);
 
   const selectedPayment = payload.payments.find((payment) => payment.id === selectedPaymentId);
   const draft = getPaymentDraft(selectedPayment);
 
-  const filteredPayments = useMemo(() => {
-    return payload.payments.filter((payment) => {
-      const query = search.toLowerCase().trim();
-      const matchesSearch =
-        query === "" ||
-        payment.customerCode.toLowerCase().includes(query) ||
-        payment.customerName.toLowerCase().includes(query) ||
-        (payment.customerArea ?? "").toLowerCase().includes(query) ||
-        (payment.routeCode ?? "").toLowerCase().includes(query) ||
-        (payment.routeName ?? "").toLowerCase().includes(query) ||
-        (payment.referenceNo ?? "").toLowerCase().includes(query) ||
-        (payment.notes ?? "").toLowerCase().includes(query);
-      const matchesRoute = routeId === "" || payment.routeId === routeId;
-      const matchesMode = mode === "" || payment.mode === mode;
-      const matchesStatus = status === "" || payment.status === status;
-      const matchesDate = date === "" || formatDateInput(payment.paymentDate) === date;
+  const updateParams = (next: Record<string, string>, options?: { resetPage?: boolean }) => {
+    const params = new URLSearchParams(searchParams.toString());
 
-      return matchesSearch && matchesRoute && matchesMode && matchesStatus && matchesDate;
-    });
-  }, [date, mode, payload.payments, routeId, search, status]);
+    for (const [key, value] of Object.entries(next)) {
+      if (value) {
+        params.set(key, value);
+      } else {
+        params.delete(key);
+      }
+    }
 
-  const totals = useMemo(() => {
-    return filteredPayments.reduce(
-      (current, payment) => {
-        const amount = Number(payment.amount);
+    if (options?.resetPage !== false) {
+      params.delete("page");
+    }
 
-        current.total += amount;
-        if (payment.status === "VERIFIED") {
-          current.verified += amount;
-        } else if (payment.status === "PENDING") {
-          current.pending += amount;
-        } else {
-          current.cancelled += amount;
-        }
+    navigate(params.toString() ? `${pathname}?${params.toString()}` : pathname, { replace: true, scroll: false });
+  };
 
-        return current;
-      },
-      { total: 0, verified: 0, pending: 0, cancelled: 0 },
-    );
-  }, [filteredPayments]);
+  useEffect(() => {
+    if (debouncedSearch !== urlSearch) {
+      updateParams({ search: debouncedSearch });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch]);
 
-  const hasActiveFilters = search.trim() !== "" || routeId !== "" || mode !== "" || status !== "" || date !== "";
+  const [lastUrlSearch, setLastUrlSearch] = useState(urlSearch);
+  if (urlSearch !== lastUrlSearch) {
+    setLastUrlSearch(urlSearch);
+    setSearchInput(urlSearch);
+  }
 
-  const pagination = usePagination(filteredPayments, {
-    resetKey: `${search}|${routeId}|${mode}|${status}|${date}`,
-  });
+  const hasActiveFilters =
+    urlSearch.trim() !== "" || urlRouteId !== "" || urlMode !== "" || urlStatus !== "" || urlDate !== "";
 
-  const pendingCount = useMemo(
-    () => payload.payments.filter((payment) => payment.status === "PENDING").length,
-    [payload.payments],
-  );
+  const totalPages = Math.max(1, Math.ceil(payload.total / payload.pageSize));
+  const startIndex = payload.total === 0 ? 0 : (payload.page - 1) * payload.pageSize + 1;
+  const endIndex = Math.min(payload.page * payload.pageSize, payload.total);
+
   usePageMetric(
-    pendingCount > 0
-      ? { label: "Pending", value: String(pendingCount), tone: "warning" }
-      : { label: "Payments", value: String(payload.payments.length) },
+    payload.pendingCount > 0
+      ? { label: "Pending", value: String(payload.pendingCount), tone: "warning" }
+      : { label: "Payments", value: String(payload.total) },
   );
 
   const resetFilters = () => {
-    setSearch("");
-    setRouteId("");
-    setMode("");
-    setStatus("");
-    setDate("");
+    setSearchInput("");
+    navigate(pathname, { replace: true, scroll: false });
   };
 
   const openEditDialog = (paymentId: string) => {
@@ -479,10 +483,10 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
           <SummaryStatBar
             className="flex-1"
             stats={[
-              { key: "total", label: "Filtered total", value: formatMoney(String(totals.total)) },
-              { key: "verified", label: "Verified", value: formatMoney(String(totals.verified)), tone: "success" },
-              { key: "pending", label: "Pending", value: formatMoney(String(totals.pending)) },
-              { key: "cancelled", label: "Cancelled", value: formatMoney(String(totals.cancelled)), tone: "danger" },
+              { key: "total", label: "Filtered total", value: formatMoney(payload.totals.total) },
+              { key: "verified", label: "Verified", value: formatMoney(payload.totals.verified), tone: "success" },
+              { key: "pending", label: "Pending", value: formatMoney(payload.totals.pending) },
+              { key: "cancelled", label: "Cancelled", value: formatMoney(payload.totals.cancelled), tone: "danger" },
             ]}
           />
           <div className="flex items-center gap-2 lg:shrink-0">
@@ -506,12 +510,12 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
             <SearchInput
               name="search"
               placeholder="Search customer, route, reference"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
             />
             <SelectInput
-              value={routeId}
-              onChange={(event) => setRouteId(event.target.value)}
+              value={urlRouteId}
+              onChange={(event) => updateParams({ routeId: event.target.value })}
               placeholder="All routes"
               options={payload.routes.map((route) => ({
                 value: route.id,
@@ -520,30 +524,30 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
               className="h-10 rounded-md bg-surface text-sm"
             />
             <SelectInput
-              value={mode}
-              onChange={(event) => setMode(event.target.value)}
+              value={urlMode}
+              onChange={(event) => updateParams({ mode: event.target.value })}
               placeholder="All modes"
               options={payload.modes}
               className="h-10 rounded-md bg-surface text-sm"
             />
             <SelectInput
-              value={status}
-              onChange={(event) => setStatus(event.target.value)}
+              value={urlStatus}
+              onChange={(event) => updateParams({ status: event.target.value })}
               placeholder="All statuses"
               options={payload.statuses}
               className="h-10 rounded-md bg-surface text-sm"
             />
             <input
               type="date"
-              value={date}
-              onChange={(event) => setDate(event.target.value)}
+              value={urlDate}
+              onChange={(event) => updateParams({ date: event.target.value })}
               className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
               aria-label="Filter by payment date"
             />
           </div>
           <div className="flex items-center gap-3">
             <span className="whitespace-nowrap text-sm text-text-secondary">
-              {filteredPayments.length} of {payload.payments.length} payments
+              {payload.payments.length} of {payload.total} payments
             </span>
             {payload.dbConnected ? null : <StatusBadge tone="warning">Offline fallback</StatusBadge>}
             {hasActiveFilters ? (
@@ -566,19 +570,26 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
               { key: "reference", label: "Reference", className: "w-52" },
               { key: "actions", label: "Actions", className: "w-24 text-right", headerClassName: "text-right" },
             ]}
-            rows={pagination.pageItems.map((payment) => ({
+            rows={payload.payments.map((payment) => ({
               key: payment.id,
               cells: [
                 <div key="customer" className="min-w-[240px] truncate">
-                  <span className="text-[15px] font-semibold text-text-primary">{payment.customerName}</span>
+                  <span className="text-[15px] font-semibold text-text-primary">
+                    <HighlightMatch text={payment.customerName} query={urlSearch} />
+                  </span>
                   <span className="ml-1.5 text-sm text-text-muted">
-                    {payment.customerCode}
-                    {payment.customerArea ? ` · ${payment.customerArea}` : ""}
+                    <HighlightMatch text={payment.customerCode} query={urlSearch} />
+                    {payment.customerArea ? (
+                      <>
+                        {" · "}
+                        <HighlightMatch text={payment.customerArea} query={urlSearch} />
+                      </>
+                    ) : null}
                   </span>
                 </div>,
                 <div key="route" className="min-w-[200px] truncate">
                   <span className="font-medium text-text-primary">
-                    {routeLabel(payment.routeCode, payment.routeName)}
+                    <HighlightMatch text={routeLabel(payment.routeCode, payment.routeName)} query={urlSearch} />
                   </span>
                   {payment.routeShift ? (
                     <span className="ml-1.5 text-sm text-text-muted">
@@ -593,7 +604,11 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
                 modeLabel(payment.mode, payload.modes),
                 <PaymentStatusButton key="status" payment={payment} statuses={payload.statuses} />,
                 <span key="reference" className="text-sm text-text-primary">
-                  {payment.referenceNo || payment.notes || "-"}
+                  {payment.referenceNo || payment.notes ? (
+                    <HighlightMatch text={payment.referenceNo || payment.notes || ""} query={urlSearch} />
+                  ) : (
+                    "-"
+                  )}
                 </span>,
                 <div key="actions" className="flex justify-end">
                   <ActionButton
@@ -619,12 +634,12 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
           />
 
           <Pagination
-            page={pagination.page}
-            totalPages={pagination.totalPages}
-            total={pagination.total}
-            startIndex={pagination.startIndex}
-            endIndex={pagination.endIndex}
-            onPageChange={pagination.setPage}
+            page={payload.page}
+            totalPages={totalPages}
+            total={payload.total}
+            startIndex={startIndex}
+            endIndex={endIndex}
+            onPageChange={(nextPage) => updateParams({ page: String(nextPage) }, { resetPage: false })}
             itemLabel="payments"
           />
         </section>
