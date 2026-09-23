@@ -11,6 +11,16 @@ function uniqueCode(label: string) {
   return `RL-TEST-${label}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// Two random octets instead of one — ~65,000 possible addresses instead of
+// 254, so concurrent test runs (this file included) essentially never
+// collide on the same IP. Just a string in a test-only ipAddress column, so
+// there's no need to stay inside a real reserved range.
+function uniqueIp() {
+  const third = Math.floor(Math.random() * 255);
+  const fourth = Math.floor(Math.random() * 254) + 1;
+  return `203.0.${third}.${fourth}`;
+}
+
 const usedCodes: string[] = [];
 const usedIps: string[] = [];
 
@@ -74,14 +84,16 @@ describe("checkDriverLoginRateLimit", () => {
   });
 
   it("locks an IP out after 20 failed attempts across different vehicle codes", async () => {
-    const ip = `203.0.113.${Math.floor(Math.random() * 254) + 1}`;
+    const ip = uniqueIp();
     usedIps.push(ip);
     const codes = Array.from({ length: 20 }, (_, i) => uniqueCode(`ip-rotate-${i}`));
     usedCodes.push(...codes);
 
-    for (const code of codes) {
-      await recordDriverLoginAttempt(code, ip, false);
-    }
+    // Parallel, not sequential — each write is independent (order within the
+    // window comes from the DB's own createdAt, not call order), and 20
+    // awaited round trips in series against the real dev DB was blowing past
+    // the test timeout on its own, with nothing to do with isolation.
+    await Promise.all(codes.map((code) => recordDriverLoginAttempt(code, ip, false)));
 
     // A brand-new vehicle code from the same IP is still blocked — the IP
     // limit exists precisely to catch someone rotating codes.
@@ -92,15 +104,13 @@ describe("checkDriverLoginRateLimit", () => {
   });
 
   it("does not apply the IP limit to an unrelated IP", async () => {
-    const busyIp = `203.0.113.${Math.floor(Math.random() * 254) + 1}`;
-    const otherIp = `198.51.100.${Math.floor(Math.random() * 254) + 1}`;
+    const busyIp = uniqueIp();
+    const otherIp = uniqueIp();
     usedIps.push(busyIp, otherIp);
     const codes = Array.from({ length: 20 }, (_, i) => uniqueCode(`ip-isolated-${i}`));
     usedCodes.push(...codes);
 
-    for (const code of codes) {
-      await recordDriverLoginAttempt(code, busyIp, false);
-    }
+    await Promise.all(codes.map((code) => recordDriverLoginAttempt(code, busyIp, false)));
 
     const freshCode = uniqueCode("ip-isolated-fresh");
     usedCodes.push(freshCode);

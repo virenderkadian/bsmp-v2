@@ -3,8 +3,9 @@
 import { Prisma } from "@prisma/client";
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
+import { getCurrentCityId } from "@/lib/current-city";
 import { nextCustomerCode } from "@/lib/customer-code";
-import { monthInputToDate } from "@/lib/monthly-route-sequence";
+import { monthInputToDate, type MonthlySequenceCustomerOption } from "@/lib/monthly-route-sequence";
 import { prisma } from "@/lib/prisma";
 
 export type BillingRouteOption = {
@@ -546,4 +547,64 @@ export async function removeMonthlyRouteSequenceLine(
   } catch (error) {
     return { status: "error", message: getSequenceSetupErrorMessage(error) };
   }
+}
+
+// The "add customer" picker used to filter a city-wide list loaded on every
+// page visit. It now asks on demand: bounded to 8 matches, and it excludes
+// only the customers already on THIS route's sequence (passed in from the
+// client, which already has that list — no need to look it up again here).
+export async function searchMonthlySequenceCustomers(input: {
+  query: string;
+  sequenceMonth: string;
+  excludeCustomerIds: string[];
+}): Promise<MonthlySequenceCustomerOption[]> {
+  const cityId = await getCurrentCityId();
+  const sequenceMonth = monthInputToDate(input.sequenceMonth);
+  const query = input.query.trim();
+
+  const where: Prisma.CustomerWhereInput = {
+    cityId,
+    isActive: true,
+    ...(input.excludeCustomerIds.length > 0 ? { id: { notIn: input.excludeCustomerIds } } : {}),
+    ...(query
+      ? {
+          OR: [
+            { code: { contains: query, mode: "insensitive" } },
+            { name: { contains: query, mode: "insensitive" } },
+            { area: { contains: query, mode: "insensitive" } },
+            { mobile: { contains: query, mode: "insensitive" } },
+          ],
+        }
+      : {}),
+  };
+
+  const customers = await prisma.customer.findMany({
+    where,
+    orderBy: { code: "asc" },
+    take: 8,
+    select: { id: true, code: true, name: true, area: true, mobile: true },
+  });
+
+  if (customers.length === 0) {
+    return [];
+  }
+
+  // Which round each candidate is already on this month, if any — shown so
+  // an operator doesn't add someone to a second route by mistake (see
+  // formatCustomerMeta in the screen). Looked up only for these ≤8 matches,
+  // not the whole city.
+  const rounds = await prisma.monthlyRouteCustomerSequence.findMany({
+    where: {
+      customerId: { in: customers.map((customer) => customer.id) },
+      sequenceMonth,
+      status: "ACTIVE",
+    },
+    select: { customerId: true, route: { select: { name: true } } },
+  });
+  const roundByCustomer = new Map(rounds.map((row) => [row.customerId, row.route.name]));
+
+  return customers.map((customer) => ({
+    ...customer,
+    currentRound: roundByCustomer.get(customer.id) ?? null,
+  }));
 }

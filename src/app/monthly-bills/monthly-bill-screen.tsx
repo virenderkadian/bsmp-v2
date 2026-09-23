@@ -66,6 +66,7 @@ function formatSnapshot(value: string) {
     month: "short",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: "Asia/Kolkata",
   });
 }
 

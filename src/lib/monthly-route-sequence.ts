@@ -46,7 +46,6 @@ export type MonthlySequenceLineRecord = {
 export type MonthlyRouteSequencePayload = {
   dbConnected: boolean;
   routes: MonthlySequenceRouteOption[];
-  customers: MonthlySequenceCustomerOption[];
   lines: MonthlySequenceLineRecord[];
   selectedRouteId: string;
   selectedMonth: string;
@@ -67,7 +66,6 @@ function fallbackPayload(month?: string, error?: string): MonthlyRouteSequencePa
   return {
     dbConnected: false,
     routes: [],
-    customers: [],
     lines: [],
     selectedRouteId: "",
     selectedMonth: month ?? toMonthInput(new Date()),
@@ -108,46 +106,26 @@ export async function getMonthlyRouteSequencePayload(input?: {
 
   try {
     const cityId = await getCurrentCityId();
-    const [routes, customers, currentRounds] = await withDbTimeout(Promise.all([
-      prisma.route.findMany({
-        where: { cityId, isActive: true },
-        orderBy: [{ shift: "asc" }, { code: "asc" }],
-        select: {
-          id: true,
-          code: true,
-          name: true,
-          shift: true,
-          vehicle: {
-            select: {
-              name: true,
-            },
+    // Customers used to be loaded here too — the whole city's active list,
+    // plus everyone's current-month round, on every visit, just to power the
+    // "add customer" picker below. That picker now searches on demand (see
+    // searchMonthlySequenceCustomers in actions.ts), so this only needs the
+    // route dropdown, which stays cheap at any customer count.
+    const routes = await withDbTimeout(prisma.route.findMany({
+      where: { cityId, isActive: true },
+      orderBy: [{ shift: "asc" }, { code: "asc" }],
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        shift: true,
+        vehicle: {
+          select: {
+            name: true,
           },
         },
-      }),
-      prisma.customer.findMany({
-        where: { cityId, isActive: true },
-        orderBy: { code: "asc" },
-        select: {
-          id: true,
-          code: true,
-          name: true,
-          area: true,
-          mobile: true,
-        },
-      }),
-      prisma.monthlyRouteCustomerSequence.findMany({
-        where: { route: { cityId }, sequenceMonth, status: "ACTIVE" },
-        select: { customerId: true, route: { select: { name: true } } },
-      }),
-    ]), "Monthly route sequence options request");
-
-    const roundByCustomer = new Map(
-      currentRounds.map((row) => [row.customerId, row.route.name]),
-    );
-    const customerOptions: MonthlySequenceCustomerOption[] = customers.map((customer) => ({
-      ...customer,
-      currentRound: roundByCustomer.get(customer.id) ?? null,
-    }));
+      },
+    }), "Monthly route sequence options request");
 
     const routeOptions = routes.map((route) => ({
       id: route.id,
@@ -169,7 +147,6 @@ export async function getMonthlyRouteSequencePayload(input?: {
         ...fallbackPayload(selectedMonth),
         dbConnected: true,
         routes: routeOptions,
-        customers: customerOptions,
       };
     }
 
@@ -219,7 +196,6 @@ export async function getMonthlyRouteSequencePayload(input?: {
       return {
         dbConnected: true,
         routes: routeOptions,
-        customers: customerOptions,
         lines: lines.map((line) => ({
           id: line.id,
           customerId: line.customerId,
@@ -239,7 +215,6 @@ export async function getMonthlyRouteSequencePayload(input?: {
       return {
         dbConnected: true,
         routes: routeOptions,
-        customers: customerOptions,
         lines: [],
         selectedRouteId,
         selectedMonth,
