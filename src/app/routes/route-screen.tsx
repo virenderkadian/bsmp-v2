@@ -12,10 +12,11 @@ import {
   updateVehicle,
 } from "@/app/masters/actions";
 import { ActiveStatusToggle } from "@/components/admin/active-status-toggle";
-import { ActionButton, PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
+import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { DataTable } from "@/components/admin/data-table";
 import { Dialog } from "@/components/admin/dialog";
 import { FormInput } from "@/components/admin/form-input";
+import { IconButton } from "@/components/admin/icon-button";
 import { PencilSquareIcon, PlusIcon } from "@/components/admin/icons";
 import { KeyboardForm } from "@/components/admin/keyboard-form";
 import { MasterTabs } from "@/components/admin/master-tabs";
@@ -426,16 +427,9 @@ function RouteTab({
                 action={setRouteActiveState}
               />,
               <div key="actions" className="flex justify-end">
-                <ActionButton
-                  type="button"
-                  icon={<PencilSquareIcon className="h-[18px] w-[18px]" />}
-                  className="h-9 w-9 justify-center rounded-md border-surface-border-strong bg-surface px-0 text-text-secondary hover:border-accent hover:bg-accent-soft hover:text-accent-soft-text"
-                  onClick={() => onEditRoute(route.id)}
-                  aria-label="Edit route"
-                  title="Edit route"
-                >
-                  <span className="sr-only">Edit route</span>
-                </ActionButton>
+                <IconButton type="button" onClick={() => onEditRoute(route.id)} aria-label="Edit route" title="Edit route">
+                  <PencilSquareIcon className="h-[18px] w-[18px]" />
+                </IconButton>
               </div>,
             ],
           }))}
@@ -568,16 +562,9 @@ function VehicleTab({
                 action={setVehicleActiveState}
               />,
               <div key="actions" className="flex justify-end">
-                <ActionButton
-                  type="button"
-                  icon={<PencilSquareIcon className="h-[18px] w-[18px]" />}
-                  className="h-9 w-9 justify-center rounded-md border-surface-border-strong bg-surface px-0 text-text-secondary hover:border-accent hover:bg-accent-soft hover:text-accent-soft-text"
-                  onClick={() => onEditVehicle(vehicle.id)}
-                  aria-label="Edit vehicle"
-                  title="Edit vehicle"
-                >
-                  <span className="sr-only">Edit vehicle</span>
-                </ActionButton>
+                <IconButton type="button" onClick={() => onEditVehicle(vehicle.id)} aria-label="Edit vehicle" title="Edit vehicle">
+                  <PencilSquareIcon className="h-[18px] w-[18px]" />
+                </IconButton>
               </div>,
             ],
           }))}

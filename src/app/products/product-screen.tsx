@@ -3,10 +3,11 @@
 import { useActionState, useEffect, useMemo, useState, type FormEvent } from "react";
 import { createProduct, setProductActiveState, type ActionState, updateProduct } from "@/app/masters/actions";
 import { ActiveStatusToggle } from "@/components/admin/active-status-toggle";
-import { ActionButton, PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
+import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { DataTable } from "@/components/admin/data-table";
 import { Dialog } from "@/components/admin/dialog";
 import { FormInput } from "@/components/admin/form-input";
+import { IconButton } from "@/components/admin/icon-button";
 import { PencilSquareIcon, PlusIcon } from "@/components/admin/icons";
 import { KeyboardForm } from "@/components/admin/keyboard-form";
 import { usePageMetric } from "@/components/admin/page-metric";
@@ -387,10 +388,8 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
                 action={setProductActiveState}
               />,
               <div key="actions" className="flex justify-end">
-                <ActionButton
+                <IconButton
                   type="button"
-                  icon={<PencilSquareIcon className="h-[18px] w-[18px]" />}
-                  className="h-9 w-9 justify-center rounded-md border-surface-border-strong bg-surface px-0 text-text-secondary hover:border-accent hover:bg-accent-soft hover:text-accent-soft-text"
                   onClick={() => {
                     setSelectedProductId(product.id);
                     setDialogMode("edit");
@@ -398,8 +397,8 @@ export function ProductScreen({ dbConnected, products }: ProductScreenProps) {
                   aria-label="Edit product"
                   title="Edit product"
                 >
-                  <span className="sr-only">Edit product</span>
-                </ActionButton>
+                  <PencilSquareIcon className="h-[18px] w-[18px]" />
+                </IconButton>
               </div>,
             ],
           }))}
