@@ -1,4 +1,4 @@
-import type { Payment, PaymentMode, PaymentStatus, RouteShift } from "@prisma/client";
+import { Prisma, type Payment, type PaymentMode, type PaymentStatus, type RouteShift } from "@prisma/client";
 import { getCurrentCityId } from "@/lib/current-city";
 import { withDbTimeout } from "@/lib/db-timeout";
 import { prisma } from "@/lib/prisma";
@@ -38,18 +38,28 @@ export type PaymentRouteOption = {
   shift: RouteShift;
 };
 
-export type PaymentCustomerRouteLink = {
-  customerId: string;
-  routeId: string;
-  month: string;
+export type PaymentTotals = {
+  total: string;
+  verified: string;
+  pending: string;
+  cancelled: string;
 };
 
 export type PaymentsPayload = {
   dbConnected: boolean;
   customers: PaymentCustomerOption[];
   routes: PaymentRouteOption[];
-  customerRouteLinks: PaymentCustomerRouteLink[];
   payments: PaymentRecord[];
+  total: number;
+  page: number;
+  pageSize: number;
+  // All-time, not scoped to the current filters — a pending payment from any
+  // month still needs attention, so the badge shouldn't hide it behind a
+  // date filter someone happens to have set.
+  pendingCount: number;
+  // Sums over every row matching the current filters, not just the current
+  // page — matches what the stat bar showed before this was paginated.
+  totals: PaymentTotals;
   modes: Array<{ value: PaymentMode; label: string }>;
   statuses: Array<{ value: PaymentStatus; label: string }>;
   error?: string;
@@ -164,93 +174,138 @@ function getMonthBounds(monthValue: Date) {
   return { start, end };
 }
 
-function fallbackPayload(error?: string): PaymentsPayload {
+const PAYMENTS_PAGE_SIZE = 50;
+
+function fallbackPayload(page: number, error?: string): PaymentsPayload {
   return {
     dbConnected: false,
     customers: [],
     routes: [],
-    customerRouteLinks: [],
     payments: [],
+    total: 0,
+    page,
+    pageSize: PAYMENTS_PAGE_SIZE,
+    pendingCount: 0,
+    totals: { total: "0.00", verified: "0.00", pending: "0.00", cancelled: "0.00" },
     modes: paymentModes,
     statuses: paymentStatuses,
     error,
   };
 }
 
-export async function getPaymentsPayload(): Promise<PaymentsPayload> {
+// This used to load every payment ever recorded in the city, unfiltered, on
+// every visit — the one page in the app with no natural ceiling: it grows
+// every month regardless of customer count, unlike a month-scoped page.
+// Search, route/mode/status/date filters, and pagination now run as a
+// bounded SQL query instead, driven by URL params (see PaymentScreen).
+export async function getPaymentsPayload(input?: {
+  search?: string;
+  routeId?: string;
+  mode?: string;
+  status?: string;
+  date?: string;
+  page?: number;
+}): Promise<PaymentsPayload> {
+  const page = input?.page && input.page > 0 ? Math.floor(input.page) : 1;
+  const search = input?.search?.trim() ?? "";
+  const routeId = input?.routeId ?? "";
+  const mode = input?.mode ?? "";
+  const status = input?.status ?? "";
+  const date = input?.date ?? "";
+
   try {
     const cityId = await getCurrentCityId();
-    const [customers, routes, customerRouteLinks, payments] = await withDbTimeout(Promise.all([
-      prisma.customer.findMany({
-        where: { cityId, isActive: true },
-        orderBy: { code: "asc" },
-        select: {
-          id: true,
-          code: true,
-          name: true,
-          area: true,
-          mobile: true,
-        },
-      }),
-      prisma.route.findMany({
-        where: { cityId, isActive: true },
-        orderBy: [{ shift: "asc" }, { code: "asc" }],
-        select: {
-          id: true,
-          code: true,
-          name: true,
-          shift: true,
-        },
-      }),
-      prisma.monthlyRouteCustomerSequence.findMany({
-        where: { status: "ACTIVE", route: { cityId } },
-        orderBy: [{ sequenceMonth: "desc" }, { route: { code: "asc" } }],
-        select: {
-          customerId: true,
-          routeId: true,
-          sequenceMonth: true,
-        },
-      }),
-      prisma.payment.findMany({
-        where: { customer: { cityId } },
-        orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
-        select: {
-          id: true,
-          customerId: true,
-          routeId: true,
-          amount: true,
-          paymentDate: true,
-          mode: true,
-          status: true,
-          referenceNo: true,
-          notes: true,
-          customer: {
-            select: {
-              code: true,
-              name: true,
-              area: true,
-            },
+
+    // Independent of the filtered list below — fired now, awaited with it.
+    const customersPromise = withDbTimeout(prisma.customer.findMany({
+      where: { cityId, isActive: true },
+      orderBy: { code: "asc" },
+      select: { id: true, code: true, name: true, area: true, mobile: true },
+    }), "Payment customers request");
+    const routesPromise = withDbTimeout(prisma.route.findMany({
+      where: { cityId, isActive: true },
+      orderBy: [{ shift: "asc" }, { code: "asc" }],
+      select: { id: true, code: true, name: true, shift: true },
+    }), "Payment routes request");
+    // All-time on purpose — see the PaymentsPayload.pendingCount comment.
+    const pendingCountPromise = withDbTimeout(prisma.payment.count({
+      where: { customer: { cityId }, status: "PENDING" },
+    }), "Pending payment count request");
+
+    const dateFilter =
+      date && /^\d{4}-\d{2}-\d{2}$/.test(date)
+        ? (() => {
+            const start = new Date(`${date}T00:00:00.000Z`);
+            const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+            return { gte: start, lt: end };
+          })()
+        : undefined;
+
+    const where: Prisma.PaymentWhereInput = {
+      customer: { cityId },
+      ...(routeId ? { routeId } : {}),
+      ...(mode ? { mode: mode as PaymentMode } : {}),
+      ...(status ? { status: status as PaymentStatus } : {}),
+      ...(dateFilter ? { paymentDate: dateFilter } : {}),
+      ...(search
+        ? {
+            OR: [
+              { customer: { code: { contains: search, mode: "insensitive" } } },
+              { customer: { name: { contains: search, mode: "insensitive" } } },
+              { customer: { area: { contains: search, mode: "insensitive" } } },
+              { route: { code: { contains: search, mode: "insensitive" } } },
+              { route: { name: { contains: search, mode: "insensitive" } } },
+              { referenceNo: { contains: search, mode: "insensitive" } },
+              { notes: { contains: search, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+
+    const [total, payments, totalsRows] = await withDbTimeout(
+      Promise.all([
+        prisma.payment.count({ where }),
+        prisma.payment.findMany({
+          where,
+          orderBy: [{ paymentDate: "desc" }, { createdAt: "desc" }],
+          skip: (page - 1) * PAYMENTS_PAGE_SIZE,
+          take: PAYMENTS_PAGE_SIZE,
+          select: {
+            id: true,
+            customerId: true,
+            routeId: true,
+            amount: true,
+            paymentDate: true,
+            mode: true,
+            status: true,
+            referenceNo: true,
+            notes: true,
+            customer: { select: { code: true, name: true, area: true } },
+            route: { select: { code: true, name: true, shift: true } },
           },
-          route: {
-            select: {
-              code: true,
-              name: true,
-              shift: true,
-            },
-          },
-        },
-      }),
-    ]), "Payment data request");
+        }),
+        // Sums over every row matching the filters, not just this page — an
+        // aggregate, so it costs the same whether 5 or 50,000 rows match.
+        prisma.payment.groupBy({ by: ["status"], where, _sum: { amount: true } }),
+      ]),
+      "Payments list request",
+    );
+
+    const [customers, routes, pendingCount] = await Promise.all([
+      customersPromise,
+      routesPromise,
+      pendingCountPromise,
+    ]);
+
+    const sumByStatus = new Map(totalsRows.map((row) => [row.status, Number(row._sum.amount ?? 0)]));
+    const verified = sumByStatus.get("VERIFIED") ?? 0;
+    const pending = sumByStatus.get("PENDING") ?? 0;
+    const cancelled = sumByStatus.get("CANCELLED") ?? 0;
 
     return {
       dbConnected: true,
       customers,
       routes,
-      customerRouteLinks: customerRouteLinks.map((link) => ({
-        customerId: link.customerId,
-        routeId: link.routeId,
-        month: link.sequenceMonth.toISOString().slice(0, 7),
-      })),
       payments: payments.map((payment) => ({
         id: payment.id,
         customerId: payment.customerId,
@@ -268,6 +323,16 @@ export async function getPaymentsPayload(): Promise<PaymentsPayload> {
         routeName: payment.route?.name ?? null,
         routeShift: payment.route?.shift ?? null,
       })),
+      total,
+      page,
+      pageSize: PAYMENTS_PAGE_SIZE,
+      pendingCount,
+      totals: {
+        total: (verified + pending + cancelled).toFixed(2),
+        verified: verified.toFixed(2),
+        pending: pending.toFixed(2),
+        cancelled: cancelled.toFixed(2),
+      },
       modes: paymentModes,
       statuses: paymentStatuses,
     };
@@ -275,8 +340,32 @@ export async function getPaymentsPayload(): Promise<PaymentsPayload> {
     const message =
       error instanceof Error ? error.message : "Unable to load payment data.";
 
-    return fallbackPayload(message);
+    return fallbackPayload(page, message);
   }
+}
+
+// The "which route was this customer on" lookup used to come from preloading
+// every customer's route for every month ever assigned — already 1,444 rows
+// with barely a month of history, unbounded going forward. The payment
+// dialog only ever needs this for ONE customer and ONE month (whatever's
+// typed into the date field), so it's resolved on demand instead.
+export async function getCustomerRoutesForMonth(
+  customerId: string,
+  month: string,
+): Promise<PaymentRouteOption[]> {
+  if (!customerId || !/^\d{4}-\d{2}$/.test(month)) {
+    return [];
+  }
+
+  const cityId = await getCurrentCityId();
+  const sequenceMonth = new Date(`${month}-01T00:00:00.000Z`);
+
+  const rows = await prisma.monthlyRouteCustomerSequence.findMany({
+    where: { customerId, sequenceMonth, status: "ACTIVE", customer: { cityId } },
+    select: { route: { select: { id: true, code: true, name: true, shift: true } } },
+  });
+
+  return rows.map((row) => row.route);
 }
 
 export async function getBulkPaymentPayload(input?: {
