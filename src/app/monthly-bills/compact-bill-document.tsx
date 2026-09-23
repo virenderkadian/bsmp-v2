@@ -103,7 +103,7 @@ function CalendarHalf({
 
               return showAmt.has(product.id) ? (
                 <Fragment key={product.id}>
-                  <td className="border border-slate-300 px-1.5 py-1 text-right">
+                  <td className="border border-slate-300 px-1.5 py-1 text-center">
                     {has ? formatQuantity(cell.quantity) : "–"}
                   </td>
                   <td className="border border-slate-300 px-1.5 py-1 text-right">
@@ -111,7 +111,7 @@ function CalendarHalf({
                   </td>
                 </Fragment>
               ) : (
-                <td key={product.id} className="border border-slate-300 px-1.5 py-1 text-right">
+                <td key={product.id} className="border border-slate-300 px-1.5 py-1 text-center">
                   {has ? formatQuantity(cell.quantity) : "–"}
                 </td>
               );
@@ -129,7 +129,7 @@ function CalendarHalf({
 
               return showAmt.has(product.id) ? (
                 <Fragment key={product.id}>
-                  <td className="border border-slate-300 px-1.5 py-1 text-right">
+                  <td className="border border-slate-300 px-1.5 py-1 text-center">
                     {formatQuantity(totals?.quantity ?? "0")}
                   </td>
                   <td className="border border-slate-300 px-1.5 py-1 text-right">
@@ -137,7 +137,7 @@ function CalendarHalf({
                   </td>
                 </Fragment>
               ) : (
-                <td key={product.id} className="border border-slate-300 px-1.5 py-1 text-right">
+                <td key={product.id} className="border border-slate-300 px-1.5 py-1 text-center">
                   {formatQuantity(totals?.quantity ?? "0")}
                 </td>
               );
@@ -189,7 +189,7 @@ export function CompactBillDocument({
         <h1 className="text-lg font-bold uppercase leading-tight tracking-tight">
           {profile?.businessName ?? "Business name not set"}
         </h1>
-        {address ? <p className="mt-0.5 text-[10.5px] leading-snug text-slate-600">{address}</p> : null}
+        {address ? <p className="mt-0.5 text-[12.5px] leading-snug text-slate-600">{address}</p> : null}
         <p className="mt-1.5 flex items-baseline justify-between text-[7.5px] uppercase tracking-[0.14em] text-slate-500">
           <span>
             Bill for the month of{" "}
@@ -197,7 +197,19 @@ export function CompactBillDocument({
               {formatMonthTitle(bill.billingMonth)}
             </span>
           </span>
-          {profile?.contactPhone ? <span className="normal-case tracking-normal">{profile.contactPhone}</span> : null}
+          {profile?.contactPhone ? (
+            <span className="inline-flex items-center gap-1 text-[11px] normal-case tracking-normal text-slate-900">
+              <svg
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                className="h-[11px] w-[11px] shrink-0"
+                aria-hidden="true"
+              >
+                <path d="M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.5.6.6 0 1 .4 1 1V20.5c0 .6-.4 1-1 1C10.4 21.5 2.5 13.6 2.5 3.9c0-.6.4-1 1-1H7c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.5.1.4 0 .8-.3 1.1l-2.2 2.2z" />
+              </svg>
+              {profile.contactPhone}
+            </span>
+          ) : null}
         </p>
       </header>
 
@@ -212,7 +224,6 @@ export function CompactBillDocument({
             </dt>
             <dd className="m-0 text-[11.5px] font-bold leading-tight">{bill.customerName}</dd>
             <Field label="Code" value={bill.customerCode} />
-            {bill.customerArea ? <Field label="Area" value={bill.customerArea} /> : null}
             {bill.customerMobile ? <Field label="Mobile" value={bill.customerMobile} /> : null}
             <Field label="Stop no." value={String(bill.customerSequenceNo ?? "-")} />
           </dl>
@@ -229,6 +240,7 @@ export function CompactBillDocument({
               label="Round"
               value={bill.routeShift === "EVENING" ? "Evening" : "Morning"}
             />
+            {bill.customerArea ? <Field label="Area" value={bill.customerArea} /> : null}
             {bill.driverName ? (
               <Field
                 label="Driver"
@@ -284,7 +296,10 @@ export function CompactBillDocument({
           <span>Payment Received (−)</span>
           <span>{formatMoney(bill.paymentAmount)}</span>
         </div>
-        <div className="mt-1.5 flex items-center justify-between rounded-md bg-slate-900 px-2.5 py-2 text-white">
+        <div
+          className="mt-1.5 flex items-center justify-between rounded-md bg-slate-900 px-2.5 py-2 text-white"
+          style={{ WebkitPrintColorAdjust: "exact", printColorAdjust: "exact" }}
+        >
           <span className="text-[9px] font-semibold uppercase tracking-[0.1em]">Balance Amount</span>
           <span className="text-base font-bold">{formatMoney(bill.closingBalance)}</span>
         </div>
