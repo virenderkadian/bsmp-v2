@@ -6,6 +6,7 @@ import {
   createCustomerAndAddToMonthlyRouteSequence,
   removeMonthlyRouteSequenceLine,
   reorderMonthlyRouteSequenceLines,
+  searchMonthlySequenceCustomers,
   type MonthlySequenceActionState,
 } from "@/app/monthly-route-sequence/actions";
 import { BillingRouteDialog } from "@/app/monthly-route-sequence/billing-route-dialog";
@@ -13,8 +14,10 @@ import { PrimaryButton } from "@/components/admin/buttons";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { CustomerQuickCreateDialog } from "@/components/admin/customer-quick-create-dialog";
 import { EmptyState } from "@/components/admin/empty-state";
+import { HighlightMatch } from "@/components/admin/highlight-match";
 import { IconButton } from "@/components/admin/icon-button";
 import { GripIcon, PlusIcon, XIcon } from "@/components/admin/icons";
+import { useLoadingBar } from "@/components/admin/loading-bar";
 import { usePageMetric } from "@/components/admin/page-metric";
 import { SearchInput } from "@/components/admin/search-input";
 import { SelectInput } from "@/components/admin/select-input";
@@ -26,6 +29,7 @@ import type {
   MonthlySequenceCustomerOption,
   MonthlySequenceLineRecord,
 } from "@/lib/monthly-route-sequence";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { cn } from "@/lib/utils";
 
 const initialState: MonthlySequenceActionState = { status: "idle" };
@@ -51,15 +55,6 @@ function formatCustomerMeta(customer: MonthlySequenceCustomerOption) {
 
 function formatLineMeta(line: MonthlySequenceLineRecord) {
   return [line.customerCode, line.customerArea, line.customerMobile].filter(Boolean).join(" · ");
-}
-
-function matchesCustomer(customer: MonthlySequenceCustomerOption, query: string) {
-  const searchText = [customer.code, customer.name, customer.area, customer.currentRound, customer.mobile]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-
-  return searchText.includes(query.toLowerCase().trim());
 }
 
 function resequenceLocalLines(lines: MonthlySequenceLineRecord[]) {
@@ -88,11 +83,13 @@ function CustomerSuggestionRow({
   customer,
   active,
   alreadyAdded,
+  query,
   onSelect,
 }: {
   customer: MonthlySequenceCustomerOption;
   active: boolean;
   alreadyAdded: boolean;
+  query: string;
   onSelect: (customerId: string) => void;
 }) {
   return (
@@ -105,9 +102,11 @@ function CustomerSuggestionRow({
       onClick={() => onSelect(customer.id)}
     >
       <span>
-        <span className="block text-sm font-semibold text-text-primary">{customer.name}</span>
+        <span className="block text-sm font-semibold text-text-primary">
+          <HighlightMatch text={customer.name} query={query} />
+        </span>
         <span className="mt-0.5 block text-xs font-medium uppercase tracking-[0.12em] text-text-secondary">
-          {formatCustomerMeta(customer) || "-"}
+          <HighlightMatch text={formatCustomerMeta(customer) || "-"} query={query} />
         </span>
       </span>
       <span
@@ -160,6 +159,7 @@ function RouteMonthToolbar({ payload }: { payload: MonthlyRouteSequencePayload }
 
 function AddCustomerBar({
   query,
+  highlightQuery,
   suggestionsOpen,
   highlightedIndex,
   suggestions,
@@ -174,6 +174,10 @@ function AddCustomerBar({
   onOpenQuickCreate,
 }: {
   query: string;
+  // The query that actually produced `suggestions` — one debounce step
+  // behind `query` while typing, so highlighting never flashes a match
+  // for text the results don't reflect yet.
+  highlightQuery: string;
   suggestionsOpen: boolean;
   highlightedIndex: number;
   suggestions: MonthlySequenceCustomerOption[];
@@ -253,6 +257,7 @@ function AddCustomerBar({
                     customer={customer}
                     active={index === activeSuggestionIndex}
                     alreadyAdded={existingLineByCustomerId.has(customer.id)}
+                    query={highlightQuery}
                     onSelect={onAddCustomer}
                   />
                 ))
@@ -550,6 +555,7 @@ function SequenceTable({
 }
 
 export function MonthlyRouteSequenceScreen({ payload }: { payload: MonthlyRouteSequencePayload }) {
+  const { setBusy } = useLoadingBar();
   const [query, setQuery] = useState("");
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
@@ -580,19 +586,40 @@ export function MonthlyRouteSequenceScreen({ payload }: { payload: MonthlyRouteS
     [payload.lines],
   );
 
-  const suggestions = useMemo(() => {
-    const cleanQuery = query.trim();
+  // Searched on demand instead of filtered from a preloaded city-wide list —
+  // see searchMonthlySequenceCustomers. Not debounced when the query is
+  // empty (the "browse" case on focus should feel instant), debounced
+  // otherwise so typing doesn't fire a request per keystroke.
+  const debouncedQuery = useDebouncedValue(query, query.trim() === "" ? 0 : 250);
+  const [suggestions, setSuggestions] = useState<MonthlySequenceCustomerOption[]>([]);
+  const searchRequestId = useRef(0);
 
+  useEffect(() => {
     if (!payload.selectedRouteId) {
-      return [];
+      // Clearing a stale result set when there's nothing to search against
+      // (no route picked) — not syncing derived state from this render, the
+      // carve-out react-hooks/set-state-in-effect's own guidance makes.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setSuggestions([]);
+      setBusy(false);
+      return;
     }
 
-    if (!cleanQuery) {
-      return payload.customers.filter((customer) => !existingLineByCustomerId.has(customer.id)).slice(0, 8);
-    }
+    const requestId = ++searchRequestId.current;
+    const excludeCustomerIds = Array.from(existingLineByCustomerId.keys());
 
-    return payload.customers.filter((customer) => matchesCustomer(customer, cleanQuery)).slice(0, 8);
-  }, [existingLineByCustomerId, payload.customers, payload.selectedRouteId, query]);
+    setBusy(true);
+    searchMonthlySequenceCustomers({
+      query: debouncedQuery,
+      sequenceMonth: payload.selectedMonth,
+      excludeCustomerIds,
+    }).then((results) => {
+      if (searchRequestId.current === requestId) {
+        setSuggestions(results);
+        setBusy(false);
+      }
+    });
+  }, [debouncedQuery, existingLineByCustomerId, payload.selectedMonth, payload.selectedRouteId, setBusy]);
 
   const canAdd = payload.dbConnected && Boolean(payload.selectedRouteId) && !payload.error && !pending;
 
@@ -701,6 +728,7 @@ export function MonthlyRouteSequenceScreen({ payload }: { payload: MonthlyRouteS
 
           <AddCustomerBar
             query={query}
+            highlightQuery={debouncedQuery}
             suggestionsOpen={suggestionsOpen && canAdd}
             highlightedIndex={highlightedIndex}
             suggestions={suggestions}

@@ -1,16 +1,19 @@
 "use client";
 
-import { useActionState, useEffect, useMemo, useState } from "react";
+import { useActionState, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import type { CustomerRecord } from "@/lib/masters";
-import { usePagination } from "@/lib/use-pagination";
+import { usePathname, useSearchParams } from "next/navigation";
+import type { CustomerRecord, CustomersPayload } from "@/lib/masters";
+import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { createCustomer, setCustomerActiveState, type ActionState, updateCustomer } from "@/app/masters/actions";
 import { PrimaryButton, SecondaryButton, ActionButton } from "@/components/admin/buttons";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { DataTable } from "@/components/admin/data-table";
 import { Dialog } from "@/components/admin/dialog";
 import { FormInput } from "@/components/admin/form-input";
-import { PencilSquareIcon, PlusIcon } from "@/components/admin/icons";
+import { HighlightMatch } from "@/components/admin/highlight-match";
+import { useLoadingBar } from "@/components/admin/loading-bar";
+import { PencilSquareIcon, PlusIcon, RouteIcon } from "@/components/admin/icons";
 import { KeyboardForm } from "@/components/admin/keyboard-form";
 import { usePageMetric } from "@/components/admin/page-metric";
 import { PageActions } from "@/components/admin/page-actions";
@@ -23,8 +26,7 @@ import { StatusBadge } from "@/components/admin/status-badge";
 const initialState: ActionState = { status: "idle" };
 
 type CustomerScreenProps = {
-  customers: CustomerRecord[];
-  dbConnected: boolean;
+  payload: CustomersPayload;
 };
 
 type CustomerDialogMode = "create" | "edit" | null;
@@ -154,7 +156,6 @@ function CustomerDialog({
     }
   }, [onClose, open, state.status]);
 
-
   const draft: CustomerDraft =
     mode === "edit" && customer
       ? {
@@ -227,9 +228,7 @@ function CustomerDialog({
             this lists them rather than refusing outright. */}
         {state.duplicates && state.duplicates.length > 0 ? (
           <div className="rounded-md border border-amber-300 bg-amber-50 p-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">
-              Already in this city
-            </p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">Already in this city</p>
             <ul className="mt-2 divide-y divide-amber-200">
               {state.duplicates.map((duplicate) => (
                 <li key={duplicate.code} className="py-1.5 text-sm text-amber-900">
@@ -281,6 +280,68 @@ function CustomerRowActions({ onEdit }: { onEdit: () => void }) {
       >
         <span className="sr-only">Edit</span>
       </ActionButton>
+    </div>
+  );
+}
+
+function formatSequenceMonth(month: string) {
+  return new Date(`${month}-01T00:00:00.000Z`).toLocaleDateString("en-IN", {
+    month: "short",
+    year: "numeric",
+  });
+}
+
+// billsHere marks the route that carries a multi-route customer's single
+// combined bill (see MonthlyRouteCustomerSequence). Nothing route-related
+// shows in the row itself — wraps the name cell so hovering anywhere over a
+// customer's name/code/area reveals it, instead of a permanent column or
+// indicator every row pays for whether or not it's being looked at.
+function CustomerRouteHoverCard({ customer, children }: { customer: CustomerRecord; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const [rect, setRect] = useState<{ top: number; left: number } | null>(null);
+  const anchorRef = useRef<HTMLDivElement>(null);
+
+  if (customer.routes.length === 0) {
+    return <>{children}</>;
+  }
+
+  const showCard = () => {
+    const bounds = anchorRef.current?.getBoundingClientRect();
+    if (bounds) {
+      setRect({ top: bounds.bottom + 4, left: bounds.left });
+    }
+    setOpen(true);
+  };
+
+  return (
+    <div ref={anchorRef} className="cursor-default" onMouseEnter={showCard} onMouseLeave={() => setOpen(false)}>
+      {children}
+      {open && rect ? (
+        <div
+          className="fixed z-50 w-64 rounded-lg border border-surface-border-strong bg-surface p-3 shadow-lg"
+          style={{ top: rect.top, left: rect.left }}
+        >
+          <div className="mb-1.5 flex items-center gap-1.5 text-text-secondary">
+            <RouteIcon className="h-3.5 w-3.5" />
+            <span className="text-xs font-semibold uppercase tracking-wide">
+              {customer.routes.length > 1 ? `${customer.routes.length} routes` : "Route"}
+            </span>
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {customer.routes.map((route) => (
+              <StatusBadge key={route.routeId} tone={route.billsHere ? "info" : "neutral"}>
+                {route.routeName}
+                {route.billsHere && customer.routes.length > 1 ? " · bills here" : ""}
+              </StatusBadge>
+            ))}
+          </div>
+          {!customer.isCurrentMonth && customer.sequenceMonth ? (
+            <p className="mt-1.5 text-xs text-text-secondary">
+              Last active {formatSequenceMonth(customer.sequenceMonth)}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -347,10 +408,24 @@ function CustomerStatusToggle({ customer }: { customer: CustomerRecord }) {
   );
 }
 
-export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) {
-  const [search, setSearch] = useState("");
-  const [routeId, setRouteId] = useState("");
-  const [status, setStatus] = useState("");
+export function CustomerScreen({ payload }: CustomerScreenProps) {
+  const { customers, dbConnected, total, page, pageSize, routeOptions: routeOptionRows } = payload;
+
+  const { navigate } = useLoadingBar();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const urlSearch = searchParams.get("search") ?? "";
+  const urlRouteId = searchParams.get("routeId") ?? "";
+  const urlStatus = searchParams.get("status") ?? "";
+
+  // Typing updates this immediately (so the input feels responsive) and the
+  // URL — which is what actually triggers the server query — only after it
+  // settles. Route/status changes go straight to the URL: they're discrete
+  // choices, not something to debounce.
+  const [searchInput, setSearchInput] = useState(urlSearch);
+  const debouncedSearch = useDebouncedValue(searchInput, 350);
+
   const [dialogMode, setDialogMode] = useState<CustomerDialogMode>(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
 
@@ -359,47 +434,63 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
     [customers, selectedCustomerId],
   );
 
-  const routeOptions = useMemo(() => {
-    const uniqueRoutes = new Map<string, string>();
+  const routeOptions = useMemo(
+    () => routeOptionRows.map((route) => ({ value: route.id, label: route.name })),
+    [routeOptionRows],
+  );
 
-    customers.forEach((customer) => {
-      if (customer.sequenceRouteId && customer.sequenceRouteName) {
-        uniqueRoutes.set(customer.sequenceRouteId, customer.sequenceRouteName);
+  const updateParams = useCallback(
+    (next: Record<string, string>, options?: { resetPage?: boolean }) => {
+      const params = new URLSearchParams(searchParams.toString());
+
+      for (const [key, value] of Object.entries(next)) {
+        if (value) {
+          params.set(key, value);
+        } else {
+          params.delete(key);
+        }
       }
-    });
 
-    return Array.from(uniqueRoutes.entries())
-      .sort((a, b) => a[1].localeCompare(b[1]))
-      .map(([value, label]) => ({ value, label }));
-  }, [customers]);
+      if (options?.resetPage !== false) {
+        params.delete("page");
+      }
 
-  const filteredCustomers = useMemo(() => {
-    return customers.filter((customer) => {
-      const matchesSearch =
-        search.trim() === "" ||
-        customer.name.toLowerCase().includes(search.toLowerCase()) ||
-        (customer.area ?? "").toLowerCase().includes(search.toLowerCase());
+      navigate(params.toString() ? `${pathname}?${params.toString()}` : pathname, { replace: true, scroll: false });
+    },
+    [navigate, pathname, searchParams],
+  );
 
-      const matchesRoute = routeId === "" || customer.sequenceRouteId === routeId;
+  // Fires once the debounced value actually differs from what's in the URL
+  // — typing that lands back on the current search (e.g. type then undo)
+  // shouldn't trigger a request.
+  useEffect(() => {
+    if (debouncedSearch !== urlSearch) {
+      updateParams({ search: debouncedSearch });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch]);
 
-      const matchesStatus = status === "" || (status === "ACTIVE" ? customer.isActive : !customer.isActive);
+  // The URL is the source of truth; a change from outside typing (Clear
+  // button, back/forward navigation) needs to be reflected in the input.
+  // Adjusted during render (not an effect) to avoid an extra render pass —
+  // same pattern as usePagination's resetKey handling.
+  const [lastUrlSearch, setLastUrlSearch] = useState(urlSearch);
+  if (urlSearch !== lastUrlSearch) {
+    setLastUrlSearch(urlSearch);
+    setSearchInput(urlSearch);
+  }
 
-      return matchesSearch && matchesRoute && matchesStatus;
-    });
-  }, [customers, routeId, search, status]);
+  const hasActiveFilters = urlSearch.trim() !== "" || urlRouteId !== "" || urlStatus !== "";
 
-  const hasActiveFilters = search.trim() !== "" || routeId !== "" || status !== "";
+  usePageMetric({ label: "Customers", value: String(total) });
 
-  usePageMetric({ label: "Customers", value: String(customers.length) });
-
-  const pagination = usePagination(filteredCustomers, {
-    resetKey: `${search}|${routeId}|${status}`,
-  });
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const startIndex = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const endIndex = Math.min(page * pageSize, total);
 
   const resetFilters = () => {
-    setSearch("");
-    setRouteId("");
-    setStatus("");
+    setSearchInput("");
+    navigate(pathname, { replace: true, scroll: false });
   };
 
   const closeDialog = () => {
@@ -447,22 +538,22 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
           <div className="grid w-full gap-3 md:grid-cols-[minmax(220px,1fr)_200px_170px] xl:max-w-[760px]">
             <SearchInput
               name="search"
-              placeholder="Search by name or area"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              placeholder="Search by name, code, area, or phone"
+              value={searchInput}
+              onChange={(event) => setSearchInput(event.target.value)}
             />
             <SelectInput
               name="route"
-              value={routeId}
-              onChange={(event) => setRouteId(event.target.value)}
+              value={urlRouteId}
+              onChange={(event) => updateParams({ routeId: event.target.value })}
               placeholder="All sequence routes"
               options={routeOptions}
               className="h-10 rounded-md bg-surface text-sm"
             />
             <SelectInput
               name="status"
-              value={status}
-              onChange={(event) => setStatus(event.target.value)}
+              value={urlStatus}
+              onChange={(event) => updateParams({ status: event.target.value })}
               placeholder="All customers"
               options={[
                 { value: "ACTIVE", label: "Active" },
@@ -480,7 +571,11 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
             <div className="flex shrink-0 items-center gap-2">
               {dbConnected ? null : <StatusBadge tone="warning">Offline fallback</StatusBadge>}
               {hasActiveFilters ? (
-                <SecondaryButton type="button" onClick={resetFilters} className="h-10 shrink-0 px-4 text-sm font-medium">
+                <SecondaryButton
+                  type="button"
+                  onClick={resetFilters}
+                  className="h-10 shrink-0 px-4 text-sm font-medium"
+                >
                   Clear
                 </SecondaryButton>
               ) : null}
@@ -500,15 +595,27 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
               headerClassName: "text-right",
             },
           ]}
-          rows={pagination.pageItems.map((customer) => ({
+          rows={customers.map((customer) => ({
             key: customer.id,
             cells: [
               <div key="name" className="min-w-[260px]">
-                <p className="text-[15px] font-semibold leading-6 text-text-primary">{customer.name}</p>
-                {customer.area ? <p className="mt-0.5 text-sm text-text-secondary">{customer.area}</p> : null}
+                <CustomerRouteHoverCard customer={customer}>
+                  <p className="text-[15px] font-semibold leading-6 text-text-primary">
+                    <HighlightMatch text={customer.name} query={urlSearch} />
+                  </p>
+                  <p className="mt-0.5 text-sm text-text-secondary">
+                    <HighlightMatch text={customer.code} query={urlSearch} />
+                    {customer.area ? (
+                      <>
+                        {" · "}
+                        <HighlightMatch text={customer.area} query={urlSearch} />
+                      </>
+                    ) : null}
+                  </p>
+                </CustomerRouteHoverCard>
               </div>,
               <span key="phone" className="text-sm text-text-primary">
-                {customer.mobile || "-"}
+                {customer.mobile ? <HighlightMatch text={customer.mobile} query={urlSearch} /> : "-"}
               </span>,
               <CustomerStatusToggle key="status" customer={customer} />,
               <CustomerRowActions
@@ -529,12 +636,12 @@ export function CustomerScreen({ customers, dbConnected }: CustomerScreenProps) 
         />
 
         <Pagination
-          page={pagination.page}
-          totalPages={pagination.totalPages}
-          total={pagination.total}
-          startIndex={pagination.startIndex}
-          endIndex={pagination.endIndex}
-          onPageChange={pagination.setPage}
+          page={page}
+          totalPages={totalPages}
+          total={total}
+          startIndex={startIndex}
+          endIndex={endIndex}
+          onPageChange={(nextPage) => updateParams({ page: String(nextPage) }, { resetPage: false })}
           itemLabel="customers"
         />
       </section>

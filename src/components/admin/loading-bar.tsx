@@ -16,7 +16,7 @@ import { useRouter } from "next/navigation";
 // below instead — which also avoids a full document reload.
 
 type LoadingBarValue = {
-  navigate: (href: string) => void;
+  navigate: (href: string, options?: { replace?: boolean; scroll?: boolean }) => void;
   /** Mark a non-navigation wait, e.g. a server action. Returns a stop function. */
   setBusy: (busy: boolean) => void;
   isLoading: boolean;
@@ -40,8 +40,14 @@ export function LoadingBarProvider({ children }: { children: ReactNode }) {
   const [busy, setBusy] = useState(false);
 
   const navigate = useCallback(
-    (href: string) => {
-      startTransition(() => router.push(href));
+    (href: string, options?: { replace?: boolean; scroll?: boolean }) => {
+      startTransition(() => {
+        if (options?.replace) {
+          router.replace(href, { scroll: options.scroll });
+        } else {
+          router.push(href, { scroll: options?.scroll });
+        }
+      });
     },
     [router],
   );
