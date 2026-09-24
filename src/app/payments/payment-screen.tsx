@@ -9,12 +9,13 @@ import {
   type PaymentActionState,
   updatePayment,
 } from "@/app/payments/actions";
-import { ActionButton, PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
+import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { DataTable } from "@/components/admin/data-table";
 import { Dialog } from "@/components/admin/dialog";
 import { FormInput } from "@/components/admin/form-input";
 import { HighlightMatch } from "@/components/admin/highlight-match";
+import { IconButton } from "@/components/admin/icon-button";
 import { PencilSquareIcon } from "@/components/admin/icons";
 import { KeyboardForm } from "@/components/admin/keyboard-form";
 import { useLoadingBar } from "@/components/admin/loading-bar";
@@ -611,16 +612,14 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
                   )}
                 </span>,
                 <div key="actions" className="flex justify-end">
-                  <ActionButton
+                  <IconButton
                     type="button"
-                    icon={<PencilSquareIcon className="h-[18px] w-[18px]" />}
-                    className="h-9 w-9 justify-center rounded-md border-surface-border-strong bg-surface px-0 text-text-secondary hover:border-accent hover:bg-accent-soft hover:text-accent-soft-text"
                     onClick={() => openEditDialog(payment.id)}
                     aria-label="Edit payment"
                     title="Edit payment"
                   >
-                    <span className="sr-only">Edit payment</span>
-                  </ActionButton>
+                    <PencilSquareIcon className="h-[18px] w-[18px]" />
+                  </IconButton>
                 </div>,
               ],
             }))}

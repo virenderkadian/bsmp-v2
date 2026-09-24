@@ -6,12 +6,13 @@ import { usePathname, useSearchParams } from "next/navigation";
 import type { CustomerRecord, CustomersPayload } from "@/lib/masters";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
 import { createCustomer, setCustomerActiveState, type ActionState, updateCustomer } from "@/app/masters/actions";
-import { PrimaryButton, SecondaryButton, ActionButton } from "@/components/admin/buttons";
+import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { ConfirmDialog } from "@/components/admin/confirm-dialog";
 import { DataTable } from "@/components/admin/data-table";
 import { Dialog } from "@/components/admin/dialog";
 import { FormInput } from "@/components/admin/form-input";
 import { HighlightMatch } from "@/components/admin/highlight-match";
+import { IconButton } from "@/components/admin/icon-button";
 import { useLoadingBar } from "@/components/admin/loading-bar";
 import { PencilSquareIcon, PlusIcon, RouteIcon } from "@/components/admin/icons";
 import { KeyboardForm } from "@/components/admin/keyboard-form";
@@ -270,16 +271,9 @@ function CustomerDialog({
 function CustomerRowActions({ onEdit }: { onEdit: () => void }) {
   return (
     <div className="flex items-center justify-end">
-      <ActionButton
-        type="button"
-        icon={<PencilSquareIcon className="h-[18px] w-[18px]" />}
-        onClick={onEdit}
-        className="h-9 w-9 justify-center rounded-md border-surface-border-strong bg-surface px-0 text-text-secondary hover:border-accent hover:bg-accent-soft hover:text-accent-soft-text"
-        aria-label="Edit customer"
-        title="Edit customer"
-      >
-        <span className="sr-only">Edit</span>
-      </ActionButton>
+      <IconButton type="button" onClick={onEdit} aria-label="Edit customer" title="Edit customer">
+        <PencilSquareIcon className="h-[18px] w-[18px]" />
+      </IconButton>
     </div>
   );
 }

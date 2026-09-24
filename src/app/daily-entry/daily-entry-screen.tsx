@@ -14,6 +14,8 @@ import {
 } from "@/app/daily-entry/doorstep-payment-dialog";
 import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { Dialog } from "@/components/admin/dialog";
+import { IconButton } from "@/components/admin/icon-button";
+import { PlusIcon, WalletIcon } from "@/components/admin/icons";
 import { usePageMetric } from "@/components/admin/page-metric";
 import { Toast, type ToastTone } from "@/components/admin/toast";
 import { isQuantityUnusual } from "@/lib/quantity-baseline";
@@ -847,7 +849,7 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
                         </td>
                         <td className="px-5 py-3.5">
                           <div className="text-sm font-semibold uppercase text-text-primary">{line.customerName}</div>
-                          <div className="text-xs text-text-secondary">{line.customerCode}</div>
+                          <div className="text-xs text-text-secondary">{line.customerArea ?? line.customerCode}</div>
                           <input type="hidden" name="customerId" value={line.customerId} readOnly />
                           <input type="hidden" name="sequenceNo" value={line.sequenceNo} readOnly />
                           <input type="hidden" name="remarks" value={line.remarks} readOnly />
@@ -911,33 +913,35 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
                         })}
                         {showActions ? (
                         <td className="px-5 py-3.5">
-                          {/* Only where there is something to add — a city with
-                              every product on the grid has no occasional items,
-                              and an empty picker is worse than no button. */}
-                          {payload.occasionalProducts.length > 0 ? (
-                            <button
+                          <div className="flex items-center gap-1">
+                            {/* Only where there is something to add — a city with
+                                every product on the grid has no occasional items,
+                                and an empty picker is worse than no button. */}
+                            {payload.occasionalProducts.length > 0 ? (
+                              <IconButton
+                                type="button"
+                                onClick={() => addExtraRow(line.customerId)}
+                                title={`Sell a one-off item to ${line.customerName}`}
+                                aria-label="Item"
+                              >
+                                <PlusIcon className="h-4 w-4" />
+                              </IconButton>
+                            ) : null}
+                            <IconButton
                               type="button"
-                              onClick={() => addExtraRow(line.customerId)}
-                              title={`Sell a one-off item to ${line.customerName}`}
-                              className="inline-flex h-8 items-center gap-1 rounded-md border border-surface-border-strong bg-surface px-2.5 text-xs font-semibold text-accent transition hover:bg-surface-muted"
+                              onClick={() =>
+                                setPayingCustomer({
+                                  customerId: line.customerId,
+                                  customerName: line.customerName,
+                                  customerCode: line.customerCode,
+                                })
+                              }
+                              title={`Take a payment from ${line.customerName}`}
+                              aria-label="Pay"
                             >
-                              <span aria-hidden>+</span> Item
-                            </button>
-                          ) : null}
-                          <button
-                            type="button"
-                            onClick={() =>
-                              setPayingCustomer({
-                                customerId: line.customerId,
-                                customerName: line.customerName,
-                                customerCode: line.customerCode,
-                              })
-                            }
-                            title={`Take a payment from ${line.customerName}`}
-                            className="ml-1.5 inline-flex h-8 items-center gap-1 rounded-md border border-surface-border-strong bg-surface px-2.5 text-xs font-semibold text-accent transition hover:bg-surface-muted"
-                          >
-                            <span aria-hidden>₹</span> Pay
-                          </button>
+                              <WalletIcon className="h-4 w-4" />
+                            </IconButton>
+                          </div>
                         </td>
                         ) : null}
                       </tr>
