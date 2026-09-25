@@ -72,6 +72,27 @@ test.describe("Billing route", () => {
     expect(rows.find((row) => row.billsHere)?.routeId).toBe(TEST_ROUTE_2_ID);
   });
 
+  test("searching a name already on this route shows it as already added, not nothing", async ({ page }) => {
+    await ensureTestSequence(TEST_ROUTE_ID, [TEST_CUSTOMER_1_ID]);
+
+    await page.goto(`/monthly-route-sequence?routeId=${TEST_ROUTE_ID}&month=${TEST_MONTH}`);
+    await page.waitForLoadState("networkidle");
+
+    await page.getByPlaceholder(/search/i).first().fill("E2E Customer One");
+    const suggestion = page.getByRole("button", { name: /E2E Customer One[\s\S]*Already added/ });
+    await expect(suggestion).toBeVisible({ timeout: 10_000 });
+
+    // Clicking it highlights the existing row instead of trying to add a
+    // duplicate.
+    await suggestion.click();
+    await expect(page.getByText(/already in this sequence/i)).toBeVisible({ timeout: 10_000 });
+    expect(
+      await testPrisma().monthlyRouteCustomerSequence.count({
+        where: { routeId: TEST_ROUTE_ID, customerId: TEST_CUSTOMER_1_ID, sequenceMonth: TEST_MONTH_DATE },
+      }),
+    ).toBe(1);
+  });
+
   test("generates ONE bill covering both routes, issued on the billing route", async ({ page }) => {
     const prisma = testPrisma();
 

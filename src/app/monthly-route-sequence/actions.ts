@@ -565,7 +565,13 @@ export async function searchMonthlySequenceCustomers(input: {
   const where: Prisma.CustomerWhereInput = {
     cityId,
     isActive: true,
-    ...(input.excludeCustomerIds.length > 0 ? { id: { notIn: input.excludeCustomerIds } } : {}),
+    // Excluded only for the empty-query "browse on focus" list, which exists
+    // to surface who can still be added. A typed name must always come back
+    // — including one already in this sequence — so the operator can tell
+    // "not found" from "already added" instead of silently seeing nothing.
+    ...(query === "" && input.excludeCustomerIds.length > 0
+      ? { id: { notIn: input.excludeCustomerIds } }
+      : {}),
     ...(query
       ? {
           OR: [
