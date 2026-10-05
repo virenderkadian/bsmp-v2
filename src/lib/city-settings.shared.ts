@@ -18,6 +18,12 @@ export type CitySettings = {
   // per product actually sold.
   showOccasionalProductColumns: boolean;
   billFormat: BillFormat;
+  // The route summary puts one column per product before the money columns
+  // (Amount, Opening, Paid, Pending). A city selling many products pushes
+  // those last four off-screen, so Pending — the figure the summary exists to
+  // show — needs a horizontal scroll to even see. Capping to the first 3
+  // products (by their own sort order) keeps the money columns on screen.
+  limitSummaryProductColumns: boolean;
 };
 
 export const CITY_SETTING_DEFAULTS: CitySettings = {
@@ -26,6 +32,7 @@ export const CITY_SETTING_DEFAULTS: CitySettings = {
   // far. Changing the look of a bill is the office's decision to make, not a
   // side effect of a deployment.
   billFormat: "classic",
+  limitSummaryProductColumns: true,
 };
 
 export type CitySettingKey = keyof CitySettings;
@@ -69,6 +76,12 @@ export const CITY_SETTING_FIELDS: Record<CitySettingKey, SettingField> = {
     group: "Printing",
     label: "Column for occasional items on the route summary",
     description: "They are always in the totals, and always itemised on the bill.",
+  },
+  limitSummaryProductColumns: {
+    kind: "boolean",
+    group: "Printing",
+    label: "Limit route summary to 3 products",
+    description: "Keeps Amount, Opening and Pending on screen without scrolling. Turn off to show every product.",
   },
 };
 

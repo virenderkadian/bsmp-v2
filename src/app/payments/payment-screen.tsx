@@ -407,7 +407,8 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
   const urlRouteId = searchParams.get("routeId") ?? "";
   const urlMode = searchParams.get("mode") ?? "";
   const urlStatus = searchParams.get("status") ?? "";
-  const urlDate = searchParams.get("date") ?? "";
+  const urlDateFrom = searchParams.get("dateFrom") ?? "";
+  const urlDateTo = searchParams.get("dateTo") ?? "";
 
   const [searchInput, setSearchInput] = useState(urlSearch);
   const debouncedSearch = useDebouncedValue(searchInput, 350);
@@ -450,7 +451,12 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
   }
 
   const hasActiveFilters =
-    urlSearch.trim() !== "" || urlRouteId !== "" || urlMode !== "" || urlStatus !== "" || urlDate !== "";
+    urlSearch.trim() !== "" ||
+    urlRouteId !== "" ||
+    urlMode !== "" ||
+    urlStatus !== "" ||
+    urlDateFrom !== "" ||
+    urlDateTo !== "";
 
   const totalPages = Math.max(1, Math.ceil(payload.total / payload.pageSize));
   const startIndex = payload.total === 0 ? 0 : (payload.page - 1) * payload.pageSize + 1;
@@ -507,7 +513,7 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
         </div>
 
         <div className="flex flex-col gap-3 xl:flex-row xl:flex-wrap xl:items-center xl:justify-between">
-          <div className="grid w-full gap-3 md:grid-cols-[minmax(280px,1fr)_180px_170px] xl:max-w-6xl xl:grid-cols-[minmax(300px,1fr)_220px_160px_170px_180px]">
+          <div className="grid w-full gap-3 md:grid-cols-[minmax(280px,1fr)_180px_170px] xl:max-w-6xl xl:grid-cols-[minmax(280px,1fr)_200px_150px_160px_140px_140px]">
             <SearchInput
               name="search"
               placeholder="Search customer, route, reference"
@@ -540,10 +546,19 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
             />
             <input
               type="date"
-              value={urlDate}
-              onChange={(event) => updateParams({ date: event.target.value })}
+              value={urlDateFrom}
+              onChange={(event) => updateParams({ dateFrom: event.target.value })}
+              max={urlDateTo || undefined}
               className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
-              aria-label="Filter by payment date"
+              aria-label="From date"
+            />
+            <input
+              type="date"
+              value={urlDateTo}
+              onChange={(event) => updateParams({ dateTo: event.target.value })}
+              min={urlDateFrom || undefined}
+              className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
+              aria-label="To date"
             />
           </div>
           <div className="flex items-center gap-3">

@@ -203,7 +203,8 @@ export async function getPaymentsPayload(input?: {
   routeId?: string;
   mode?: string;
   status?: string;
-  date?: string;
+  dateFrom?: string;
+  dateTo?: string;
   page?: number;
 }): Promise<PaymentsPayload> {
   const page = input?.page && input.page > 0 ? Math.floor(input.page) : 1;
@@ -211,7 +212,8 @@ export async function getPaymentsPayload(input?: {
   const routeId = input?.routeId ?? "";
   const mode = input?.mode ?? "";
   const status = input?.status ?? "";
-  const date = input?.date ?? "";
+  const dateFrom = input?.dateFrom ?? "";
+  const dateTo = input?.dateTo ?? "";
 
   try {
     const cityId = await getCurrentCityId();
@@ -232,13 +234,13 @@ export async function getPaymentsPayload(input?: {
       where: { customer: { cityId }, status: "PENDING" },
     }), "Pending payment count request");
 
+    const isValidDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value);
     const dateFilter =
-      date && /^\d{4}-\d{2}-\d{2}$/.test(date)
-        ? (() => {
-            const start = new Date(`${date}T00:00:00.000Z`);
-            const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-            return { gte: start, lt: end };
-          })()
+      isValidDate(dateFrom) || isValidDate(dateTo)
+        ? {
+            ...(isValidDate(dateFrom) ? { gte: new Date(`${dateFrom}T00:00:00.000Z`) } : {}),
+            ...(isValidDate(dateTo) ? { lt: new Date(new Date(`${dateTo}T00:00:00.000Z`).getTime() + 24 * 60 * 60 * 1000) } : {}),
+          }
         : undefined;
 
     const where: Prisma.PaymentWhereInput = {
