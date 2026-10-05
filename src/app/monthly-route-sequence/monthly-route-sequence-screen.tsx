@@ -562,7 +562,7 @@ export function MonthlyRouteSequenceScreen({ payload }: { payload: MonthlyRouteS
   const [highlightedLineId, setHighlightedLineId] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [quickCreateOpen, setQuickCreateOpen] = useState(false);
-  const lastAddMessageRef = useRef("");
+  const lastAddStateRef = useRef<MonthlySequenceActionState>(initialState);
   const formRef = useRef<HTMLFormElement>(null);
   const customerIdRef = useRef<HTMLInputElement>(null);
   const billingRouteIdRef = useRef<HTMLInputElement>(null);
@@ -644,19 +644,39 @@ export function MonthlyRouteSequenceScreen({ payload }: { payload: MonthlyRouteS
       return;
     }
 
-    const key = `${state.status}:${state.message}`;
-
-    if (lastAddMessageRef.current === key) {
+    // Dedupe on the state object's own identity rather than its message text
+    // — useActionState hands back a genuinely new object every time the
+    // action resolves, but a normal add always returns the exact same success
+    // message ("Customer added to monthly sequence."), so comparing strings
+    // made this fire once and then silently stop on every add after the
+    // first: same message twice in a row looked like "already handled."
+    if (lastAddStateRef.current === state) {
       return;
     }
 
-    lastAddMessageRef.current = key;
+    lastAddStateRef.current = state;
     showToast({
       tone: state.status === "success" ? "success" : "warning",
       message: state.status === "success" ? "Customer added to sequence." : state.message,
     });
     searchInputRef.current?.focus();
-  }, [showToast, state.message, state.status]);
+
+    // The newly added customer always lands last — sequenceNo is max+1 and
+    // the sequence is fetched ordered ascending — so scrolling the last row
+    // into view always shows what was just added.
+    if (state.status === "success") {
+      const lastLine = payload.lines[payload.lines.length - 1];
+
+      if (lastLine) {
+        window.setTimeout(() => {
+          document.getElementById(`sequence-row-${lastLine.id}`)?.scrollIntoView({
+            block: "end",
+            behavior: "smooth",
+          });
+        }, 0);
+      }
+    }
+  }, [showToast, state, payload.lines]);
 
   const highlightExistingLine = (line: MonthlySequenceLineRecord) => {
     setHighlightedLineId(line.id);

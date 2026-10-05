@@ -9,7 +9,8 @@ export default async function PaymentsPage({
     routeId?: string;
     mode?: string;
     status?: string;
-    date?: string;
+    dateFrom?: string;
+    dateTo?: string;
     page?: string;
   }>;
 }) {
@@ -19,7 +20,8 @@ export default async function PaymentsPage({
     routeId: params.routeId,
     mode: params.mode,
     status: params.status,
-    date: params.date,
+    dateFrom: params.dateFrom,
+    dateTo: params.dateTo,
     page: params.page ? Number(params.page) : 1,
   });
 

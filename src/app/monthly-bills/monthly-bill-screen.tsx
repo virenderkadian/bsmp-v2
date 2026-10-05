@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useActionState, useCallback, useEffect, useMemo, useState } from "react";
+import { useActionState, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   generateMonthlyBills,
   type MonthlyBillActionState,
@@ -428,6 +428,7 @@ function GenerateBillsDialog({
   onClose: () => void;
 }) {
   const [state, action, pending] = useActionState(generateMonthlyBills, initialState);
+  const handledStateRef = useRef(initialState);
   const [billingMonth, setBillingMonth] = useState(defaultMonth);
   // "One customer" is a mode within this same dialog and the same action —
   // the generate pipeline is unchanged, every query in it is just scoped down
@@ -452,6 +453,20 @@ function GenerateBillsDialog({
       return;
     }
 
+    // This dialog stays mounted across close/reopen — only `open` toggles —
+    // so `state` from the last successful generate is still sitting there the
+    // next time it opens. Without this check, reopening (an `open` change,
+    // the effect's own dependency) re-ran this on that stale leftover
+    // "success" and closed the dialog again on its own before anything had
+    // been submitted the second time. useActionState hands back a genuinely
+    // new object only when the action actually resolves, so comparing by
+    // reference tells a fresh result apart from a stale one.
+    if (handledStateRef.current === state) {
+      return;
+    }
+
+    handledStateRef.current = state;
+
     // Bare onClose, not handleClose: this effect only tells the PARENT to
     // close, which is fine from an effect. handleClose additionally resets
     // this component's own state, and calling that from an effect is what
@@ -470,7 +485,7 @@ function GenerateBillsDialog({
     }
 
     onClose();
-  }, [onClose, open, state.status, state.message, mode]);
+  }, [onClose, open, state, mode]);
 
   // Carry-forward opening balances come from the previous month's CLOSING. If
   // that month still has unlocked bills, its closings can still move, so this
@@ -1108,32 +1123,34 @@ export function MonthlyBillScreen({
 
   return (
     <>
-      <PageActions>
-        <SecondaryButton
-          type="button"
-          onClick={() => setPrintSummaryOpen(true)}
-          icon={<BillIcon className="h-4 w-4" />}
-        >
-          Print summary
-        </SecondaryButton>
-        <PrimaryButton
-          type="button"
-          onClick={() => setGenerateOpen(true)}
-          icon={<BillIcon className="h-4 w-4" />}
-          className="h-10 rounded-md px-5 text-sm font-semibold"
-        >
-          Generate bills
-        </PrimaryButton>
-        <SecondaryButton
-          type="button"
-          onClick={() => setRevertOpen(true)}
-          title="Reopen Generated bills for editing — Locked bills are never touched"
-        >
-          Revert to Draft
-        </SecondaryButton>
-      </PageActions>
-
       <div className="sticky top-[65px] z-10 -mx-4 border-b border-surface-border bg-app-bg/95 px-4 py-3 backdrop-blur transition-colors duration-200 sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+        <div className="mb-3 border-b border-surface-border/60 pb-3">
+          <PageActions>
+            <SecondaryButton
+              type="button"
+              onClick={() => setPrintSummaryOpen(true)}
+              icon={<BillIcon className="h-4 w-4" />}
+            >
+              Print summary
+            </SecondaryButton>
+            <PrimaryButton
+              type="button"
+              onClick={() => setGenerateOpen(true)}
+              icon={<BillIcon className="h-4 w-4" />}
+              className="h-10 rounded-md px-5 text-sm font-semibold"
+            >
+              Generate bills
+            </PrimaryButton>
+            <SecondaryButton
+              type="button"
+              onClick={() => setRevertOpen(true)}
+              title="Reopen Generated bills for editing — Locked bills are never touched"
+            >
+              Revert to Draft
+            </SecondaryButton>
+          </PageActions>
+        </div>
+
         <div className="flex flex-wrap items-center gap-3">
           <MasterTabs
             tabs={[

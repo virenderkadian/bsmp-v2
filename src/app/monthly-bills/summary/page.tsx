@@ -56,7 +56,7 @@ function TotalsRow({
   productIds: string[];
 }) {
   return (
-    <tr className="bg-slate-100 text-sm font-bold text-slate-900 print:text-[11px]">
+    <tr className="break-inside-avoid bg-slate-100 text-sm font-bold text-slate-900 print:text-[11px]">
       <td className="border-t border-slate-300 px-3 py-1.5 text-center print:px-1 print:py-0.5" colSpan={2}>
         {label}
       </td>
@@ -171,7 +171,7 @@ export default async function MonthlyBillSummaryPage({
 
         <div className="space-y-5">
           {payload.routes.map((route) => (
-            <section key={route.id} className="break-inside-avoid rounded-lg border border-slate-200 print:border-slate-300">
+            <section key={route.id} className="rounded-lg border border-slate-200 print:border-slate-300">
               {/* The page header above already states the route name and
                   customer count when there's only one route — repeating it
                   here would just be noise. Only needed to tell sections
@@ -227,7 +227,7 @@ export default async function MonthlyBillSummaryPage({
                     </thead>
                     <tbody className="divide-y divide-slate-200">
                       {route.rows.map((row) => (
-                        <tr key={row.key} className="text-slate-900">
+                        <tr key={row.key} className="break-inside-avoid text-slate-900">
                           <td className="px-3 py-1.5 text-slate-600 print:px-1 print:py-0.5">
                             {row.sequenceNo}
                           </td>

@@ -1028,7 +1028,7 @@ export async function getMonthlyBillSummary(input?: {
     // disagree.
     const settings = await getCitySettings(cityId);
 
-    return narrowSummaryToSoldProducts({
+    const narrowed = narrowSummaryToSoldProducts({
       dbConnected: true,
       selectedMonth,
       selectedRouteId,
@@ -1041,6 +1041,14 @@ export async function getMonthlyBillSummary(input?: {
       outstanding,
       figuresAsOf,
     }, settings.showOccasionalProductColumns);
+
+    // Amount/Opening/Paid/Pending come from the row itself, not from the
+    // product columns, so trimming which products get a column never touches
+    // them — a route selling 8 products still shows its real totals with
+    // only the first 3 columns visible.
+    return settings.limitSummaryProductColumns
+      ? { ...narrowed, products: narrowed.products.slice(0, 3) }
+      : narrowed;
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Unable to load monthly bill summary.";
