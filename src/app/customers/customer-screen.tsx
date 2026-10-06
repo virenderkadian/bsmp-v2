@@ -14,7 +14,7 @@ import { FormInput } from "@/components/admin/form-input";
 import { HighlightMatch } from "@/components/admin/highlight-match";
 import { IconButton } from "@/components/admin/icon-button";
 import { useLoadingBar } from "@/components/admin/loading-bar";
-import { PencilSquareIcon, PlusIcon, RouteIcon } from "@/components/admin/icons";
+import { EyeIcon, PencilSquareIcon, PlusIcon, RouteIcon } from "@/components/admin/icons";
 import { KeyboardForm } from "@/components/admin/keyboard-form";
 import { usePageMetric } from "@/components/admin/page-metric";
 import { PageActions } from "@/components/admin/page-actions";
@@ -268,9 +268,17 @@ function CustomerDialog({
   );
 }
 
-function CustomerRowActions({ onEdit }: { onEdit: () => void }) {
+function CustomerRowActions({ customerId, onEdit }: { customerId: string; onEdit: () => void }) {
   return (
-    <div className="flex items-center justify-end">
+    <div className="flex items-center justify-end gap-1">
+      <Link
+        href={`/customers/${customerId}`}
+        aria-label="View customer"
+        title="View customer"
+        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-text-secondary transition hover:bg-surface-muted hover:text-text-primary"
+      >
+        <EyeIcon className="h-[18px] w-[18px]" />
+      </Link>
       <IconButton type="button" onClick={onEdit} aria-label="Edit customer" title="Edit customer">
         <PencilSquareIcon className="h-[18px] w-[18px]" />
       </IconButton>
@@ -653,6 +661,7 @@ export function CustomerScreen({ payload }: CustomerScreenProps) {
               <CustomerStatusToggle key="status" customer={customer} />,
               <CustomerRowActions
                 key="actions"
+                customerId={customer.id}
                 onEdit={() => {
                   openEditDialog(customer.id);
                 }}
