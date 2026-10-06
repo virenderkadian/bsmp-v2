@@ -355,6 +355,78 @@ export async function saveDailyEntry(
         }
       }
 
+      // Keep each customer+product's recent-order cache (see
+      // CustomerProductRecentOrder in schema.prisma) in step with what was
+      // just saved — this is what "usual order"/"unusual quantity" in Daily
+      // Entry reads instead of re-scanning 45 days of raw deliveries on
+      // every page load. Scoped to only the pairs whose quantity actually
+      // changed this save, so an unedited route costs nothing here, and a
+      // typical save (a handful of corrected cells) touches only those.
+      //
+      // Doesn't check line.skipped — there's no UI control that ever sets it
+      // true today, so every submitted line is effectively unskipped. If a
+      // skip control is ever added, a skipped line's quantities should be
+      // excluded here the same way the old read path excluded them.
+      const newQtyByCustomerProduct = new Map<string, number>();
+      parsed.data.lines.forEach((line) => {
+        line.products.forEach((product) => {
+          newQtyByCustomerProduct.set(`${line.customerId}:${product.productId}`, product.quantity);
+        });
+      });
+
+      const touchedPairKeys = new Set([
+        ...previousQtyByCustomerProduct.keys(),
+        ...newQtyByCustomerProduct.keys(),
+      ]);
+      const changedPairs = [...touchedPairKeys]
+        .map((key) => {
+          const [customerId, productId] = key.split(":");
+          return {
+            key,
+            customerId,
+            productId,
+            newQty: newQtyByCustomerProduct.get(key) ?? 0,
+          };
+        })
+        .filter((pair) => pair.newQty !== (previousQtyByCustomerProduct.get(pair.key) ?? 0));
+
+      if (changedPairs.length > 0) {
+        const existingOrders = await tx.customerProductRecentOrder.findMany({
+          where: {
+            OR: changedPairs.map((pair) => ({ customerId: pair.customerId, productId: pair.productId })),
+          },
+          select: { customerId: true, productId: true, entries: true },
+        });
+        const existingByKey = new Map(
+          existingOrders.map((row) => [
+            `${row.customerId}:${row.productId}`,
+            row.entries as Array<{ date: string; quantity: number }>,
+          ]),
+        );
+
+        for (const pair of changedPairs) {
+          const current = existingByKey.get(pair.key) ?? [];
+          // Drop any entry already on file for this exact date first — a
+          // resave of the same day (an edit/correction) replaces it rather
+          // than appending a duplicate.
+          const withoutToday = current.filter((item) => item.date !== parsed.data.entryDate);
+          const next =
+            pair.newQty > 0
+              ? [{ date: parsed.data.entryDate, quantity: pair.newQty }, ...withoutToday]
+              : withoutToday;
+          // Re-sorted rather than trusted as already-ordered: Daily Entry can
+          // save a backdated date, which wouldn't belong at the front.
+          next.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+          const capped = next.slice(0, 10) as Prisma.InputJsonValue;
+
+          await tx.customerProductRecentOrder.upsert({
+            where: { customerId_productId: { customerId: pair.customerId, productId: pair.productId } },
+            create: { customerId: pair.customerId, productId: pair.productId, entries: capped },
+            update: { entries: capped },
+          });
+        }
+      }
+
       // Occasional sales and hand-typed rates, named in the trail.
       //
       // These ship before any permission system exists, so any office user can

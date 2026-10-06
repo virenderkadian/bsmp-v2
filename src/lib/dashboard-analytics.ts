@@ -154,23 +154,24 @@ export async function getAnalyticsPayload(input?: {
           orderBy: { displayOrder: "asc" },
           select: { id: true, name: true, unit: true },
         }),
-        prisma.dailyRouteEntry.findMany({
-          where: {
-            // Every route has a vehicle now (see the route_vehicle_required
-            // migration), so there is nothing left to filter out here.
-            route: { cityId },
-            entryDate: { gte: new Date(queryFrom), lte: new Date(to) },
-          },
-          select: {
-            entryDate: true,
-            route: { select: { vehicleId: true } },
-            lines: {
-              select: {
-                productEntries: { select: { productId: true, quantity: true } },
-              },
-            },
-          },
-        }),
+        // Summed in SQL rather than pulled row-by-row and summed in JS —
+        // this was one of the two queries driving the Supabase egress
+        // overage (confirmed via production query-performance data: ~14.7M
+        // rows read across ~1,076 calls, because it pulled every delivery
+        // line for every route in the city across up to 104 days on every
+        // dashboard view). Grouped by (day, vehicle, product), the result is
+        // a few thousand rows at most — the chart only ever needs sums at
+        // that granularity, never individual deliveries.
+        prisma.$queryRaw<Array<{ entryDate: Date; vehicleId: string; productId: string; quantity: unknown }>>`
+          SELECT e."entryDate" AS "entryDate", r."vehicleId" AS "vehicleId", dp."productId" AS "productId",
+            SUM(dp.quantity)::numeric AS "quantity"
+          FROM "DailyRouteEntryLineProduct" dp
+          JOIN "DailyRouteEntryLine" dl ON dl.id = dp."lineId"
+          JOIN "DailyRouteEntry" e ON e.id = dl."entryId"
+          JOIN "Route" r ON r.id = e."routeId"
+          WHERE r."cityId" = ${cityId}::uuid AND e."entryDate" >= ${new Date(queryFrom)} AND e."entryDate" <= ${new Date(to)}
+          GROUP BY e."entryDate", r."vehicleId", dp."productId"
+        `,
       ]),
       "Dashboard analytics request",
       10_000,
@@ -190,30 +191,25 @@ export async function getAnalyticsPayload(input?: {
     // qtyByProductVehicle[productId] -> Map(vehicleId -> qty), summed over [from, to] only
     const qtyByProductVehicle = new Map<string, Map<string, number>>();
 
-    for (const entry of entries) {
-      const vehicleId = entry.route.vehicleId;
-      const date = toDateInput(entry.entryDate);
+    for (const row of entries) {
+      const vehicleId = row.vehicleId;
+      const date = toDateInput(row.entryDate);
+      const qty = Number(row.quantity);
 
       let vehicleDates = qtyByVehicleDate.get(vehicleId);
       if (!vehicleDates) {
         vehicleDates = new Map();
         qtyByVehicleDate.set(vehicleId, vehicleDates);
       }
+      vehicleDates.set(date, (vehicleDates.get(date) ?? 0) + qty);
 
-      for (const line of entry.lines) {
-        for (const productEntry of line.productEntries) {
-          const qty = Number(productEntry.quantity);
-          vehicleDates.set(date, (vehicleDates.get(date) ?? 0) + qty);
-
-          if (date >= from && date <= to) {
-            let productVehicles = qtyByProductVehicle.get(productEntry.productId);
-            if (!productVehicles) {
-              productVehicles = new Map();
-              qtyByProductVehicle.set(productEntry.productId, productVehicles);
-            }
-            productVehicles.set(vehicleId, (productVehicles.get(vehicleId) ?? 0) + qty);
-          }
+      if (date >= from && date <= to) {
+        let productVehicles = qtyByProductVehicle.get(row.productId);
+        if (!productVehicles) {
+          productVehicles = new Map();
+          qtyByProductVehicle.set(row.productId, productVehicles);
         }
+        productVehicles.set(vehicleId, (productVehicles.get(vehicleId) ?? 0) + qty);
       }
     }
 

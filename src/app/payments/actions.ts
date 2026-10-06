@@ -7,6 +7,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentCityId } from "@/lib/current-city";
 import { getCurrentUser } from "@/lib/current-user";
 import { logAudit } from "@/lib/audit";
+import { findLockingBill } from "@/lib/bill-ledger";
 import {
   getBillQuickView,
   getCustomerRoutesForMonth as getCustomerRoutesForMonthQuery,
@@ -156,6 +157,16 @@ export async function updatePayment(
   return runAction(async () => {
     const cityId = await getCurrentCityId();
     const before = await prisma.payment.findUnique({ where: { id: parsed.data.id } });
+
+    if (before && (Number(before.amount) !== parsed.data.amount || before.status !== parsed.data.status)) {
+      const lockingBill = await findLockingBill(prisma, before.customerId, before.createdAt);
+      if (lockingBill) {
+        throw new Error(
+          `This payment is already counted in the ${lockingBill.billingMonth.toISOString().slice(0, 7)} bill, which is Locked. Unlock that bill first, then edit the payment.`,
+        );
+      }
+    }
+
     const after = await prisma.payment.update({
       where: { id: parsed.data.id },
       data: {
@@ -200,6 +211,16 @@ export async function setPaymentStatus(
   return runAction(async () => {
     const cityId = await getCurrentCityId();
     const before = await prisma.payment.findUnique({ where: { id: parsed.data.id } });
+
+    if (before && before.status !== parsed.data.status) {
+      const lockingBill = await findLockingBill(prisma, before.customerId, before.createdAt);
+      if (lockingBill) {
+        throw new Error(
+          `This payment is already counted in the ${lockingBill.billingMonth.toISOString().slice(0, 7)} bill, which is Locked. Unlock that bill first, then change the payment's status.`,
+        );
+      }
+    }
+
     const after = await prisma.payment.update({
       where: { id: parsed.data.id },
       data: {
