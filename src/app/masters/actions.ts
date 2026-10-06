@@ -748,3 +748,41 @@ export async function setVehicleActiveState(
     nextActiveState ? "Vehicle activated." : "Vehicle made inactive.",
   );
 }
+
+export type GlobalCustomerSearchResult = {
+  id: string;
+  code: string;
+  name: string;
+  area: string | null;
+  mobile: string | null;
+};
+
+// Cmd/Ctrl+K global search. Same on-demand shape as
+// searchMonthlySequenceCustomers (src/app/monthly-route-sequence/actions.ts)
+// — bounded to a handful of matches rather than a city-wide list — but with
+// no "browse on focus" case: there's no natural set to show before typing
+// here, so an empty query returns nothing.
+export async function searchCustomersGlobal(query: string): Promise<GlobalCustomerSearchResult[]> {
+  const cityId = await getCurrentCityId();
+  const trimmed = query.trim();
+
+  if (trimmed === "") {
+    return [];
+  }
+
+  return prisma.customer.findMany({
+    where: {
+      cityId,
+      isActive: true,
+      OR: [
+        { code: { contains: trimmed, mode: "insensitive" } },
+        { name: { contains: trimmed, mode: "insensitive" } },
+        { area: { contains: trimmed, mode: "insensitive" } },
+        { mobile: { contains: trimmed, mode: "insensitive" } },
+      ],
+    },
+    orderBy: { code: "asc" },
+    take: 8,
+    select: { id: true, code: true, name: true, area: true, mobile: true },
+  });
+}

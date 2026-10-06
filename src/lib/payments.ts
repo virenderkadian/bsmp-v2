@@ -205,6 +205,10 @@ export async function getPaymentsPayload(input?: {
   status?: string;
   dateFrom?: string;
   dateTo?: string;
+  // Scopes to one customer's payments — used by the customer portfolio page,
+  // which wants this exact same filtered/paginated/summed shape for one
+  // person instead of duplicating the query.
+  customerId?: string;
   page?: number;
 }): Promise<PaymentsPayload> {
   const page = input?.page && input.page > 0 ? Math.floor(input.page) : 1;
@@ -214,6 +218,7 @@ export async function getPaymentsPayload(input?: {
   const status = input?.status ?? "";
   const dateFrom = input?.dateFrom ?? "";
   const dateTo = input?.dateTo ?? "";
+  const customerId = input?.customerId ?? "";
 
   try {
     const cityId = await getCurrentCityId();
@@ -245,6 +250,7 @@ export async function getPaymentsPayload(input?: {
 
     const where: Prisma.PaymentWhereInput = {
       customer: { cityId },
+      ...(customerId ? { customerId } : {}),
       ...(routeId ? { routeId } : {}),
       ...(mode ? { mode: mode as PaymentMode } : {}),
       ...(status ? { status: status as PaymentStatus } : {}),

@@ -37,6 +37,13 @@ const EXTRA_PAGES: ExtraPage[] = [
     backHref: "/customers",
   },
   {
+    path: "/customers/",
+    prefix: true,
+    title: "Customer Profile",
+    subtitle: "One customer's bills, payments, and delivery history.",
+    backHref: "/customers",
+  },
+  {
     path: "/monthly-bills/summary",
     title: "Customer Summary",
     subtitle: "Month-wise customer delivery and payment summary, printable per route.",
