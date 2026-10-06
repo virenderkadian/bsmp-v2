@@ -273,6 +273,19 @@ test.describe("Daily Entry usual-order helper", () => {
     await prisma.dailyRouteEntryLineProduct.create({
       data: { lineId: pastLine.id, productId: TEST_PRODUCT_ID, quantity: 7, rateSnapshot: 60 },
     });
+    // The "usual order" read path no longer re-scans raw deliveries — it
+    // reads CustomerProductRecentOrder, which saveDailyEntry keeps up to
+    // date incrementally. This test seeds history directly rather than
+    // through a real save, so it has to seed this cache too.
+    await prisma.customerProductRecentOrder.upsert({
+      where: { customerId_productId: { customerId: TEST_CUSTOMER_1_ID, productId: TEST_PRODUCT_ID } },
+      create: {
+        customerId: TEST_CUSTOMER_1_ID,
+        productId: TEST_PRODUCT_ID,
+        entries: [{ date: testDate("08"), quantity: 7 }],
+      },
+      update: { entries: [{ date: testDate("08"), quantity: 7 }] },
+    });
 
     await page.goto(`/daily-entry?routeId=${TEST_ROUTE_ID}&entryDate=${testDate("09")}`);
     await page.waitForLoadState("networkidle");

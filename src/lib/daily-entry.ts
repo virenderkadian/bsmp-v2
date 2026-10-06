@@ -277,70 +277,66 @@ export async function getDailyEntryPayload(input?: {
       existingEntry?.lines.map((line) => [line.customerId, line]) ?? [],
     );
 
-    // What each customer most recently took ON THIS ROUTE, so the operator can
-    // see their usual order while typing instead of recalling it. Bounded to a
-    // 45-day window (same as the driver app) so a customer who's been away for
-    // a while still shows something, without scanning all history.
-    const entryDate = new Date(selectedDate);
-    const recentSince = new Date(entryDate);
-    recentSince.setUTCDate(recentSince.getUTCDate() - 45);
-    const recentEntries = await withDbTimeout(
-      prisma.dailyRouteEntry.findMany({
-        where: { routeId: routePacket.id, entryDate: { lt: entryDate, gte: recentSince } },
-        orderBy: { entryDate: "desc" },
-        select: {
-          lines: {
-            where: { skipped: false },
-            select: { customerId: true, productEntries: { select: { productId: true, quantity: true } } },
-          },
-        },
-      }),
-      "Daily entry recent order request",
-    );
+    // What each customer most recently took ON THIS ROUTE, and their recent
+    // history per product, so the operator can see their usual order while
+    // typing instead of recalling it — read from CustomerProductRecentOrder,
+    // a small table saveDailyEntry keeps up to date incrementally, instead
+    // of re-scanning 45 days of raw deliveries on every page load (that scan
+    // was reading millions of rows a month for this one feature). The raw
+    // per-product history is kept (not just an average) because the "seen
+    // before" exemption in quantity-baseline.ts needs an exact match against
+    // it, not a derived statistic.
+    const routeCustomerIds = routePacket.monthlySequences.map((sequence) => sequence.customerId);
+    const recentOrders = routeCustomerIds.length === 0
+      ? []
+      : await withDbTimeout(
+          prisma.customerProductRecentOrder.findMany({
+            where: { customerId: { in: routeCustomerIds } },
+            select: { customerId: true, productId: true, entries: true },
+          }),
+          "Daily entry recent order request",
+        );
 
-    // Newest-first, so the first non-empty delivery seen per customer is their
-    // latest actual order.
-    const recentOrderByCustomer = new Map<string, Map<string, number>>();
-    for (const entry of recentEntries) {
-      for (const line of entry.lines) {
-        if (recentOrderByCustomer.has(line.customerId)) {
-          continue;
-        }
-        const quantities = new Map<string, number>();
-        line.productEntries.forEach((productEntry) => {
-          const quantity = Number(productEntry.quantity);
-          if (quantity > 0) {
-            quantities.set(productEntry.productId, quantity);
-          }
-        });
-        if (quantities.size > 0) {
-          recentOrderByCustomer.set(line.customerId, quantities);
-        }
+    const recentQuantitiesByCustomerProduct = new Map<string, number[]>();
+    // Per customer: the newest date any of their products was delivered —
+    // "their last visit." A product not part of that visit's basket reads as
+    // 0 for lastQuantity below even if it was bought a few days earlier;
+    // that distinction is the whole reason this isn't just "this product's
+    // own most recent delivery."
+    const newestDateByCustomer = new Map<string, string>();
+    const basketByCustomerDate = new Map<string, Map<string, number>>();
+
+    for (const order of recentOrders) {
+      const entries = order.entries as Array<{ date: string; quantity: number }>;
+      recentQuantitiesByCustomerProduct.set(
+        `${order.customerId}:${order.productId}`,
+        entries.map((entry) => entry.quantity),
+      );
+
+      // Stored newest-first by saveDailyEntry, so entries[0] is this
+      // customer+product's own most recent delivery.
+      const newest = entries[0];
+      if (!newest) {
+        continue;
       }
+      const currentNewest = newestDateByCustomer.get(order.customerId);
+      if (!currentNewest || newest.date > currentNewest) {
+        newestDateByCustomer.set(order.customerId, newest.date);
+      }
+      const basketKey = `${order.customerId}:${newest.date}`;
+      let basket = basketByCustomerDate.get(basketKey);
+      if (!basket) {
+        basket = new Map();
+        basketByCustomerDate.set(basketKey, basket);
+      }
+      basket.set(order.productId, newest.quantity);
     }
 
-    // Up to the last 10 non-zero deliveries per customer+product, from the
-    // SAME 45-day window already fetched above — no second query. This is
-    // deliberately more than the single "most recent" value above: a median
-    // needs several points, and capping at 10 means a long-standing regular
-    // costs no more to process than someone with just enough history to
-    // register at all.
-    const RECENT_QUANTITIES_LIMIT = 10;
-    const recentQuantitiesByCustomerProduct = new Map<string, number[]>();
-    for (const entry of recentEntries) {
-      for (const line of entry.lines) {
-        for (const productEntry of line.productEntries) {
-          const quantity = Number(productEntry.quantity);
-          if (quantity <= 0) {
-            continue;
-          }
-          const key = `${line.customerId}:${productEntry.productId}`;
-          const values = recentQuantitiesByCustomerProduct.get(key) ?? [];
-          if (values.length < RECENT_QUANTITIES_LIMIT) {
-            values.push(quantity);
-            recentQuantitiesByCustomerProduct.set(key, values);
-          }
-        }
+    const recentOrderByCustomer = new Map<string, Map<string, number>>();
+    for (const [customerId, newestDate] of newestDateByCustomer) {
+      const basket = basketByCustomerDate.get(`${customerId}:${newestDate}`);
+      if (basket) {
+        recentOrderByCustomer.set(customerId, basket);
       }
     }
 

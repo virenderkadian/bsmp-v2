@@ -162,6 +162,7 @@ model Product {
   lineProducts            DailyRouteEntryLineProduct[]
   billItems               MonthlyBillItem[]
   cycleStocks             VehicleCycleStock[]
+  recentOrders            CustomerProductRecentOrder[]
 
   @@unique([cityId, code])
   @@index([cityId, isActive, showInDailyEntry, displayOrder])
@@ -220,8 +221,32 @@ model Customer {
   payments         Payment[]
   monthlyBills     MonthlyBill[]
   notifications    NotificationOutbox[]
+  recentOrders     CustomerProductRecentOrder[]
 
   @@unique([cityId, code])
+}
+
+// A small, incrementally-maintained cache of each customer's recent orders
+// for one product, kept up to date by saveDailyEntry rather than recomputed
+// from scratch on every Daily Entry page load. Replaces a 45-day scan over
+// DailyRouteEntry/Line/ProductEntry that was reading millions of rows a
+// month just to answer "what does this customer usually take" — see
+// src/lib/quantity-baseline.ts and src/lib/daily-entry.ts for how it's used.
+model CustomerProductRecentOrder {
+  id         String   @id @default(uuid()) @db.Uuid
+  customerId String   @db.Uuid
+  productId  String   @db.Uuid
+  // Up to the last 10 non-zero deliveries of this product to this customer,
+  // newest first: [{ date: "YYYY-MM-DD", quantity: number }, ...]. The full
+  // raw list is kept (not just a mean/band) because the "seen before"
+  // exemption in quantity-baseline.ts needs an exact match against history,
+  // not a derived statistic.
+  entries    Json
+  updatedAt  DateTime @updatedAt
+  customer   Customer @relation(fields: [customerId], references: [id])
+  product    Product  @relation(fields: [productId], references: [id])
+
+  @@unique([customerId, productId])
 }
 
 model RouteCustomerAssignment {
