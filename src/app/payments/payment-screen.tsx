@@ -399,7 +399,7 @@ function PaymentStatusButton({
 }
 
 export function PaymentScreen({ payload }: PaymentScreenProps) {
-  const { navigate } = useLoadingBar();
+  const { navigate, isLoading } = useLoadingBar();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
@@ -412,6 +412,15 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
 
   const [searchInput, setSearchInput] = useState(urlSearch);
   const debouncedSearch = useDebouncedValue(searchInput, 350);
+  // The search value our own most recent request asked for — distinguishes
+  // "this urlSearch change is our own (possibly now-stale) request landing"
+  // from "something else changed the URL," which plain value comparison
+  // against debouncedSearch can't: debouncedSearch keeps advancing locally
+  // as the user types, regardless of what's still in flight. A ref would be
+  // simpler, but React disallows accessing a ref during render (the
+  // sync-down below needs to, in the same render pass, same as
+  // lastUrlSearch) — so this is state, not a ref.
+  const [requestedSearch, setRequestedSearch] = useState(urlSearch);
 
   const [dialogMode, setDialogMode] = useState<PaymentDialogMode>(null);
   const [selectedPaymentId, setSelectedPaymentId] = useState<string | null>(null);
@@ -438,16 +447,46 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
   };
 
   useEffect(() => {
+    // Gated on isLoading so a new search request is never sent while an
+    // earlier one is still in flight — two overlapping requests can resolve
+    // out of order regardless of which was sent more recently. Once the
+    // in-flight one settles, this effect re-runs (isLoading is a dependency)
+    // and fires one more request if debouncedSearch has moved on since — so
+    // typing more during a slow reply for an already-sent value waits, then
+    // sends the latest value once, instead of racing a second request
+    // against the first.
+    if (isLoading) {
+      return;
+    }
     if (debouncedSearch !== urlSearch) {
+      // Recording what we're about to ask for, not syncing derived state —
+      // tied directly to the navigate() call right below it.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setRequestedSearch(debouncedSearch);
       updateParams({ search: debouncedSearch });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [debouncedSearch]);
+  }, [debouncedSearch, isLoading]);
 
   const [lastUrlSearch, setLastUrlSearch] = useState(urlSearch);
   if (urlSearch !== lastUrlSearch) {
     setLastUrlSearch(urlSearch);
-    setSearchInput(urlSearch);
+    // Only pull the URL's value into the input when it ISN'T just our own
+    // request landing — comparing against debouncedSearch isn't enough,
+    // because debouncedSearch keeps advancing locally while a request is in
+    // flight (the isLoading gate above delays SENDING the next request, not
+    // the user's typing), so by the time an earlier request's response
+    // arrives it can legitimately differ from the current debouncedSearch
+    // even though it's still just our own (now-superseded) request, not an
+    // external change. requestedSearch holds what we actually asked for, so
+    // a match here means "my own request landed, leave the input alone
+    // since something newer may already be typed" — a mismatch means
+    // something else changed the URL (Clear, browser back/forward), which
+    // we do want reflected.
+    if (urlSearch !== requestedSearch) {
+      setSearchInput(urlSearch);
+      setRequestedSearch(urlSearch);
+    }
   }
 
   const hasActiveFilters =
