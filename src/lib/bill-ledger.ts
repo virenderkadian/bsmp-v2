@@ -126,3 +126,40 @@ export async function getSingleCustomerLedger(
     lockedPaid: lockedBills.reduce((total, bill) => total + Number(bill.paymentAmount), 0),
   };
 }
+
+type LockGuardClient = {
+  monthlyBill: {
+    findFirst: (args: {
+      where: { customerId: string; status: "LOCKED" };
+      orderBy: { updatedAt: "desc" };
+      select: { id: true; billingMonth: true; updatedAt: true };
+    }) => Promise<{ id: string; billingMonth: Date; updatedAt: Date } | null>;
+  };
+};
+
+// A payment that's already been folded into a LOCKED bill must not change
+// amount or verified-status without unlocking that bill first — the lock
+// freezes paymentAmount from the pool at that instant, and nothing re-sums it
+// afterward. Edit the payment anyway and the locked bill's frozen figure
+// silently drifts from reality, permanently hiding the difference from every
+// later bill (a customer's payment edited a day after their bill locked once
+// left a ₹185 hole that resurfaced two months later as "missing" money).
+// A bill's updatedAt is only touched when its status/amounts are (re)written,
+// so for a bill currently LOCKED it doubles as "when this lock was taken."
+export async function findLockingBill(
+  client: LockGuardClient,
+  customerId: string,
+  paymentCreatedAt: Date,
+): Promise<{ id: string; billingMonth: Date } | null> {
+  const latestLock = await client.monthlyBill.findFirst({
+    where: { customerId, status: "LOCKED" },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true, billingMonth: true, updatedAt: true },
+  });
+
+  if (!latestLock || paymentCreatedAt > latestLock.updatedAt) {
+    return null;
+  }
+
+  return { id: latestLock.id, billingMonth: latestLock.billingMonth };
+}
