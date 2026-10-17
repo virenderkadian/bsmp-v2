@@ -135,6 +135,7 @@ model Vehicle {
   routes           Route[]
   cycleStocks      VehicleCycleStock[]
   cashSalePayments VehicleCashSalePayment[]
+  dailyRouteEntries DailyRouteEntry[]
 
   @@unique([cityId, code])
   @@unique([cityId, registration])
@@ -311,16 +312,33 @@ model DailyRouteEntry {
   id         String                @id @default(uuid()) @db.Uuid
   routeId    String                @db.Uuid
   entryDate  DateTime              @db.Date
+  // Which vehicle actually ran this round, frozen when the entry is saved.
+  //
+  // A route's vehicle can be reassigned — one vehicle covering another's
+  // customers while it's off the road, for instance — and Route.vehicleId
+  // only ever holds the CURRENT owner. Deriving the vehicle from the route
+  // at read time therefore rewrites history: reassign the route tomorrow and
+  // last week's reconciliation silently moves to a different vehicle. Same
+  // reasoning as rateSnapshot on DailyRouteEntryLineProduct and
+  // VehicleCycleStock — record the fact at the moment it is true.
+  //
+  // Nullable because rows written before this column existed have no honest
+  // value to give. Reconciliation falls back to the route's current vehicle
+  // for those, which is exactly what it did for every row before this
+  // existed, so nothing changes for them.
+  vehicleId  String?               @db.Uuid
   operatorId String?               @db.Uuid
   syncStatus EntrySyncStatus       @default(DRAFT)
   notes      String?
   createdAt  DateTime              @default(now())
   updatedAt  DateTime              @updatedAt
   route      Route                 @relation(fields: [routeId], references: [id])
+  vehicle    Vehicle?              @relation(fields: [vehicleId], references: [id])
   operator   User?                 @relation(fields: [operatorId], references: [id])
   lines      DailyRouteEntryLine[]
 
   @@unique([routeId, entryDate])
+  @@index([vehicleId, entryDate])
 }
 
 model DailyRouteEntryLine {

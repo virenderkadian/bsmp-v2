@@ -361,7 +361,11 @@ export async function saveDriverLine(
     const entry = await tx.dailyRouteEntry.upsert({
       where: { routeId_entryDate: { routeId, entryDate } },
       update: {},
-      create: { routeId, entryDate, syncStatus: "SYNCED" },
+      // vehicleId is the authenticated vehicle whose driver is saving this,
+      // already checked against the route above — so it is the vehicle that
+      // genuinely ran the round, not a lookup that could drift later. Set on
+      // create only; see the column comment in schema.prisma.
+      create: { routeId, vehicleId, entryDate, syncStatus: "SYNCED" },
       select: { id: true },
     });
 

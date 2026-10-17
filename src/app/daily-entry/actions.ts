@@ -247,6 +247,15 @@ export async function saveDailyEntry(
 
     const cityId = await getCurrentCityId();
 
+    // Which vehicle is running this route right now, frozen onto the entry
+    // when it is first created. Only on create: an entry records who ran
+    // that round, and editing its quantities later must not hand the round
+    // to whichever vehicle happens to own the route by then.
+    const entryRoute = await prisma.route.findUnique({
+      where: { id: parsed.data.routeId },
+      select: { vehicleId: true },
+    });
+
     await prisma.$transaction(async (tx) => {
       const entry = await tx.dailyRouteEntry.upsert({
         where: {
@@ -261,6 +270,7 @@ export async function saveDailyEntry(
         },
         create: {
           routeId: parsed.data.routeId,
+          vehicleId: entryRoute?.vehicleId ?? null,
           entryDate: new Date(parsed.data.entryDate),
           notes: parsed.data.notes.trim() || null,
           syncStatus: "DRAFT",
