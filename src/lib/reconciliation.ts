@@ -18,28 +18,64 @@ function addDays(dateInput: string, days: number) {
 
 type EntryWithProducts = {
   routeId: string;
+  entryDate: Date;
+  vehicleId: string | null;
+  route: { name: string; shift: string; vehicleId: string };
   lines: Array<{
     productEntries: Array<{ productId: string; quantity: unknown }>;
   }>;
 };
 
-// Flattens a shift's route entries into routeId+productId -> total quantity,
-// so the per-vehicle reconciliation loop below is a map lookup instead of a
-// nested scan through every line/product-entry per vehicle.
-function buildRouteProductQtyMap(entries: EntryWithProducts[]) {
-  const map = new Map<string, number>();
+// One route's contribution to a vehicle's round: which route it was, and how
+// much of each product it delivered.
+type RouteDelivery = {
+  routeId: string;
+  routeName: string;
+  quantities: Map<string, number>;
+};
+
+// Groups entries by the vehicle that actually ran them, then by shift and
+// date — so a vehicle covering two routes in one shift (helping out while
+// another vehicle is off the road) has both counted, rather than whichever
+// one happened to be found first.
+//
+// The vehicle is the entry's own snapshot where it has one, falling back to
+// the route's current owner for rows written before that column existed.
+// Reading the route's CURRENT owner for every entry would mean reassigning a
+// route tomorrow silently moves last week's deliveries to another vehicle.
+function groupDeliveries(entries: EntryWithProducts[]) {
+  const map = new Map<string, RouteDelivery[]>();
 
   for (const entry of entries) {
+    const vehicleId = entry.vehicleId ?? entry.route.vehicleId;
+    const key = `${vehicleId}:${entry.route.shift}:${toDateInput(entry.entryDate)}`;
+
+    const quantities = new Map<string, number>();
     for (const line of entry.lines) {
       for (const productEntry of line.productEntries) {
-        const key = `${entry.routeId}:${productEntry.productId}`;
-        map.set(key, (map.get(key) ?? 0) + Number(productEntry.quantity));
+        quantities.set(
+          productEntry.productId,
+          (quantities.get(productEntry.productId) ?? 0) + Number(productEntry.quantity),
+        );
       }
     }
+
+    const bucket = map.get(key) ?? [];
+    bucket.push({ routeId: entry.routeId, routeName: entry.route.name, quantities });
+    map.set(key, bucket);
   }
 
   return map;
 }
+
+// How much of one product came from one particular route. Only interesting
+// when a shift has more than one route behind it — otherwise it just repeats
+// the shift total.
+export type ReconciliationRouteSplit = {
+  routeId: string;
+  routeName: string;
+  quantity: string;
+};
 
 export type ReconciliationProductLine = {
   productId: string;
@@ -48,10 +84,27 @@ export type ReconciliationProductLine = {
   given: string;
   eveningDelivered: string;
   morningDelivered: string;
+  // The shift totals above, broken down by the route each part came from.
+  eveningByRoute: ReconciliationRouteSplit[];
+  morningByRoute: ReconciliationRouteSplit[];
   returned: string;
   leftover: string;
   rate: string;
   leftoverValue: string;
+};
+
+export type ReconciliationRoute = {
+  id: string;
+  name: string;
+  // Whether this route's deliveries have been entered for its date. A shift
+  // only counts as done once every route behind it has been — otherwise the
+  // delivered total is short and the leftover looks like a shortage that
+  // isn't real.
+  hasEntry: boolean;
+  // True when the route is no longer assigned to this vehicle but did run
+  // for it on this date. Kept visible so the figures it contributed can be
+  // accounted for rather than appearing from nowhere.
+  reassignedAway: boolean;
 };
 
 export type ReconciliationCycle = {
@@ -60,10 +113,10 @@ export type ReconciliationCycle = {
   vehicleName: string;
   cycleDate: string;
   eveningDate: string;
-  eveningRouteId: string | null;
-  eveningRouteName: string | null;
-  morningRouteId: string | null;
-  morningRouteName: string | null;
+  // Every route behind each shift, not just the first one found: a vehicle
+  // can cover more than one route in a shift.
+  eveningRoutes: ReconciliationRoute[];
+  morningRoutes: ReconciliationRoute[];
   hasEveningEntry: boolean;
   hasMorningEntry: boolean;
   hasStockEntry: boolean;
@@ -148,19 +201,26 @@ export async function getReconciliationPayload(input?: { cycleDate?: string }): 
     const eveningDate = addDays(cycleDate, -1);
     const productIds = reconciliationProducts.map((product) => product.id);
     const vehicleIds = vehicles.map((vehicle) => vehicle.id);
-    const eveningRouteIds = vehicles
-      .map((vehicle) => vehicle.routes.find((route) => route.shift === "EVENING")?.id)
-      .filter((id): id is string => Boolean(id));
-    const morningRouteIds = vehicles
-      .map((vehicle) => vehicle.routes.find((route) => route.shift === "MORNING")?.id)
-      .filter((id): id is string => Boolean(id));
 
-    const [eveningEntries, morningEntries, stockRows, paymentRows] = await Promise.all([
+    const [entries, stockRows, paymentRows] = await Promise.all([
       withDbTimeout(
+        // Fetched by vehicle rather than by route, so every route a vehicle
+        // ran in a shift is picked up — including one it has since handed
+        // back. The null branch covers entries written before the vehicle
+        // snapshot existed, which still have to be found via their route.
         prisma.dailyRouteEntry.findMany({
-          where: { routeId: { in: eveningRouteIds }, entryDate: new Date(eveningDate) },
+          where: {
+            entryDate: { in: [new Date(eveningDate), new Date(cycleDate)] },
+            OR: [
+              { vehicleId: { in: vehicleIds } },
+              { vehicleId: null, route: { vehicleId: { in: vehicleIds } } },
+            ],
+          },
           select: {
             routeId: true,
+            entryDate: true,
+            vehicleId: true,
+            route: { select: { name: true, shift: true, vehicleId: true } },
             lines: {
               select: {
                 productEntries: {
@@ -171,24 +231,7 @@ export async function getReconciliationPayload(input?: { cycleDate?: string }): 
             },
           },
         }),
-        "Reconciliation evening entries request",
-      ),
-      withDbTimeout(
-        prisma.dailyRouteEntry.findMany({
-          where: { routeId: { in: morningRouteIds }, entryDate: new Date(cycleDate) },
-          select: {
-            routeId: true,
-            lines: {
-              select: {
-                productEntries: {
-                  where: { productId: { in: productIds } },
-                  select: { productId: true, quantity: true },
-                },
-              },
-            },
-          },
-        }),
-        "Reconciliation morning entries request",
+        "Reconciliation entries request",
       ),
       withDbTimeout(
         prisma.vehicleCycleStock.findMany({
@@ -206,30 +249,69 @@ export async function getReconciliationPayload(input?: { cycleDate?: string }): 
       ),
     ]);
 
-    const eveningQtyMap = buildRouteProductQtyMap(eveningEntries);
-    const morningQtyMap = buildRouteProductQtyMap(morningEntries);
-    const eveningEntryRouteIds = new Set(eveningEntries.map((entry) => entry.routeId));
-    const morningEntryRouteIds = new Set(morningEntries.map((entry) => entry.routeId));
+    const deliveries = groupDeliveries(entries);
 
     const paymentsByVehicle = new Map<string, number>();
     paymentRows.forEach((payment) => {
       paymentsByVehicle.set(payment.vehicleId, (paymentsByVehicle.get(payment.vehicleId) ?? 0) + Number(payment.amount));
     });
 
+    // The routes behind one shift: those currently assigned to the vehicle,
+    // plus any that actually ran for it that date but have since been handed
+    // back. A currently-assigned route with no entry is what makes a shift
+    // read as still waiting.
+    function shiftRoutes(
+      vehicle: (typeof vehicles)[number],
+      shift: "EVENING" | "MORNING",
+      ran: RouteDelivery[],
+    ): ReconciliationRoute[] {
+      const assigned = vehicle.routes.filter((route) => route.shift === shift);
+      const ranIds = new Set(ran.map((delivery) => delivery.routeId));
+
+      const routes: ReconciliationRoute[] = assigned.map((route) => ({
+        id: route.id,
+        name: route.name,
+        hasEntry: ranIds.has(route.id),
+        reassignedAway: false,
+      }));
+
+      for (const delivery of ran) {
+        if (!assigned.some((route) => route.id === delivery.routeId)) {
+          routes.push({
+            id: delivery.routeId,
+            name: delivery.routeName,
+            hasEntry: true,
+            reassignedAway: true,
+          });
+        }
+      }
+
+      return routes;
+    }
+
     const cycles: ReconciliationCycle[] = vehicles.map((vehicle) => {
-      const eveningRoute = vehicle.routes.find((route) => route.shift === "EVENING") ?? null;
-      const morningRoute = vehicle.routes.find((route) => route.shift === "MORNING") ?? null;
+      const eveningRan = deliveries.get(`${vehicle.id}:EVENING:${eveningDate}`) ?? [];
+      const morningRan = deliveries.get(`${vehicle.id}:MORNING:${cycleDate}`) ?? [];
+      const eveningRoutes = shiftRoutes(vehicle, "EVENING", eveningRan);
+      const morningRoutes = shiftRoutes(vehicle, "MORNING", morningRan);
 
       let hasStockEntry = false;
       let cashSaleAmount = 0;
 
       const products: ReconciliationProductLine[] = reconciliationProducts.map((product) => {
-        const eveningDelivered = eveningRoute
-          ? (eveningQtyMap.get(`${eveningRoute.id}:${product.id}`) ?? 0)
-          : 0;
-        const morningDelivered = morningRoute
-          ? (morningQtyMap.get(`${morningRoute.id}:${product.id}`) ?? 0)
-          : 0;
+        const splitFor = (ran: RouteDelivery[]) =>
+          ran
+            .map((delivery) => ({
+              routeId: delivery.routeId,
+              routeName: delivery.routeName,
+              raw: delivery.quantities.get(product.id) ?? 0,
+            }))
+            .filter((split) => split.raw > 0);
+
+        const eveningSplit = splitFor(eveningRan);
+        const morningSplit = splitFor(morningRan);
+        const eveningDelivered = eveningSplit.reduce((sum, split) => sum + split.raw, 0);
+        const morningDelivered = morningSplit.reduce((sum, split) => sum + split.raw, 0);
         const stock = stockRows.find((row) => row.vehicleId === vehicle.id && row.productId === product.id);
 
         if (stock) {
@@ -255,6 +337,16 @@ export async function getReconciliationPayload(input?: { cycleDate?: string }): 
           given: given.toFixed(3),
           eveningDelivered: eveningDelivered.toFixed(3),
           morningDelivered: morningDelivered.toFixed(3),
+          eveningByRoute: eveningSplit.map(({ routeId, routeName, raw }) => ({
+            routeId,
+            routeName,
+            quantity: raw.toFixed(3),
+          })),
+          morningByRoute: morningSplit.map(({ routeId, routeName, raw }) => ({
+            routeId,
+            routeName,
+            quantity: raw.toFixed(3),
+          })),
           returned: returned.toFixed(3),
           leftover: leftover.toFixed(3),
           rate: rate.toFixed(2),
@@ -271,12 +363,10 @@ export async function getReconciliationPayload(input?: { cycleDate?: string }): 
         vehicleName: vehicle.name,
         cycleDate,
         eveningDate,
-        eveningRouteId: eveningRoute?.id ?? null,
-        eveningRouteName: eveningRoute?.name ?? null,
-        morningRouteId: morningRoute?.id ?? null,
-        morningRouteName: morningRoute?.name ?? null,
-        hasEveningEntry: eveningRoute ? eveningEntryRouteIds.has(eveningRoute.id) : false,
-        hasMorningEntry: morningRoute ? morningEntryRouteIds.has(morningRoute.id) : false,
+        eveningRoutes,
+        morningRoutes,
+        hasEveningEntry: eveningRoutes.length > 0 && eveningRoutes.every((route) => route.hasEntry),
+        hasMorningEntry: morningRoutes.length > 0 && morningRoutes.every((route) => route.hasEntry),
         hasStockEntry,
         products,
         cashSaleAmount: cashSaleAmount.toFixed(2),
@@ -418,8 +508,6 @@ export async function getVehicleCashReportPayload(input?: {
       return { ...empty, dbConnected: true, vehicles: vehicleOptions, products: productOptions, selectedVehicleId };
     }
 
-    const morningRouteId = vehicle.routes.find((route) => route.shift === "MORNING")?.id;
-    const eveningRouteId = vehicle.routes.find((route) => route.shift === "EVENING")?.id;
     const fromDate = new Date(`${from}T00:00:00.000Z`);
     const toDate = new Date(`${to}T00:00:00.000Z`);
     // The evening half of the first cycle falls on the day before the range.
@@ -444,14 +532,20 @@ export async function getVehicleCashReportPayload(input?: {
           notes: true,
         },
       }),
+      // By vehicle rather than by route, matching the daily screen: every
+      // route this vehicle ran in a shift counts, including one it has since
+      // handed back, and the vehicle comes from the entry's own snapshot
+      // where it has one.
       prisma.dailyRouteEntry.findMany({
         where: {
-          routeId: { in: [morningRouteId, eveningRouteId].filter((id): id is string => Boolean(id)) },
           entryDate: { gte: new Date(`${deliveriesFrom}T00:00:00.000Z`), lte: toDate },
+          OR: [{ vehicleId: vehicle.id }, { vehicleId: null, route: { vehicleId: vehicle.id } }],
         },
         select: {
           routeId: true,
           entryDate: true,
+          vehicleId: true,
+          route: { select: { name: true, shift: true, vehicleId: true } },
           lines: {
             where: { skipped: false },
             select: { productEntries: { select: { productId: true, quantity: true } } },
@@ -460,10 +554,12 @@ export async function getVehicleCashReportPayload(input?: {
       }),
     ]);
 
-    const deliveredByRouteDate = new Map<string, Map<string, number>>();
+    // shift+date -> productId -> quantity, summed across however many routes
+    // the vehicle covered in that shift.
+    const deliveredByShiftDate = new Map<string, Map<string, number>>();
     entries.forEach((entry) => {
-      const key = `${entry.routeId}:${toDateInput(entry.entryDate)}`;
-      const perProduct = deliveredByRouteDate.get(key) ?? new Map<string, number>();
+      const key = `${entry.route.shift}:${toDateInput(entry.entryDate)}`;
+      const perProduct = deliveredByShiftDate.get(key) ?? new Map<string, number>();
       entry.lines.forEach((line) => {
         line.productEntries.forEach((productEntry) => {
           perProduct.set(
@@ -472,7 +568,7 @@ export async function getVehicleCashReportPayload(input?: {
           );
         });
       });
-      deliveredByRouteDate.set(key, perProduct);
+      deliveredByShiftDate.set(key, perProduct);
     });
 
     // Cancelled and pending deposits are listed but never counted — the money
@@ -497,12 +593,8 @@ export async function getVehicleCashReportPayload(input?: {
       const dayProducts = products.map((product) => {
         const stock = dayStock.find((row) => row.productId === product.id);
         const delivered =
-          (morningRouteId
-            ? (deliveredByRouteDate.get(`${morningRouteId}:${cursor}`)?.get(product.id) ?? 0)
-            : 0) +
-          (eveningRouteId
-            ? (deliveredByRouteDate.get(`${eveningRouteId}:${eveningDate}`)?.get(product.id) ?? 0)
-            : 0);
+          (deliveredByShiftDate.get(`MORNING:${cursor}`)?.get(product.id) ?? 0) +
+          (deliveredByShiftDate.get(`EVENING:${eveningDate}`)?.get(product.id) ?? 0);
 
         return {
           productId: product.id,

@@ -30,6 +30,47 @@ function formatMoney(value: string) {
   return `₹${amount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+// A shift can be covered by more than one route — a vehicle picking up
+// another's customers while it is off the road. Names them all, marking any
+// that has since been handed back so a figure it contributed doesn't look
+// like it came from nowhere.
+function formatRoutes(routes: ReconciliationCycle["eveningRoutes"], emptyLabel: string) {
+  if (routes.length === 0) {
+    return emptyLabel;
+  }
+  return formatList(routes.map((route) => (route.reassignedAway ? `${route.name} (reassigned)` : route.name)));
+}
+
+// Shown only when a shift's figure is the sum of more than one route, so the
+// office can check the split against what they expect. A single route adds
+// nothing but noise — the column above already says it.
+// A shift's delivered figure, with the per-route split behind a hover when
+// more than one route went into it. Printed inline it was noise on every row
+// of every vehicle; the split only matters when someone is checking a total
+// that came from two rounds. A native title rather than a positioned tooltip
+// because the table sits in an overflow-x-auto container, which would clip
+// one. The dotted underline is what says there is something to hover.
+function Delivered({
+  quantity,
+  splits,
+}: {
+  quantity: string;
+  splits: ReconciliationCycle["products"][number]["eveningByRoute"];
+}) {
+  if (splits.length < 2) {
+    return <>{quantity}</>;
+  }
+
+  return (
+    <span
+      title={splits.map((split) => `${split.routeName} ${split.quantity}`).join(" · ")}
+      className="cursor-help underline decoration-dotted underline-offset-4"
+    >
+      {quantity}
+    </span>
+  );
+}
+
 function VehicleCycleSection({
   cycle,
   onEditStock,
@@ -65,8 +106,8 @@ function VehicleCycleSection({
             {cycle.vehicleCode} · {cycle.vehicleName}
           </h2>
           <p className="mt-0.5 text-sm text-text-secondary">
-            {cycle.eveningRouteName ?? "no evening route"} {formatDate(cycle.eveningDate)} →{" "}
-            {cycle.morningRouteName ?? "no morning route"} {formatDate(cycle.cycleDate)}
+            {formatRoutes(cycle.eveningRoutes, "no evening route")} {formatDate(cycle.eveningDate)} →{" "}
+            {formatRoutes(cycle.morningRoutes, "no morning route")} {formatDate(cycle.cycleDate)}
           </p>
           <div className="mt-2">
             {isReady ? (
@@ -118,8 +159,12 @@ function VehicleCycleSection({
                     {product.productName} <span className="text-text-muted">({product.unit})</span>
                   </td>
                   <td className="px-3 py-2 text-right text-text-primary">{product.given}</td>
-                  <td className="px-3 py-2 text-right text-text-primary">{product.eveningDelivered}</td>
-                  <td className="px-3 py-2 text-right text-text-primary">{product.morningDelivered}</td>
+                  <td className="px-3 py-2 text-right text-text-primary">
+                    <Delivered quantity={product.eveningDelivered} splits={product.eveningByRoute} />
+                  </td>
+                  <td className="px-3 py-2 text-right text-text-primary">
+                    <Delivered quantity={product.morningDelivered} splits={product.morningByRoute} />
+                  </td>
                   <td className="px-3 py-2 text-right text-text-primary">{product.returned}</td>
                   <td
                     className={`px-3 py-2 text-right font-semibold ${leftover < 0 ? "text-rose-600" : "text-text-primary"}`}
