@@ -462,10 +462,18 @@ export async function updateMonthlyBillStatus(
 
   return runAction(async () => {
     const cityId = await getCurrentCityId();
-    const before = await prisma.monthlyBill.findUnique({ where: { id: parsed.data.id } });
+    // City-scoped read: a bill inherits its city through the customer (see
+    // prisma/schema.prisma). findFirst because findUnique can't take a
+    // relation filter. Without this, a city-A admin could lock/unlock a
+    // city-B bill — and the settle-on-status-change math below would run
+    // against the attacker's own city ledger, zeroing the victim's payment
+    // totals.
+    const before = await prisma.monthlyBill.findFirst({
+      where: { id: parsed.data.id, customer: { cityId } },
+    });
 
     if (!before) {
-      throw new Error("Bill not found.");
+      throw new Error("Bill not found in this city.");
     }
 
     const nextStatus = parsed.data.status;

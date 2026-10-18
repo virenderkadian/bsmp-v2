@@ -143,6 +143,22 @@ export async function saveDailyEntry(
     );
     const guardCityId = await getCurrentCityId();
 
+    // routeId comes from the form. Verify it belongs to this city before ANY
+    // read or write keyed on it: this save deletes and rebuilds every line for
+    // routeId+entryDate, so a tampered id would wipe another city's entry for
+    // the day. The frozen-bill guard below is city-scoped and wouldn't stop it.
+    // Also carries the route's current vehicle, snapshotted onto a newly
+    // created entry further down (see DailyRouteEntry.vehicleId in
+    // schema.prisma) — one lookup serves both the check and the snapshot.
+    const entryRoute = await prisma.route.findFirst({
+      where: { id: parsed.data.routeId, cityId: guardCityId },
+      select: { vehicleId: true },
+    });
+
+    if (!entryRoute) {
+      return { status: "error", message: "Route not found in this city." };
+    }
+
     // Read what's currently stored BEFORE the guard runs. Saving rebuilds the
     // whole route+date, so a customer present here and absent from the
     // submission is about to have their delivery deleted — and they have to be
@@ -246,15 +262,6 @@ export async function saveDailyEntry(
     }
 
     const cityId = await getCurrentCityId();
-
-    // Which vehicle is running this route right now, frozen onto the entry
-    // when it is first created. Only on create: an entry records who ran
-    // that round, and editing its quantities later must not hand the round
-    // to whichever vehicle happens to own the route by then.
-    const entryRoute = await prisma.route.findUnique({
-      where: { id: parsed.data.routeId },
-      select: { vehicleId: true },
-    });
 
     await prisma.$transaction(async (tx) => {
       const entry = await tx.dailyRouteEntry.upsert({
@@ -546,6 +553,19 @@ export async function revertMonthBillsToDraft(
     );
 
     const cityId = await getCurrentCityId();
+
+    // Same ownership check as saveDailyEntry: routeId comes from the form,
+    // and the updateMany below reverts bills keyed on it. A tampered id
+    // would silently reopen another city's GENERATED/LOCKED bills to DRAFT.
+    const route = await prisma.route.findFirst({
+      where: { id: parsed.data.routeId, cityId },
+      select: { id: true },
+    });
+
+    if (!route) {
+      return { status: "error", message: "Route not found in this city." };
+    }
+
     const result = await prisma.monthlyBill.updateMany({
       where: {
         routeId: parsed.data.routeId,
