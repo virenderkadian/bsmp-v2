@@ -156,9 +156,19 @@ export async function updatePayment(
 
   return runAction(async () => {
     const cityId = await getCurrentCityId();
-    const before = await prisma.payment.findUnique({ where: { id: parsed.data.id } });
+    // City-scoped read: a payment inherits its city through the customer
+    // (see prisma/schema.prisma). findFirst because findUnique can't take a
+    // relation filter. A cross-city id fails here, before the update, so
+    // another city's payment can never be edited or verified.
+    const before = await prisma.payment.findFirst({
+      where: { id: parsed.data.id, customer: { cityId } },
+    });
 
-    if (before && (Number(before.amount) !== parsed.data.amount || before.status !== parsed.data.status)) {
+    if (!before) {
+      throw new Error("Payment not found in this city.");
+    }
+
+    if (Number(before.amount) !== parsed.data.amount || before.status !== parsed.data.status) {
       const lockingBill = await findLockingBill(prisma, before.customerId, before.createdAt);
       if (lockingBill) {
         throw new Error(
@@ -210,9 +220,17 @@ export async function setPaymentStatus(
 
   return runAction(async () => {
     const cityId = await getCurrentCityId();
-    const before = await prisma.payment.findUnique({ where: { id: parsed.data.id } });
+    // Same city scoping as updatePayment above: a payment is only readable
+    // through its customer's city.
+    const before = await prisma.payment.findFirst({
+      where: { id: parsed.data.id, customer: { cityId } },
+    });
 
-    if (before && before.status !== parsed.data.status) {
+    if (!before) {
+      throw new Error("Payment not found in this city.");
+    }
+
+    if (before.status !== parsed.data.status) {
       const lockingBill = await findLockingBill(prisma, before.customerId, before.createdAt);
       if (lockingBill) {
         throw new Error(
