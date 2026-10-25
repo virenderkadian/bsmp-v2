@@ -12,18 +12,25 @@ export type BillFormat = "classic" | "compact";
 
 // The message shared to WhatsApp for one vehicle's cycle. Plain text with
 // {placeholder} substitution — see src/lib/reconciliation-share.ts for the
-// exact placeholders. A whole-day share renders this once per vehicle and
-// joins the results, rather than the template needing its own repeat syntax.
-// *stars* are WhatsApp's own bold syntax, not markdown.
-const DEFAULT_RECONCILIATION_SHARE_TEMPLATE = `*Reconciliation — {date}*
-{vehicleCode} · {vehicleName}
-{routes}
+// exact placeholders. *stars* are WhatsApp's own bold syntax, not markdown.
+// Matches the office's own hand-typed format line for line: verified against
+// a real day's production data (Bahadurgarh, 18 Oct) before being adopted.
+const DEFAULT_RECONCILIATION_SHARE_TEMPLATE = `{date}
+*{vehicleName}*
+------------------------------
+{products}`;
 
-{products}
-
-Cash sale {cashSale}
-Received {received}
-*Balance {balance}*`;
+// The whole-day share has a genuinely different shape from the per-vehicle
+// one — a single shared date header, then every vehicle's block, then a
+// cumulative total — so it gets its own template rather than the per-vehicle
+// one being repeated.
+const DEFAULT_RECONCILIATION_WHOLE_DAY_TEMPLATE = `*{date}*
+------------------------------
+{vehicles}
+------------------------------
+*TOTAL*
+------------------------------
+{total}`;
 
 export type CitySettings = {
   // Occasional sales (a kilo of paneer, a one-off ghee order) are money on the
@@ -39,11 +46,14 @@ export type CitySettings = {
   // show — needs a horizontal scroll to even see. Capping to the first 3
   // products (by their own sort order) keeps the money columns on screen.
   limitSummaryProductColumns: boolean;
-  // Free text, filled in per vehicle (or repeated per vehicle for a whole
-  // day's share) and opened as a wa.me link. Editable per city so the wording
-  // — and which figures appear at all — is the office's call, not a fixed
-  // format baked into the screen.
+  // Free text, filled in for one vehicle's share and opened as a wa.me link.
+  // Editable per city so the wording — and which figures appear at all — is
+  // the office's call, not a fixed format baked into the screen.
   reconciliationShareTemplate: string;
+  // Free text for the whole-day share — every vehicle plus a cumulative
+  // total, structurally different from the per-vehicle message above so it
+  // gets its own template rather than reusing that one N times.
+  reconciliationWholeDayShareTemplate: string;
 };
 
 export const CITY_SETTING_DEFAULTS: CitySettings = {
@@ -54,6 +64,7 @@ export const CITY_SETTING_DEFAULTS: CitySettings = {
   billFormat: "classic",
   limitSummaryProductColumns: true,
   reconciliationShareTemplate: DEFAULT_RECONCILIATION_SHARE_TEMPLATE,
+  reconciliationWholeDayShareTemplate: DEFAULT_RECONCILIATION_WHOLE_DAY_TEMPLATE,
 };
 
 export type CitySettingKey = keyof CitySettings;
@@ -115,18 +126,30 @@ export const CITY_SETTING_FIELDS: Record<CitySettingKey, SettingField> = {
   reconciliationShareTemplate: {
     kind: "text",
     group: "Reconciliation",
-    label: "WhatsApp share message",
-    description: "Used by the share button on the Reconciliation screen, for one vehicle or the whole day.",
+    label: "WhatsApp share message (one vehicle)",
+    description: "Used by the share button on each vehicle's card.",
     multiline: true,
     placeholders: [
-      { token: "{date}", description: "The cycle's close date" },
+      { token: "{date}", description: "e.g. \"18 OCT (17 EVENING + 18 MORNING)\"" },
       { token: "{vehicleCode}", description: "Vehicle code" },
       { token: "{vehicleName}", description: "Vehicle name" },
       { token: "{routes}", description: "Evening and morning route names" },
-      { token: "{products}", description: "One line per product — given, delivered, returned, leftover, value" },
+      { token: "{products}", description: "One line per product sold, e.g. \"199.1 B MILK\" — only products > 0" },
       { token: "{cashSale}", description: "Total cash sale for the cycle" },
       { token: "{received}", description: "Payments already received" },
       { token: "{balance}", description: "What's still owed" },
+    ],
+  },
+  reconciliationWholeDayShareTemplate: {
+    kind: "text",
+    group: "Reconciliation",
+    label: "WhatsApp share message (whole day)",
+    description: "Used by the share button beside the date, for every vehicle at once.",
+    multiline: true,
+    placeholders: [
+      { token: "{date}", description: "e.g. \"18 OCT (17 EVENING + 18 MORNING)\"" },
+      { token: "{vehicles}", description: "Every vehicle's block — name, then its products sold" },
+      { token: "{total}", description: "Cumulative total across every vehicle, same product list format" },
     ],
   },
 };
