@@ -24,14 +24,16 @@ test.describe("Loading bar", () => {
     });
 
     await page.getByRole("button", { name: "Cash report", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Load report" })).toBeVisible();
+    // getByRole, not getByLabel: the label wraps the <select>, so getByLabel's
+    // text match also picks up every option's text.
+    await expect(page.getByRole("combobox", { name: "Vehicle", exact: true })).toBeVisible();
 
     expect(reloaded).toBe(false);
     expect(page.url()).toContain("tab=cash-report");
   });
 
   test("loading a range keeps the page alive rather than reloading it", async ({ page }) => {
-    await page.goto(`/reconciliation?tab=cash-report&vehicleId=${TEST_VEHICLE_ID}`);
+    await page.goto(`/reconciliation?tab=cash-report&vehicleId=${TEST_VEHICLE_ID}&from=2025-01-01&to=2025-01-02`);
     await page.waitForLoadState("networkidle");
 
     let reloaded = false;
@@ -39,8 +41,10 @@ test.describe("Loading bar", () => {
       reloaded = true;
     });
 
-    await page.getByRole("button", { name: "Load report" }).click();
-    await expect(page.getByRole("button", { name: "Load report" })).toBeVisible();
+    // No separate load button — changing a field loads the new range itself.
+    await page.locator('input[name="to"]').fill("2025-01-05");
+    await page.locator('input[name="to"]').blur();
+    await expect(page).toHaveURL(/to=2025-01-05/);
 
     expect(reloaded).toBe(false);
   });

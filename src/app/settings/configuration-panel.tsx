@@ -8,11 +8,73 @@ import {
   CITY_SETTING_FIELDS,
   CITY_SETTING_KEYS,
   SETTING_GROUP_ORDER,
+  type CitySettingKey,
   type CitySettings,
 } from "@/lib/city-settings.shared";
 import { cn } from "@/lib/utils";
 
 const initialState: ActionState = { status: "idle" };
+
+// A free-text setting (currently just the WhatsApp share template). Unlike a
+// toggle or a choice, typing shouldn't save on every keystroke, so this gets
+// its own local draft and an explicit Save that's only live once the draft
+// actually differs from what's stored.
+function TextSettingField({
+  settingKey,
+  field,
+  current,
+  formAction,
+  pending,
+}: {
+  settingKey: CitySettingKey;
+  field: Extract<(typeof CITY_SETTING_FIELDS)[CitySettingKey], { kind: "text" }>;
+  current: string;
+  formAction: (formData: FormData) => void;
+  pending: boolean;
+}) {
+  const [draft, setDraft] = useState(current);
+  const dirty = draft !== current;
+
+  return (
+    <div className="px-4 py-3">
+      <p className="text-sm font-medium text-text-primary">{field.label}</p>
+      <p className="text-xs text-text-secondary">{field.description}</p>
+
+      <form action={formAction} className="mt-3 space-y-2">
+        <input type="hidden" name="key" value={settingKey} readOnly />
+        <input type="hidden" name="value" value={draft} readOnly />
+        <textarea
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          rows={field.multiline ? 8 : 2}
+          className="w-full rounded-lg border border-surface-border-strong bg-surface px-3 py-2 font-mono text-xs text-text-primary outline-none transition focus:border-accent"
+        />
+        <div className="flex items-center justify-between gap-3">
+          <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-text-secondary">
+            {field.placeholders.map((placeholder) => (
+              <span key={placeholder.token} title={placeholder.description}>
+                <code className="rounded bg-surface-muted px-1 py-0.5 text-[11px]">{placeholder.token}</code>
+              </span>
+            ))}
+          </p>
+          <button
+            type="submit"
+            disabled={pending || !dirty}
+            className={cn(
+              "shrink-0 rounded-lg border px-3 py-1.5 text-xs font-semibold transition",
+              dirty
+                ? "border-accent bg-accent text-accent-contrast hover:opacity-90"
+                : "border-surface-border-strong bg-surface-muted text-text-secondary",
+              pending && "opacity-60",
+            )}
+          >
+            {pending ? "Saving..." : "Save"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
 
 // How this city behaves.
 //
@@ -97,6 +159,19 @@ export function ConfigurationPanel({ settings }: { settings: CitySettings }) {
               }
 
               const current = String(settings[key]);
+
+              if (field.kind === "text") {
+                return (
+                  <TextSettingField
+                    key={key}
+                    settingKey={key}
+                    field={field}
+                    current={current}
+                    formAction={formAction}
+                    pending={pending}
+                  />
+                );
+              }
 
               return (
                 <div key={key} className="px-4 py-3">

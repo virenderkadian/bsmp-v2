@@ -61,10 +61,11 @@ test.describe("Vehicle cash report", () => {
     await openReport(page);
 
     // 100 given, 10 returned, nothing delivered on the test route that day, so
-    // 90 sold for cash at 60 = 5,400, less the 500 deposited.
-    await expect(page.getByText("₹5,400.00").first()).toBeVisible();
-    await expect(page.getByText("₹500.00").first()).toBeVisible();
-    await expect(page.getByText("₹4,900.00").first()).toBeVisible();
+    // 90 sold for cash at 60 = 5,400, less the 500 deposited. Whole rupees
+    // show no decimals now — ₹5,400, not ₹5,400.00.
+    await expect(page.getByText("₹5,400").first()).toBeVisible();
+    await expect(page.getByText("₹500").first()).toBeVisible();
+    await expect(page.getByText("₹4,900").first()).toBeVisible();
   });
 
   test("shows a day with no stock rather than hiding it, and says why", async ({ page }) => {
@@ -80,21 +81,25 @@ test.describe("Vehicle cash report", () => {
 
     // If day two counted, its leftover would be 0 minus deliveries — dragging
     // the amount owed below the truth.
-    await expect(page.getByText("₹5,400.00").first()).toBeVisible();
+    await expect(page.getByText("₹5,400").first()).toBeVisible();
   });
 
   test("switches between the cycle and the report on one screen", async ({ page }) => {
     // Two views of the same data, so they belong on one screen: the cycle is
-    // where stock is entered, the report is the range read-out over it.
+    // where stock is entered, the report is the report read-out over it.
     await page.goto("/reconciliation");
     await page.waitForLoadState("networkidle");
 
     await page.getByRole("button", { name: "Cash report", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Load report" })).toBeVisible();
+    // No separate load button — the report loads as soon as a field changes.
+    // getByRole, not getByLabel: the label wraps the <select>, so getByLabel's
+    // text match also picks up every option's text and never matches "Vehicle"
+    // exactly.
+    await expect(page.getByRole("combobox", { name: "Vehicle", exact: true })).toBeVisible();
 
     await page.getByRole("button", { name: "Cycle", exact: true }).click();
     // The cycle date control belongs to the cycle tab, and comes back with it.
-    await expect(page.locator('input[name="cycleDate"]')).toBeVisible();
+    await expect(page.getByRole("button", { name: "Next day" })).toBeVisible();
   });
 
   test("records a deposit and reduces what the driver owes", async ({ page }) => {

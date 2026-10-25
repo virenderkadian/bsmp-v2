@@ -10,6 +10,21 @@
 // other, and mixing them piecemeal produces a page that fits nothing.
 export type BillFormat = "classic" | "compact";
 
+// The message shared to WhatsApp for one vehicle's cycle. Plain text with
+// {placeholder} substitution — see src/lib/reconciliation-share.ts for the
+// exact placeholders. A whole-day share renders this once per vehicle and
+// joins the results, rather than the template needing its own repeat syntax.
+// *stars* are WhatsApp's own bold syntax, not markdown.
+const DEFAULT_RECONCILIATION_SHARE_TEMPLATE = `*Reconciliation — {date}*
+{vehicleCode} · {vehicleName}
+{routes}
+
+{products}
+
+Cash sale {cashSale}
+Received {received}
+*Balance {balance}*`;
+
 export type CitySettings = {
   // Occasional sales (a kilo of paneer, a one-off ghee order) are money on the
   // route summary without being a column of their own — on an office sheet a
@@ -24,6 +39,11 @@ export type CitySettings = {
   // show — needs a horizontal scroll to even see. Capping to the first 3
   // products (by their own sort order) keeps the money columns on screen.
   limitSummaryProductColumns: boolean;
+  // Free text, filled in per vehicle (or repeated per vehicle for a whole
+  // day's share) and opened as a wa.me link. Editable per city so the wording
+  // — and which figures appear at all — is the office's call, not a fixed
+  // format baked into the screen.
+  reconciliationShareTemplate: string;
 };
 
 export const CITY_SETTING_DEFAULTS: CitySettings = {
@@ -33,6 +53,7 @@ export const CITY_SETTING_DEFAULTS: CitySettings = {
   // side effect of a deployment.
   billFormat: "classic",
   limitSummaryProductColumns: true,
+  reconciliationShareTemplate: DEFAULT_RECONCILIATION_SHARE_TEMPLATE,
 };
 
 export type CitySettingKey = keyof CitySettings;
@@ -44,9 +65,9 @@ export const CITY_SETTING_KEYS = Object.keys(CITY_SETTING_DEFAULTS) as CitySetti
 // deciding how it is explained.
 // Settings are grouped by where the change shows up, so the screen stays
 // readable as more arrive rather than becoming one long list.
-export type SettingGroup = "Printing" | "Daily Entry";
+export type SettingGroup = "Printing" | "Daily Entry" | "Reconciliation";
 
-export const SETTING_GROUP_ORDER: SettingGroup[] = ["Printing", "Daily Entry"];
+export const SETTING_GROUP_ORDER: SettingGroup[] = ["Printing", "Daily Entry", "Reconciliation"];
 
 type SettingField =
   | { kind: "boolean"; group: SettingGroup; label: string; description: string }
@@ -56,6 +77,14 @@ type SettingField =
       label: string;
       description: string;
       options: Array<{ value: string; label: string; description: string }>;
+    }
+  | {
+      kind: "text";
+      group: SettingGroup;
+      label: string;
+      description: string;
+      multiline?: boolean;
+      placeholders: Array<{ token: string; description: string }>;
     };
 
 export const CITY_SETTING_FIELDS: Record<CitySettingKey, SettingField> = {
@@ -83,6 +112,23 @@ export const CITY_SETTING_FIELDS: Record<CitySettingKey, SettingField> = {
     label: "Limit route summary to 3 products",
     description: "Keeps Amount, Opening and Pending on screen without scrolling. Turn off to show every product.",
   },
+  reconciliationShareTemplate: {
+    kind: "text",
+    group: "Reconciliation",
+    label: "WhatsApp share message",
+    description: "Used by the share button on the Reconciliation screen, for one vehicle or the whole day.",
+    multiline: true,
+    placeholders: [
+      { token: "{date}", description: "The cycle's close date" },
+      { token: "{vehicleCode}", description: "Vehicle code" },
+      { token: "{vehicleName}", description: "Vehicle name" },
+      { token: "{routes}", description: "Evening and morning route names" },
+      { token: "{products}", description: "One line per product — given, delivered, returned, leftover, value" },
+      { token: "{cashSale}", description: "Total cash sale for the cycle" },
+      { token: "{received}", description: "Payments already received" },
+      { token: "{balance}", description: "What's still owed" },
+    ],
+  },
 };
 
 export function isCitySettingKey(value: string): value is CitySettingKey {
@@ -99,6 +145,10 @@ export function parseCitySetting(key: CitySettingKey, raw: string): CitySettings
     return raw === "true";
   }
 
+  if (field.kind === "text") {
+    return raw;
+  }
+
   return field.options.some((option) => option.value === raw)
     ? (raw as BillFormat)
     : (CITY_SETTING_DEFAULTS[key] as BillFormat);
@@ -107,7 +157,13 @@ export function parseCitySetting(key: CitySettingKey, raw: string): CitySettings
 export function isValidCitySettingValue(key: CitySettingKey, raw: string): boolean {
   const field = CITY_SETTING_FIELDS[key];
 
-  return field.kind === "boolean"
-    ? raw === "true" || raw === "false"
-    : field.options.some((option) => option.value === raw);
+  if (field.kind === "boolean") {
+    return raw === "true" || raw === "false";
+  }
+
+  if (field.kind === "text") {
+    return raw.trim().length > 0;
+  }
+
+  return field.options.some((option) => option.value === raw);
 }
