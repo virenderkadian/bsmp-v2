@@ -80,6 +80,10 @@ export type ReconciliationRouteSplit = {
 export type ReconciliationProductLine = {
   productId: string;
   productName: string;
+  // Falls back to the full name when a product has no short form set — used
+  // by the WhatsApp share text, which needs "B MILK" rather than "Buffalo
+  // Milk" to match how the office already writes these by hand.
+  productShortName: string;
   unit: string;
   given: string;
   eveningDelivered: string;
@@ -175,7 +179,7 @@ export async function getReconciliationPayload(input?: { cycleDate?: string }): 
         prisma.product.findMany({
           where: { cityId, includeInReconciliation: true, isActive: true },
           orderBy: { displayOrder: "asc" },
-          select: { id: true, name: true, unit: true, defaultRate: true },
+          select: { id: true, name: true, shortName: true, unit: true, defaultRate: true },
         }),
         "Reconciliation products request",
       ),
@@ -333,6 +337,7 @@ export async function getReconciliationPayload(input?: { cycleDate?: string }): 
         return {
           productId: product.id,
           productName: product.name,
+          productShortName: product.shortName ?? product.name,
           unit: product.unit,
           given: given.toFixed(3),
           eveningDelivered: eveningDelivered.toFixed(3),

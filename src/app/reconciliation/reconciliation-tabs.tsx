@@ -35,11 +35,13 @@ export function ReconciliationTabs({
   reconciliation,
   cashReport,
   shareTemplate,
+  wholeDayShareTemplate,
 }: {
   tab: ReconciliationTab;
   reconciliation: ReconciliationPayload | null;
   cashReport: CashReportPayload | null;
   shareTemplate: string;
+  wholeDayShareTemplate: string;
 }) {
   const { navigate } = useLoadingBar();
   const dateInputRef = useRef<HTMLInputElement>(null);
@@ -100,7 +102,7 @@ export function ReconciliationTabs({
             </IconButton>
             {reconciliation.cycles.length > 0 ? (
               <a
-                href={buildWhatsAppShareUrl(buildWholeDayShareMessage(reconciliation.cycles, shareTemplate))}
+                href={buildWhatsAppShareUrl(buildWholeDayShareMessage(reconciliation.cycles, wholeDayShareTemplate))}
                 target="_blank"
                 rel="noopener noreferrer"
                 title="Share the whole day on WhatsApp"

@@ -29,7 +29,9 @@ export default async function ReconciliationPage({
           to: params?.to,
         })
       : null;
-  const { reconciliationShareTemplate } = await getCitySettings(await getCurrentCityId());
+  const { reconciliationShareTemplate, reconciliationWholeDayShareTemplate } = await getCitySettings(
+    await getCurrentCityId(),
+  );
 
   return (
     <div className="space-y-5">
@@ -38,6 +40,7 @@ export default async function ReconciliationPage({
         reconciliation={reconciliation}
         cashReport={cashReport}
         shareTemplate={reconciliationShareTemplate}
+        wholeDayShareTemplate={reconciliationWholeDayShareTemplate}
       />
     </div>
   );
