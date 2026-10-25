@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { DataTable } from "@/components/admin/data-table";
+import { DownloadIcon } from "@/components/admin/icons";
 import { PageHeader } from "@/components/admin/page-header";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { SummaryStatBar, type SummaryStatItem } from "@/components/admin/summary-stat-bar";
@@ -90,12 +91,20 @@ export default async function CustomerProfilePage({
         title={customer.name}
         subtitle={[customer.code, customer.area, customer.mobile].filter(Boolean).join(" · ")}
         actions={
-          <Link
-            href="/customers"
-            className="inline-flex h-10 items-center justify-center rounded-lg border border-surface-border-strong bg-surface px-4 text-sm font-medium text-text-secondary transition hover:bg-surface-muted"
-          >
-            Back to customers
-          </Link>
+          <>
+            <Link
+              href={`/customers/${customer.id}/daily-entries`}
+              className="inline-flex h-10 items-center justify-center rounded-lg border border-surface-border-strong bg-surface px-4 text-sm font-medium text-text-secondary transition hover:bg-surface-muted"
+            >
+              View / edit month&rsquo;s deliveries
+            </Link>
+            <Link
+              href="/customers"
+              className="inline-flex h-10 items-center justify-center rounded-lg border border-surface-border-strong bg-surface px-4 text-sm font-medium text-text-secondary transition hover:bg-surface-muted"
+            >
+              Back to customers
+            </Link>
+          </>
         }
       />
 
@@ -112,7 +121,7 @@ export default async function CustomerProfilePage({
       <section className="space-y-3">
         <h2 className="text-lg font-semibold text-text-primary">Monthly bills</h2>
         <DataTable
-          columns={["Month", "Route", "Opening", "Delivery", "Paid", "Closing", "Status"]}
+          columns={["Month", "Route", "Opening", "Delivery", "Paid", "Closing", "Status", "Share"]}
           emptyMessage="No bills yet."
           rows={payload.bills.map((bill) => ({
             key: bill.id,
@@ -128,6 +137,18 @@ export default async function CustomerProfilePage({
               <StatusBadge key="status" tone={billStatusTone(bill.status)}>
                 {bill.status}
               </StatusBadge>,
+              // Opens the bill's own page with a flag that auto-triggers the
+              // same PDF download there — this page only has bill summaries,
+              // not the full line-item detail a PDF needs to capture.
+              <Link
+                key="share"
+                href={`/monthly-bills/${bill.id}?download=1`}
+                title="Download this bill as PDF"
+                aria-label={`Download ${formatMonth(bill.billingMonth)} bill as PDF`}
+                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-text-secondary transition hover:bg-surface-muted hover:text-text-primary"
+              >
+                <DownloadIcon className="h-[18px] w-[18px]" />
+              </Link>,
             ],
           }))}
         />

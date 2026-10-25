@@ -1,13 +1,20 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { AutoDownloadBillPdf } from "@/app/monthly-bills/[id]/auto-download-bill-pdf";
 import { PageHeader } from "@/components/admin/page-header";
 import { PrintButton } from "@/components/admin/print-button";
+import { DownloadBillPdfButton } from "@/components/admin/download-bill-pdf-button";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { getMonthlyBillDetail } from "@/lib/monthly-bills";
 import { buildBillPaymentQr } from "@/lib/bill-payment-qr";
 import { getCitySettings } from "@/lib/city-settings";
 import { getCurrentCityId } from "@/lib/current-city";
 import { BillDocument } from "@/app/monthly-bills/bill-document";
+
+function billPdfFilename(customerCode: string, billingMonth: Date) {
+  const month = new Date(billingMonth).toLocaleDateString("en-IN", { month: "short", year: "numeric" }).replace(" ", "-");
+  return `${customerCode}-${month}.pdf`;
+}
 
 function billStatusTone(status: string) {
   if (status === "LOCKED") {
@@ -27,10 +34,14 @@ function billStatusTone(status: string) {
 
 export default async function MonthlyBillDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ download?: string }>;
 }) {
   const { id } = await params;
+  const sp = await searchParams;
+  const shouldAutoDownload = sp?.download === "1";
   const payload = await getMonthlyBillDetail(id);
   const { billFormat } = await getCitySettings(await getCurrentCityId());
 
@@ -63,9 +74,11 @@ export default async function MonthlyBillDetailPage({
   const bill = payload.bill;
   // Built for this bill: carries the amount owed and the customer code.
   const qrDataUrl = await buildBillPaymentQr(bill);
+  const pdfFilename = billPdfFilename(bill.customerCode, bill.billingMonth);
 
   return (
     <>
+      <AutoDownloadBillPdf shouldDownload={shouldAutoDownload} filename={pdfFilename} />
       <div className="print:hidden">
         <PageHeader
           title={`${bill.customerName} Bill`}
@@ -78,6 +91,7 @@ export default async function MonthlyBillDetailPage({
               >
                 Back to bills
               </Link>
+              <DownloadBillPdfButton filename={pdfFilename} />
               <PrintButton label="Print bill" />
             </>
           }

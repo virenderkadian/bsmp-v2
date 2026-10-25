@@ -256,6 +256,16 @@ export function FilterIcon(props: IconProps) {
   );
 }
 
+export function DownloadIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M12 3v12" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M4 19h16" />
+    </BaseIcon>
+  );
+}
+
 // Filled rather than built on BaseIcon like every icon above: WhatsApp's mark
 // is only recognisable as a solid shape, the way the app itself always draws
 // it — a thin outline version wouldn't read as "WhatsApp" at a glance, which
