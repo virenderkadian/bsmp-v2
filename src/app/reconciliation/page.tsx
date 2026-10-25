@@ -1,4 +1,6 @@
 import { ReconciliationTabs, type ReconciliationTab } from "@/app/reconciliation/reconciliation-tabs";
+import { getCitySettings } from "@/lib/city-settings";
+import { getCurrentCityId } from "@/lib/current-city";
 import { getReconciliationPayload, getVehicleCashReportPayload } from "@/lib/reconciliation";
 
 export default async function ReconciliationPage({
@@ -27,10 +29,16 @@ export default async function ReconciliationPage({
           to: params?.to,
         })
       : null;
+  const { reconciliationShareTemplate } = await getCitySettings(await getCurrentCityId());
 
   return (
     <div className="space-y-5">
-      <ReconciliationTabs tab={tab} reconciliation={reconciliation} cashReport={cashReport} />
+      <ReconciliationTabs
+        tab={tab}
+        reconciliation={reconciliation}
+        cashReport={cashReport}
+        shareTemplate={reconciliationShareTemplate}
+      />
     </div>
   );
 }

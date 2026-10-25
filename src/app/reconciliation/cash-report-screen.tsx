@@ -16,15 +16,8 @@ import { SelectInput } from "@/components/admin/select-input";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { Toast } from "@/components/admin/toast";
 import type { CashReportPayload } from "@/lib/reconciliation";
+import { formatMoney as money, formatQty as qty } from "@/lib/reconciliation-format";
 import { cn } from "@/lib/utils";
-
-function money(value: string) {
-  return `₹${Number(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-function qty(value: string) {
-  return Number(value).toLocaleString("en-IN", { maximumFractionDigits: 3 });
-}
 
 const modeLabels: Record<string, string> = {
   CASH: "Cash",
@@ -108,11 +101,11 @@ export function CashReportScreen({ payload }: { payload: CashReportPayload }) {
     <div className="space-y-5">
       <form
         className="flex flex-wrap items-end gap-3"
-        onSubmit={(event) => {
-          // Client-side so the loading bar can show — this query scans a month
-          // of deliveries and is the slowest wait on the screen. A native form
-          // post would unload the document and take the bar with it.
-          event.preventDefault();
+        onChange={(event) => {
+          // Loads as soon as any field changes — no separate button. Client-
+          // side so the loading bar can show: this query scans a month of
+          // deliveries and is the slowest wait on the screen, and a native
+          // form post would unload the document and take the bar with it.
           const data = new FormData(event.currentTarget);
           const params = new URLSearchParams({
             tab: "cash-report",
@@ -122,6 +115,7 @@ export function CashReportScreen({ payload }: { payload: CashReportPayload }) {
           });
           navigate(`/reconciliation?${params.toString()}`);
         }}
+        onSubmit={(event) => event.preventDefault()}
       >
         <SelectInput
           label="Vehicle"
@@ -151,9 +145,6 @@ export function CashReportScreen({ payload }: { payload: CashReportPayload }) {
             className="h-10 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-primary outline-none transition focus:border-accent"
           />
         </label>
-        <PrimaryButton type="submit" className="h-10 rounded-md px-5 text-sm font-semibold">
-          Load report
-        </PrimaryButton>
       </form>
 
       {/* Says what the figures are built from. During migration a range can be

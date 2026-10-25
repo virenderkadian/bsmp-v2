@@ -255,3 +255,15 @@ export function FilterIcon(props: IconProps) {
     </svg>
   );
 }
+
+// Filled rather than built on BaseIcon like every icon above: WhatsApp's mark
+// is only recognisable as a solid shape, the way the app itself always draws
+// it — a thin outline version wouldn't read as "WhatsApp" at a glance, which
+// defeats the point of using it here instead of a generic share icon.
+export function WhatsAppIcon(props: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...props}>
+      <path d="M.06 24l1.69-6.16A11.87 11.87 0 0 1 .16 11.9C.16 5.34 5.5 0 12.06 0a11.8 11.8 0 0 1 8.4 3.49 11.8 11.8 0 0 1 3.48 8.41c0 6.56-5.34 11.9-11.9 11.9a11.9 11.9 0 0 1-5.7-1.45L.06 24zm6.6-3.8c1.68.99 3.28 1.58 5.4 1.58 5.45 0 9.9-4.43 9.9-9.88a9.86 9.86 0 0 0-9.9-9.88c-5.46 0-9.9 4.43-9.9 9.88 0 2.22.65 3.88 1.74 5.62l-.99 3.6 3.75-.98z" />
+    </svg>
+  );
+}

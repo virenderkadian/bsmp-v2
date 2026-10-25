@@ -51,6 +51,8 @@ export async function updateCitySetting(
 
     const cityId = await getCurrentCityId();
     await setCitySetting(cityId, key, value);
+    const field = CITY_SETTING_FIELDS[key];
+
     await logAudit(prisma, {
       cityId,
       entityType: "CitySetting",
@@ -60,22 +62,24 @@ export async function updateCitySetting(
       // its own errors, so Configuration changes went unrecorded in silence.
       entityId: null,
       action: "UPDATE",
+      // "set to {value}" works for a short choice value; a multi-line
+      // template dumped into one summary line would be unreadable, so text
+      // settings just say they changed.
       summary:
-        CITY_SETTING_FIELDS[key].kind === "boolean"
-          ? `${CITY_SETTING_FIELDS[key].label} turned ${value === "true" ? "on" : "off"}.`
-          : `${CITY_SETTING_FIELDS[key].label} set to ${value}.`,
+        field.kind === "boolean"
+          ? `${field.label} turned ${value === "true" ? "on" : "off"}.`
+          : field.kind === "text"
+            ? `${field.label} updated.`
+            : `${field.label} set to ${value}.`,
       after: { key, value },
     });
 
     revalidatePath("/settings");
     revalidatePath("/monthly-bills");
+    revalidatePath("/reconciliation");
 
     const message =
-      CITY_SETTING_FIELDS[key].kind === "boolean"
-        ? value === "true"
-          ? "Turned on."
-          : "Turned off."
-        : "Saved.";
+      field.kind === "boolean" ? (value === "true" ? "Turned on." : "Turned off.") : "Saved.";
 
     return { status: "success", message, token };
   } catch (error) {
