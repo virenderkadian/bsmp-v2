@@ -266,7 +266,7 @@ export async function saveCustomerMonthEntries(
       });
     });
 
-    revalidatePath(`/customers/${parsed.data.customerId}/daily-entries`);
+    revalidatePath(`/customers/${parsed.data.customerId}/monthly-deliveries`);
     revalidatePath("/daily-entry");
     return { status: "success", message: "Entries saved." };
   } catch (error) {
@@ -337,7 +337,7 @@ export async function revertCustomerMonthBillToDraft(
       after: { customerId: parsed.data.customerId, month: parsed.data.month, revertedCount: result.count },
     });
 
-    revalidatePath(`/customers/${parsed.data.customerId}/daily-entries`);
+    revalidatePath(`/customers/${parsed.data.customerId}/monthly-deliveries`);
     revalidatePath("/monthly-bills");
     return {
       status: "success",
