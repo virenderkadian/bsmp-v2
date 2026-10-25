@@ -6,7 +6,8 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { getCurrentCityId } from "@/lib/current-city";
 import { logAudit } from "@/lib/audit";
-import { ABSENT_SIGNATURE, deliverySignature } from "@/lib/daily-entry-diff";
+import { deliverySignature } from "@/lib/daily-entry-diff";
+import { ABSENT_SIGNATURE, checkFrozenBillGuard, updateRecentOrderCache } from "@/lib/daily-entry-guard";
 
 export type DailyEntryActionState = {
   status: "idle" | "success" | "error";
@@ -195,70 +196,57 @@ export async function saveDailyEntry(
     // one combined bill, issued against whichever route is flagged billsHere,
     // so matching on routeId would miss a frozen bill sitting on their other
     // route and let this save quietly change the data behind an issued bill.
-    const frozenBills = await prisma.monthlyBill.findMany({
-      where: {
-        customerId: { in: affectedCustomerIds },
-        billingMonth: billingMonthStart,
-        status: { in: ["GENERATED", "LOCKED"] },
-        route: { cityId: guardCityId },
-      },
-      select: { customerId: true, status: true },
+    const storedSignatureByCustomer = new Map<string, string>();
+    stored?.lines.forEach((line) => {
+      storedSignatureByCustomer.set(
+        line.customerId,
+        deliverySignature(
+          line.skipped,
+          line.productEntries.map((productEntry) => ({
+            productId: productEntry.productId,
+            quantity: Number(productEntry.quantity),
+            rateSnapshot: Number(productEntry.rateSnapshot),
+          })),
+        ),
+      );
     });
 
-    // Short-circuit: with nothing frozen, the diff is pointless — take the
-    // exact same fast path as a route with no bills.
-    if (frozenBills.length > 0) {
+    const submittedSignatureByCustomer = new Map<string, string>();
+    parsed.data.lines.forEach((line) => {
+      submittedSignatureByCustomer.set(line.customerId, deliverySignature(line.skipped, line.products));
+    });
 
-      const storedSignature = new Map<string, string>();
-      stored?.lines.forEach((line) => {
-        storedSignature.set(
-          line.customerId,
-          deliverySignature(
-            line.skipped,
-            line.productEntries.map((productEntry) => ({
-              productId: productEntry.productId,
-              quantity: Number(productEntry.quantity),
-              rateSnapshot: Number(productEntry.rateSnapshot),
-            })),
-          ),
-        );
+    const guardResult = await checkFrozenBillGuard(prisma, {
+      cityId: guardCityId,
+      billingMonth: billingMonthStart,
+      subjects: affectedCustomerIds.map((customerId) => ({
+        key: customerId,
+        customerId,
+        storedSignature: storedSignatureByCustomer.get(customerId) ?? ABSENT_SIGNATURE,
+        submittedSignature: submittedSignatureByCustomer.get(customerId) ?? ABSENT_SIGNATURE,
+      })),
+    });
+
+    if (guardResult.blocked) {
+      await logAudit(prisma, {
+        cityId: guardCityId,
+        entityType: "DailyRouteEntry",
+        action: "BLOCKED",
+        summary: `Blocked daily entry save for route ${parsed.data.routeId} on ${parsed.data.entryDate}: ${guardResult.changedCustomerIds.length} customer(s) with ${guardResult.anyLocked ? "Locked" : "Generated"} bills would change.`,
+        after: {
+          routeId: parsed.data.routeId,
+          entryDate: parsed.data.entryDate,
+          changedCustomerIds: guardResult.changedCustomerIds,
+        },
       });
 
-      const submittedSignature = new Map<string, string>();
-      parsed.data.lines.forEach((line) => {
-        submittedSignature.set(line.customerId, deliverySignature(line.skipped, line.products));
-      });
-
-      // A frozen customer only blocks the save if their bill-affecting delivery
-      // actually differs between what's stored and what's being submitted.
-      const changedFrozen = frozenBills.filter((bill) => {
-        const before = storedSignature.get(bill.customerId) ?? ABSENT_SIGNATURE;
-        const after = submittedSignature.get(bill.customerId) ?? ABSENT_SIGNATURE;
-        return before !== after;
-      });
-
-      if (changedFrozen.length > 0) {
-        const anyLocked = changedFrozen.some((bill) => bill.status === "LOCKED");
-        await logAudit(prisma, {
-          cityId: guardCityId,
-          entityType: "DailyRouteEntry",
-          action: "BLOCKED",
-          summary: `Blocked daily entry save for route ${parsed.data.routeId} on ${parsed.data.entryDate}: ${changedFrozen.length} customer(s) with ${anyLocked ? "Locked" : "Generated"} bills would change.`,
-          after: {
-            routeId: parsed.data.routeId,
-            entryDate: parsed.data.entryDate,
-            changedCustomerIds: changedFrozen.map((bill) => bill.customerId),
-          },
-        });
-
-        return {
-          status: "error",
-          blockedByBill: true,
-          message: `${changedFrozen.length} customer${changedFrozen.length === 1 ? "" : "s"} on this route already ${
-            anyLocked ? "have Locked" : "have Generated"
-          } bills this month and your changes would alter them. Revert those customers' bills to Draft on the Monthly Bills page — or revert this whole route+month below — then edit and regenerate.`,
-        };
-      }
+      return {
+        status: "error",
+        blockedByBill: true,
+        message: `${guardResult.changedCustomerIds.length} customer${guardResult.changedCustomerIds.length === 1 ? "" : "s"} on this route already ${
+          guardResult.anyLocked ? "have Locked" : "have Generated"
+        } bills this month and your changes would alter them. Revert those customers' bills to Draft on the Monthly Bills page — or revert this whole route+month below — then edit and regenerate.`,
+      };
     }
 
     const cityId = await getCurrentCityId();
@@ -407,42 +395,15 @@ export async function saveDailyEntry(
         })
         .filter((pair) => pair.newQty !== (previousQtyByCustomerProduct.get(pair.key) ?? 0));
 
-      if (changedPairs.length > 0) {
-        const existingOrders = await tx.customerProductRecentOrder.findMany({
-          where: {
-            OR: changedPairs.map((pair) => ({ customerId: pair.customerId, productId: pair.productId })),
-          },
-          select: { customerId: true, productId: true, entries: true },
-        });
-        const existingByKey = new Map(
-          existingOrders.map((row) => [
-            `${row.customerId}:${row.productId}`,
-            row.entries as Array<{ date: string; quantity: number }>,
-          ]),
-        );
-
-        for (const pair of changedPairs) {
-          const current = existingByKey.get(pair.key) ?? [];
-          // Drop any entry already on file for this exact date first — a
-          // resave of the same day (an edit/correction) replaces it rather
-          // than appending a duplicate.
-          const withoutToday = current.filter((item) => item.date !== parsed.data.entryDate);
-          const next =
-            pair.newQty > 0
-              ? [{ date: parsed.data.entryDate, quantity: pair.newQty }, ...withoutToday]
-              : withoutToday;
-          // Re-sorted rather than trusted as already-ordered: Daily Entry can
-          // save a backdated date, which wouldn't belong at the front.
-          next.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
-          const capped = next.slice(0, 10) as Prisma.InputJsonValue;
-
-          await tx.customerProductRecentOrder.upsert({
-            where: { customerId_productId: { customerId: pair.customerId, productId: pair.productId } },
-            create: { customerId: pair.customerId, productId: pair.productId, entries: capped },
-            update: { entries: capped },
-          });
-        }
-      }
+      await updateRecentOrderCache(
+        tx,
+        changedPairs.map((pair) => ({
+          customerId: pair.customerId,
+          productId: pair.productId,
+          date: parsed.data.entryDate,
+          newQty: pair.newQty,
+        })),
+      );
 
       // Occasional sales and hand-typed rates, named in the trail.
       //
