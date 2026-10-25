@@ -2,21 +2,26 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { CustomerSwitcher } from "@/app/customers/[id]/monthly-deliveries/customer-switcher";
 import {
   revertCustomerMonthBillToDraft,
   saveCustomerMonthEntries,
-} from "@/app/customers/[id]/daily-entries/actions";
+} from "@/app/customers/[id]/monthly-deliveries/actions";
 import type { DailyEntryActionState } from "@/app/daily-entry/actions";
+import { DoorstepPaymentDialog } from "@/app/daily-entry/doorstep-payment-dialog";
+import { PaymentEditDialog } from "@/app/customers/[id]/monthly-deliveries/payment-edit-dialog";
 import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { DataTable } from "@/components/admin/data-table";
 import { EmptyState } from "@/components/admin/empty-state";
 import { IconButton } from "@/components/admin/icon-button";
+import { PencilSquareIcon, WalletIcon } from "@/components/admin/icons";
 import { PageHeader } from "@/components/admin/page-header";
 import { StatusBadge } from "@/components/admin/status-badge";
 import { SummaryStatBar, type SummaryStatItem } from "@/components/admin/summary-stat-bar";
 import { Toast } from "@/components/admin/toast";
 import { useLoadingBar } from "@/components/admin/loading-bar";
-import type { CustomerMonthEntriesPayload } from "@/lib/customer-month-entries";
+import type { CustomerMonthEntriesPayload, CustomerMonthPayment } from "@/lib/customer-month-entries";
 
 const initialState: DailyEntryActionState = { status: "idle" };
 
@@ -42,16 +47,35 @@ function shiftLabel(shift: string) {
   return shift === "EVENING" ? "Evening" : "Morning";
 }
 
+function formatPaymentDate(value: string) {
+  return new Date(`${value}T00:00:00.000Z`).toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function formatMoney(value: string) {
+  return `₹${Number(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+function paymentStatusTone(status: string) {
+  if (status === "VERIFIED") return "success" as const;
+  if (status === "CANCELLED") return "danger" as const;
+  return "warning" as const;
+}
+
 // Fixing a customer's disputed entries one date at a time in Daily Entry is
 // slow once a bill's already out — this shows every delivery of theirs for a
 // month (across whichever routes/shifts served them) and saves every
 // correction in one submit. It never touches saveDailyEntry's own save
 // path, which rebuilds a whole route+date's lines and would wipe every other
 // customer on that route if called with just one customer's data — see
-// src/app/customers/[id]/daily-entries/actions.ts for the narrower write
-// path this screen actually uses.
-export function CustomerMonthEntriesScreen({ payload }: { payload: CustomerMonthEntriesPayload }) {
+// src/app/customers/[id]/monthly-deliveries/actions.ts for the narrower
+// write path this screen actually uses.
+export function MonthlyDeliveriesScreen({ payload }: { payload: CustomerMonthEntriesPayload }) {
   const { navigate } = useLoadingBar();
+  const router = useRouter();
   const monthInputRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -60,6 +84,9 @@ export function CustomerMonthEntriesScreen({ payload }: { payload: CustomerMonth
   const [toast, setToast] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   const [dirty, setDirty] = useState(false);
   const [handledKey, setHandledKey] = useState("");
+  const [showActions, setShowActions] = useState(false);
+  const [doorstepRow, setDoorstepRow] = useState<{ routeId: string; entryDate: string } | null>(null);
+  const [editingPayment, setEditingPayment] = useState<CustomerMonthPayment | null>(null);
 
   const resultKey = `${state.status}:${state.message ?? ""}|${revertState.status}:${revertState.message ?? ""}`;
   if (resultKey !== handledKey) {
@@ -81,7 +108,33 @@ export function CustomerMonthEntriesScreen({ payload }: { payload: CustomerMonth
     return () => window.clearTimeout(timeout);
   }, [toast]);
 
-  const goToMonth = (month: string) => navigate(`/customers/${payload.customer?.id ?? ""}/daily-entries?month=${month}`);
+  const goToMonth = (month: string) =>
+    navigate(`/customers/${payload.customer?.id ?? ""}/monthly-deliveries?month=${month}`);
+
+  // Fills only the cells still at 0 with this customer's most recent
+  // non-zero quantity for that product — never overwrites a typed value, and
+  // only runs when asked, same reasoning as Daily Entry's own "Fill usual"
+  // (src/app/daily-entry/daily-entry-screen.tsx): nobody should accidentally
+  // save an old quantity as a correction just by tabbing past an empty cell.
+  const fillUsual = () => {
+    const inputs = formRef.current?.querySelectorAll<HTMLInputElement>("[data-monthly-quantity='true']");
+    if (!inputs) {
+      return;
+    }
+
+    let changed = false;
+    inputs.forEach((input) => {
+      const usual = Number(input.dataset.usualQuantity || "0");
+      if (usual > 0 && Number(input.value || 0) === 0) {
+        input.value = String(usual);
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      setDirty(true);
+    }
+  };
 
   if (!payload.dbConnected || !payload.customer) {
     return <EmptyState message={payload.error ?? "Unable to load this customer's month."} />;
@@ -101,15 +154,18 @@ export function CustomerMonthEntriesScreen({ payload }: { payload: CustomerMonth
   return (
     <div className="space-y-5">
       <PageHeader
-        title={`${payload.customer.name} — deliveries`}
+        title={`${payload.customer.name} Monthly Deliveries`}
         subtitle={`${payload.customer.code} · correct any date's quantities and save once for the whole month.`}
         actions={
-          <Link
-            href={`/customers/${payload.customer.id}`}
-            className="inline-flex h-10 items-center justify-center rounded-lg border border-surface-border-strong bg-surface px-4 text-sm font-medium text-text-secondary transition hover:bg-surface-muted"
-          >
-            Back to customer
-          </Link>
+          <>
+            <CustomerSwitcher currentCustomerName={payload.customer.name} month={payload.month} />
+            <Link
+              href={`/customers/${payload.customer.id}`}
+              className="inline-flex h-10 items-center justify-center rounded-lg border border-surface-border-strong bg-surface px-4 text-sm font-medium text-text-secondary transition hover:bg-surface-muted"
+            >
+              Back to customer
+            </Link>
+          </>
         }
       />
 
@@ -186,6 +242,26 @@ export function CustomerMonthEntriesScreen({ payload }: { payload: CustomerMonth
           <input type="hidden" name="customerId" value={payload.customer.id} readOnly />
           <input type="hidden" name="month" value={payload.month} readOnly />
 
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-secondary transition hover:bg-surface-muted">
+              <input
+                type="checkbox"
+                checked={showActions}
+                onChange={(event) => setShowActions(event.target.checked)}
+                className="h-4 w-4 accent-[var(--accent)]"
+              />
+              At the door
+            </label>
+            <SecondaryButton
+              type="button"
+              onClick={fillUsual}
+              className="h-10 px-4 text-sm font-medium"
+              title="Fill every empty cell with what this customer most recently took"
+            >
+              Fill usual
+            </SecondaryButton>
+          </div>
+
           <DataTable
             columns={[
               { key: "date", label: "Date", className: "whitespace-nowrap" },
@@ -197,6 +273,7 @@ export function CustomerMonthEntriesScreen({ payload }: { payload: CustomerMonth
                 className: "text-right whitespace-nowrap",
                 headerClassName: "text-right",
               })),
+              ...(showActions ? [{ key: "actions", label: "", className: "w-12" }] : []),
             ]}
             rows={payload.lines.map((line) => ({
               key: line.lineId,
@@ -239,11 +316,26 @@ export function CustomerMonthEntriesScreen({ payload }: { payload: CustomerMonth
                         name="quantity"
                         defaultValue={value ?? ""}
                         placeholder="0"
+                        data-monthly-quantity="true"
+                        data-usual-quantity={payload.usualQuantities[product.id] ?? ""}
                         className="h-9 w-20 rounded-md border border-surface-border-strong bg-surface px-2 text-right text-sm tabular-nums outline-none transition focus:border-accent"
                       />
                     </span>
                   );
                 }),
+                ...(showActions
+                  ? [
+                      <IconButton
+                        key="actions"
+                        type="button"
+                        title="Collect payment at the door"
+                        aria-label="Collect payment at the door"
+                        onClick={() => setDoorstepRow({ routeId: line.routeId, entryDate: line.entryDate })}
+                      >
+                        <WalletIcon className="h-[18px] w-[18px]" />
+                      </IconButton>,
+                    ]
+                  : []),
               ],
             }))}
           />
@@ -255,6 +347,63 @@ export function CustomerMonthEntriesScreen({ payload }: { payload: CustomerMonth
           </div>
         </form>
       )}
+
+      <section className="space-y-3">
+        <h2 className="text-lg font-semibold text-text-primary">Payments this month</h2>
+        <DataTable
+          columns={["Date", "Amount", "Mode", "Status", "Reference", ""]}
+          emptyMessage={`No payments recorded from ${payload.customer.name} in ${formatMonthLabel(payload.month)}.`}
+          rows={payload.payments.map((payment) => ({
+            key: payment.id,
+            cells: [
+              formatPaymentDate(payment.paymentDate),
+              formatMoney(payment.amount),
+              payment.mode,
+              <StatusBadge key="status" tone={paymentStatusTone(payment.status)}>
+                {payment.status}
+              </StatusBadge>,
+              payment.referenceNo || payment.notes || "—",
+              <IconButton
+                key="edit"
+                type="button"
+                title="Edit this payment"
+                aria-label="Edit this payment"
+                onClick={() => setEditingPayment(payment)}
+              >
+                <PencilSquareIcon className="h-[18px] w-[18px]" />
+              </IconButton>,
+            ],
+          }))}
+        />
+      </section>
+
+      {editingPayment ? (
+        <PaymentEditDialog
+          payment={editingPayment}
+          customerId={payload.customer.id}
+          onClose={() => setEditingPayment(null)}
+          onSaved={(message) => {
+            setEditingPayment(null);
+            setToast({ tone: "success", message });
+            router.refresh();
+          }}
+        />
+      ) : null}
+
+      <DoorstepPaymentDialog
+        target={
+          doorstepRow && payload.customer
+            ? { customerId: payload.customer.id, customerName: payload.customer.name, customerCode: payload.customer.code }
+            : null
+        }
+        routeId={doorstepRow?.routeId ?? ""}
+        paymentDate={doorstepRow?.entryDate ?? `${payload.month}-01`}
+        onClose={() => setDoorstepRow(null)}
+        onRecorded={(message) => {
+          setDoorstepRow(null);
+          setToast({ tone: "success", message });
+        }}
+      />
 
       {toast ? <Toast tone={toast.tone}>{toast.message}</Toast> : null}
     </div>

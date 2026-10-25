@@ -848,7 +848,13 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
                           {line.sequenceNo}
                         </td>
                         <td className="px-5 py-3.5">
-                          <div className="text-sm font-semibold uppercase text-text-primary">{line.customerName}</div>
+                          <Link
+                            href={`/customers/${line.customerId}/monthly-deliveries?month=${payload.selectedDate.slice(0, 7)}`}
+                            title={`Open ${line.customerName}'s month`}
+                            className="text-sm font-semibold uppercase text-text-primary underline-offset-2 hover:text-accent hover:underline"
+                          >
+                            {line.customerName}
+                          </Link>
                           <div className="text-xs text-text-secondary">{line.customerArea ?? line.customerCode}</div>
                           <input type="hidden" name="customerId" value={line.customerId} readOnly />
                           <input type="hidden" name="sequenceNo" value={line.sequenceNo} readOnly />

@@ -9,6 +9,7 @@ import {
   type SheetMoney,
 } from "@/lib/collections-sheet";
 import { resolveBillingRoutes } from "@/lib/monthly-bills-math";
+import { paymentModes, paymentStatuses } from "@/lib/payment-options";
 
 export type PaymentRecord = Pick<
   Payment,
@@ -128,18 +129,12 @@ export type BulkPaymentPayload = {
   error?: string;
 };
 
-const paymentModes: PaymentsPayload["modes"] = [
-  { value: "CASH", label: "Cash" },
-  { value: "UPI", label: "UPI" },
-  { value: "BANK_TRANSFER", label: "Bank transfer" },
-  { value: "CHEQUE", label: "Cheque" },
-];
-
-const paymentStatuses: PaymentsPayload["statuses"] = [
-  { value: "PENDING", label: "Pending" },
-  { value: "VERIFIED", label: "Verified" },
-  { value: "CANCELLED", label: "Cancelled" },
-];
+// Defined in payment-options.ts, which has no next/headers dependency, so a
+// client component can import these two lists directly without pulling this
+// whole server-only module into its bundle. Re-exported here so every
+// existing import of paymentModes/paymentStatuses from this file keeps
+// working unchanged.
+export { paymentModes, paymentStatuses };
 
 function toMoney(value: unknown) {
   return Number(value).toFixed(2);

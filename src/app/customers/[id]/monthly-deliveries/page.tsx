@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { CustomerMonthEntriesScreen } from "@/app/customers/[id]/daily-entries/customer-month-entries-screen";
+import { MonthlyDeliveriesScreen } from "@/app/customers/[id]/monthly-deliveries/monthly-deliveries-screen";
 import { getCustomerMonthEntries } from "@/lib/customer-month-entries";
 
 function currentMonth() {
@@ -7,7 +7,7 @@ function currentMonth() {
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-export default async function CustomerDailyEntriesPage({
+export default async function MonthlyDeliveriesPage({
   params,
   searchParams,
 }: {
@@ -24,5 +24,5 @@ export default async function CustomerDailyEntriesPage({
     notFound();
   }
 
-  return <CustomerMonthEntriesScreen payload={payload} />;
+  return <MonthlyDeliveriesScreen payload={payload} />;
 }

@@ -93,10 +93,10 @@ export default async function CustomerProfilePage({
         actions={
           <>
             <Link
-              href={`/customers/${customer.id}/daily-entries`}
+              href={`/customers/${customer.id}/monthly-deliveries`}
               className="inline-flex h-10 items-center justify-center rounded-lg border border-surface-border-strong bg-surface px-4 text-sm font-medium text-text-secondary transition hover:bg-surface-muted"
             >
-              View / edit month&rsquo;s deliveries
+              Monthly Deliveries
             </Link>
             <Link
               href="/customers"
