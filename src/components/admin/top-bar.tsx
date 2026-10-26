@@ -25,6 +25,12 @@ const EXTRA_PAGES: ExtraPage[] = [
     backHref: "/payments",
   },
   {
+    path: "/payments/bank-reconciliation",
+    title: "Match Bank Statement",
+    subtitle: "Upload a bank statement export and match its amounts to outstanding customer bills.",
+    backHref: "/payments",
+  },
+  {
     path: "/customers/map",
     title: "Customer Map",
     subtitle: "See where customers are, fix wrongly captured pins, and place ones with no location.",

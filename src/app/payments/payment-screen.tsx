@@ -547,6 +547,12 @@ export function PaymentScreen({ payload }: PaymentScreenProps) {
             >
               Collect payments
             </Link>
+            <Link
+              href="/payments/bank-reconciliation"
+              className="inline-flex h-10 items-center justify-center rounded-md border border-surface-border-strong bg-surface px-4 text-sm font-medium text-text-secondary transition hover:bg-surface-muted"
+            >
+              Match bank statement
+            </Link>
 
           </div>
         </div>
