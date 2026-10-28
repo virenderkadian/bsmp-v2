@@ -155,9 +155,20 @@ test.describe("Payment at the door", () => {
       Date.UTC(thisMonth.getUTCFullYear(), thisMonth.getUTCMonth() - 1, 1),
     );
 
-    // Last month generated but NOT locked, this month open too.
+    // "Settles against" reads the customer's earliest open bill across every
+    // route they're on (by design — a customer running two routes gets one
+    // combined bill), not just TEST_ROUTE_ID. Scoping this delete to
+    // TEST_ROUTE_ID+these two months only clears what THIS test created; a
+    // stray GENERATED bill left on some other route by unrelated manual or
+    // automated testing (TEST_CUSTOMER_1_ID is a shared fixture id) would
+    // still correctly outrank lastMonth here and silently change the
+    // expected answer. Clearing every bill this customer has, on any route,
+    // is what actually guarantees lastMonth is the earliest.
+    await prisma.monthlyBillItem.deleteMany({
+      where: { monthlyBill: { customerId: TEST_CUSTOMER_1_ID } },
+    });
     await prisma.monthlyBill.deleteMany({
-      where: { routeId: TEST_ROUTE_ID, billingMonth: { in: [lastMonth, thisMonth] } },
+      where: { customerId: TEST_CUSTOMER_1_ID },
     });
     await prisma.monthlyBill.createMany({
       data: [
