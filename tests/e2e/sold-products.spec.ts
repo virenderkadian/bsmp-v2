@@ -24,6 +24,21 @@ test.describe("Printed sheets show the products a round actually sold", () => {
   test.beforeAll(async () => {
     const prisma = testPrisma();
 
+    // Every test below assumes Classic is the active bill format (the
+    // "Configuration switches..." test documents that assumption itself —
+    // it switches to compact and switches back to "the default" at the
+    // end). That only holds if the city's format is Classic BEFORE this
+    // file runs too; on a shared dev database, a previous manual session
+    // can leave it on compact indefinitely; nothing here reset it on its
+    // own. Compact renders the calendar as two side-by-side halves — so a
+    // columnheader assertion written for one month-wide table legitimately
+    // matches twice and fails strict-mode, not because of a real bug.
+    await prisma.citySetting.upsert({
+      where: { cityId_key: { cityId: TEST_CITY_ID, key: "billFormat" } },
+      update: { value: "classic" },
+      create: { cityId: TEST_CITY_ID, key: "billFormat", value: "classic" },
+    });
+
     // An occasional item: sold now and then, deliberately kept off the Daily
     // Entry grid so it does not sit empty against 600 customers.
     await prisma.product.upsert({

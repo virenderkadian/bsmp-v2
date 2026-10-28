@@ -12,6 +12,7 @@ import {
   DoorstepPaymentDialog,
   type DoorstepPaymentTarget,
 } from "@/app/daily-entry/doorstep-payment-dialog";
+import { FastDailyEntry } from "@/app/daily-entry/fast-entry";
 import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { Dialog } from "@/components/admin/dialog";
 import { IconButton } from "@/components/admin/icon-button";
@@ -244,6 +245,7 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
   // from the saved preference right after mount — the same shape the sidebar's
   // collapsed state uses, for the same reason: reading it in the initializer
   // would desync the server-rendered HTML from the first client render.
+  const [mode, setMode] = useState<"grid" | "fast">("grid");
   const [showActions, setShowActions] = useState(false);
   const [payingCustomer, setPayingCustomer] = useState<DoorstepPaymentTarget | null>(null);
 
@@ -516,6 +518,20 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
   const lastHandledStateRef = useRef<DailyEntryActionState | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
 
+  // recompute() reads straight from entryFormRef.current's DOM, which is null
+  // while mode is "fast" (the grid form isn't mounted then). A save made in
+  // Fast entry still fires the success effect above and calls recompute(),
+  // but it's a silent no-op at that moment — so switching back to Grid has to
+  // recompute once more itself, against the freshly remounted (and
+  // correctly-valued, since remounting re-reads payload into defaultValue)
+  // inputs, or the totals row is left showing stale figures from before.
+  useEffect(() => {
+    if (mode === "grid") {
+      recompute();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode]);
+
   // React resets every uncontrolled field in the form once its action
   // returns — success OR error (see the near-identical note in
   // doorstep-payment-dialog.tsx, which hit this for the same reason). That's
@@ -674,7 +690,30 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
               )}
             </select>
           </form>
-          {payload.lines.length > 0 ? (
+          <div className="inline-flex h-10 items-center rounded-md border border-surface-border-strong bg-surface p-1 text-sm font-medium">
+            <button
+              type="button"
+              onClick={() => setMode("grid")}
+              className={cn(
+                "h-8 rounded-sm px-3 transition",
+                mode === "grid" ? "bg-accent text-accent-contrast" : "text-text-secondary hover:bg-surface-muted",
+              )}
+            >
+              Grid
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("fast")}
+              title="Tally-register-style entry: type a name, Enter through quantities, keyboard only"
+              className={cn(
+                "h-8 rounded-sm px-3 transition",
+                mode === "fast" ? "bg-accent text-accent-contrast" : "text-text-secondary hover:bg-surface-muted",
+              )}
+            >
+              Fast entry
+            </button>
+          </div>
+          {mode === "grid" && payload.lines.length > 0 ? (
             <label className="inline-flex h-10 cursor-pointer items-center gap-2 rounded-md border border-surface-border-strong bg-surface px-3 text-sm text-text-secondary transition hover:bg-surface-muted">
               <input
                 type="checkbox"
@@ -692,23 +731,27 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
           >
             Unusual this month
           </Link>
-          <SecondaryButton
-            type="button"
-            onClick={fillUsual}
-            disabled={payload.lines.length === 0}
-            className="h-10 px-4 text-sm font-medium"
-            title="Fill every empty cell with what that customer usually takes on this route"
-          >
-            Fill usual
-          </SecondaryButton>
-          <PrimaryButton
-            type="submit"
-            form="daily-entry-form"
-            disabled={!canSave}
-            className="h-10 rounded-md px-5 text-sm font-semibold"
-          >
-            {pending ? "Saving..." : dirty ? "Save changes" : "Saved"}
-          </PrimaryButton>
+          {mode === "grid" ? (
+            <>
+              <SecondaryButton
+                type="button"
+                onClick={fillUsual}
+                disabled={payload.lines.length === 0}
+                className="h-10 px-4 text-sm font-medium"
+                title="Fill every empty cell with what that customer usually takes on this route"
+              >
+                Fill usual
+              </SecondaryButton>
+              <PrimaryButton
+                type="submit"
+                form="daily-entry-form"
+                disabled={!canSave}
+                className="h-10 rounded-md px-5 text-sm font-semibold"
+              >
+                {pending ? "Saving..." : dirty ? "Save changes" : "Saved"}
+              </PrimaryButton>
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -725,6 +768,11 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
         </div>
       ) : null}
 
+      {mode === "fast" ? (
+        <FastDailyEntry payload={payload} formAction={formAction} pending={pending} state={state} />
+      ) : null}
+
+      {mode === "grid" ? (
       <form
         id="daily-entry-form"
         ref={entryFormRef}
@@ -1095,6 +1143,7 @@ export function DailyEntryScreen({ payload }: { payload: DailyEntryPayload }) {
             JS quirk), so the operator isn't left looking at nothing. */}
         <ActionMessage state={state} />
       </form>
+      ) : null}
 
       {/* Outside the form above: nesting one form in another is invalid, and a
           payment has to save on its own — never lost because the sheet failed

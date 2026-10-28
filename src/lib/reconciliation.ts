@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { getCurrentCityId } from "@/lib/current-city";
 import { withDbTimeout } from "@/lib/db-timeout";
 import { prisma } from "@/lib/prisma";
@@ -16,14 +17,23 @@ function addDays(dateInput: string, days: number) {
   return toDateInput(date);
 }
 
-type EntryWithProducts = {
-  routeId: string;
+// One row per (entryDate, route, product) — already summed in SQL across
+// every line on that route that day, rather than pulled one line/product row
+// at a time and summed in JS. See getDeliveryTotals below. productId/quantity
+// are nullable: the query LEFT JOINs out from the entry itself, so a route
+// that ran but delivered nothing that day (every line skipped, or simply no
+// reconciliation-relevant product on it) still produces one row — with no
+// product attached — rather than vanishing from the result entirely. Losing
+// that row would silently read as "this route never ran", which is a
+// different, wrong fact from "it ran and delivered zero".
+type DeliveryAggregateRow = {
   entryDate: Date;
-  vehicleId: string | null;
-  route: { name: string; shift: string; vehicleId: string };
-  lines: Array<{
-    productEntries: Array<{ productId: string; quantity: unknown }>;
-  }>;
+  routeId: string;
+  routeName: string;
+  shift: string;
+  vehicleId: string;
+  productId: string | null;
+  quantity: unknown;
 };
 
 // One route's contribution to a vehicle's round: which route it was, and how
@@ -34,38 +44,72 @@ type RouteDelivery = {
   quantities: Map<string, number>;
 };
 
-// Groups entries by the vehicle that actually ran them, then by shift and
-// date — so a vehicle covering two routes in one shift (helping out while
-// another vehicle is off the road) has both counted, rather than whichever
-// one happened to be found first.
+// Groups already-summed delivery rows by the vehicle that actually ran them,
+// then by shift and date — so a vehicle covering two routes in one shift
+// (helping out while another vehicle is off the road) has both counted,
+// rather than whichever one happened to be found first.
 //
 // The vehicle is the entry's own snapshot where it has one, falling back to
-// the route's current owner for rows written before that column existed.
+// the route's current owner for rows written before that column existed
+// (both already resolved in SQL via COALESCE — see getDeliveryTotals).
 // Reading the route's CURRENT owner for every entry would mean reassigning a
 // route tomorrow silently moves last week's deliveries to another vehicle.
-function groupDeliveries(entries: EntryWithProducts[]) {
+function groupDeliveries(rows: DeliveryAggregateRow[]) {
   const map = new Map<string, RouteDelivery[]>();
+  const routesByKey = new Map<string, Map<string, RouteDelivery>>();
 
-  for (const entry of entries) {
-    const vehicleId = entry.vehicleId ?? entry.route.vehicleId;
-    const key = `${vehicleId}:${entry.route.shift}:${toDateInput(entry.entryDate)}`;
+  for (const row of rows) {
+    const key = `${row.vehicleId}:${row.shift}:${toDateInput(row.entryDate)}`;
 
-    const quantities = new Map<string, number>();
-    for (const line of entry.lines) {
-      for (const productEntry of line.productEntries) {
-        quantities.set(
-          productEntry.productId,
-          (quantities.get(productEntry.productId) ?? 0) + Number(productEntry.quantity),
-        );
-      }
+    let routesForKey = routesByKey.get(key);
+    if (!routesForKey) {
+      routesForKey = new Map();
+      routesByKey.set(key, routesForKey);
+      map.set(key, []);
     }
 
-    const bucket = map.get(key) ?? [];
-    bucket.push({ routeId: entry.routeId, routeName: entry.route.name, quantities });
-    map.set(key, bucket);
+    let routeDelivery = routesForKey.get(row.routeId);
+    if (!routeDelivery) {
+      routeDelivery = { routeId: row.routeId, routeName: row.routeName, quantities: new Map() };
+      routesForKey.set(row.routeId, routeDelivery);
+      map.get(key)!.push(routeDelivery);
+    }
+
+    // No product on this entry (every line skipped, or nothing delivered) —
+    // the RouteDelivery object above still gets created so hasEntry reads
+    // true, there's just nothing to add to its quantities.
+    if (row.productId !== null) {
+      routeDelivery.quantities.set(row.productId, Number(row.quantity));
+    }
   }
 
   return map;
+}
+
+// Delivered quantity per (entryDate, route, product) for every route in the
+// city on the given dates — summed in SQL rather than pulling every
+// line/product row and summing in JS. That used to be this screen's single
+// heaviest query: one row per customer per product per day, chunked across
+// Prisma's relation-loading into dozens of separate round trips. This is one
+// query, one row per (date, route, product) actually delivered — LEFT JOINed
+// from the entry itself so a route that ran with zero deliveries still
+// produces a row (see DeliveryAggregateRow above).
+async function getDeliveryTotals(cityId: string, dates: Date[]): Promise<DeliveryAggregateRow[]> {
+  if (dates.length === 0) {
+    return [];
+  }
+
+  return prisma.$queryRaw<DeliveryAggregateRow[]>`
+    SELECT e."entryDate" AS "entryDate", e."routeId" AS "routeId", r."name" AS "routeName",
+      r."shift" AS "shift", COALESCE(e."vehicleId", r."vehicleId") AS "vehicleId",
+      dp."productId" AS "productId", SUM(dp.quantity)::numeric AS "quantity"
+    FROM "DailyRouteEntry" e
+    JOIN "Route" r ON r.id = e."routeId"
+    LEFT JOIN "DailyRouteEntryLine" dl ON dl."entryId" = e.id
+    LEFT JOIN "DailyRouteEntryLineProduct" dp ON dp."lineId" = dl.id
+    WHERE r."cityId" = ${cityId}::uuid AND e."entryDate" IN (${Prisma.join(dates)})
+    GROUP BY e."entryDate", e."routeId", r."name", r."shift", COALESCE(e."vehicleId", r."vehicleId"), dp."productId"
+  `;
 }
 
 // How much of one product came from one particular route. Only interesting
@@ -206,35 +250,13 @@ export async function getReconciliationPayload(input?: { cycleDate?: string }): 
     const productIds = reconciliationProducts.map((product) => product.id);
     const vehicleIds = vehicles.map((vehicle) => vehicle.id);
 
-    const [entries, stockRows, paymentRows] = await Promise.all([
+    const [deliveryRows, stockRows, paymentRows] = await Promise.all([
       withDbTimeout(
-        // Fetched by vehicle rather than by route, so every route a vehicle
-        // ran in a shift is picked up — including one it has since handed
-        // back. The null branch covers entries written before the vehicle
-        // snapshot existed, which still have to be found via their route.
-        prisma.dailyRouteEntry.findMany({
-          where: {
-            entryDate: { in: [new Date(eveningDate), new Date(cycleDate)] },
-            OR: [
-              { vehicleId: { in: vehicleIds } },
-              { vehicleId: null, route: { vehicleId: { in: vehicleIds } } },
-            ],
-          },
-          select: {
-            routeId: true,
-            entryDate: true,
-            vehicleId: true,
-            route: { select: { name: true, shift: true, vehicleId: true } },
-            lines: {
-              select: {
-                productEntries: {
-                  where: { productId: { in: productIds } },
-                  select: { productId: true, quantity: true },
-                },
-              },
-            },
-          },
-        }),
+        // Scoped to the city, not to these vehicles specifically — any extra
+        // rows for an inactive vehicle just sit unused in the map below,
+        // since `cycles` only ever iterates the already-filtered `vehicles`
+        // array. Simpler than threading a vehicleId list into the SQL.
+        getDeliveryTotals(cityId, [new Date(eveningDate), new Date(cycleDate)]),
         "Reconciliation entries request",
       ),
       withDbTimeout(
@@ -253,7 +275,7 @@ export async function getReconciliationPayload(input?: { cycleDate?: string }): 
       ),
     ]);
 
-    const deliveries = groupDeliveries(entries);
+    const deliveries = groupDeliveries(deliveryRows);
 
     const paymentsByVehicle = new Map<string, number>();
     paymentRows.forEach((payment) => {
@@ -518,7 +540,7 @@ export async function getVehicleCashReportPayload(input?: {
     // The evening half of the first cycle falls on the day before the range.
     const deliveriesFrom = addDays(from, -1);
 
-    const [stockRows, deposits, entries] = await Promise.all([
+    const [stockRows, deposits, shiftDeliveryRows] = await Promise.all([
       prisma.vehicleCycleStock.findMany({
         where: { vehicleId: vehicle.id, cycleDate: { gte: fromDate, lte: toDate } },
         select: { productId: true, cycleDate: true, givenQty: true, returnedQty: true, rateSnapshot: true },
@@ -540,39 +562,31 @@ export async function getVehicleCashReportPayload(input?: {
       // By vehicle rather than by route, matching the daily screen: every
       // route this vehicle ran in a shift counts, including one it has since
       // handed back, and the vehicle comes from the entry's own snapshot
-      // where it has one.
-      prisma.dailyRouteEntry.findMany({
-        where: {
-          entryDate: { gte: new Date(`${deliveriesFrom}T00:00:00.000Z`), lte: toDate },
-          OR: [{ vehicleId: vehicle.id }, { vehicleId: null, route: { vehicleId: vehicle.id } }],
-        },
-        select: {
-          routeId: true,
-          entryDate: true,
-          vehicleId: true,
-          route: { select: { name: true, shift: true, vehicleId: true } },
-          lines: {
-            where: { skipped: false },
-            select: { productEntries: { select: { productId: true, quantity: true } } },
-          },
-        },
-      }),
+      // where it has one. Summed in SQL (one row per shift+date+product)
+      // rather than pulling every non-skipped line/product row across the
+      // whole range and summing in JS — this range can span a full month,
+      // and only the per-product total is ever read below, never which
+      // customer or line it came from.
+      prisma.$queryRaw<Array<{ entryDate: Date; shift: string; productId: string; quantity: unknown }>>`
+        SELECT e."entryDate" AS "entryDate", r."shift" AS "shift", dp."productId" AS "productId",
+          SUM(dp.quantity)::numeric AS "quantity"
+        FROM "DailyRouteEntryLineProduct" dp
+        JOIN "DailyRouteEntryLine" dl ON dl.id = dp."lineId" AND dl.skipped = false
+        JOIN "DailyRouteEntry" e ON e.id = dl."entryId"
+        JOIN "Route" r ON r.id = e."routeId"
+        WHERE e."entryDate" >= ${new Date(`${deliveriesFrom}T00:00:00.000Z`)} AND e."entryDate" <= ${toDate}
+          AND (e."vehicleId" = ${vehicle.id}::uuid OR (e."vehicleId" IS NULL AND r."vehicleId" = ${vehicle.id}::uuid))
+        GROUP BY e."entryDate", r."shift", dp."productId"
+      `,
     ]);
 
     // shift+date -> productId -> quantity, summed across however many routes
     // the vehicle covered in that shift.
     const deliveredByShiftDate = new Map<string, Map<string, number>>();
-    entries.forEach((entry) => {
-      const key = `${entry.route.shift}:${toDateInput(entry.entryDate)}`;
+    shiftDeliveryRows.forEach((row) => {
+      const key = `${row.shift}:${toDateInput(row.entryDate)}`;
       const perProduct = deliveredByShiftDate.get(key) ?? new Map<string, number>();
-      entry.lines.forEach((line) => {
-        line.productEntries.forEach((productEntry) => {
-          perProduct.set(
-            productEntry.productId,
-            (perProduct.get(productEntry.productId) ?? 0) + Number(productEntry.quantity),
-          );
-        });
-      });
+      perProduct.set(row.productId, Number(row.quantity));
       deliveredByShiftDate.set(key, perProduct);
     });
 

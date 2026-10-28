@@ -74,11 +74,6 @@ export async function getDriverRoutes(vehicleId: string, cityId: string): Promis
   }));
 }
 
-// How far back to look for a customer's most recent delivery when suggesting
-// today's default quantity. Bounds the history query; well past a month
-// covers a customer who's been skipped for a while (holiday, temporary stop).
-const RECENT_ORDER_LOOKBACK_DAYS = 45;
-
 // The delivery sheet for one route + date: the month's customer sequence in
 // order, each with the same active product catalog the web Daily Entry screen
 // uses (see src/lib/daily-entry.ts), pre-filled with what the customer most
@@ -95,45 +90,53 @@ export async function getDriverSheet(
 ): Promise<DriverSheetResponse | null> {
   const sequenceMonth = toMonthStart(dateInput);
   const entryDate = toDay(dateInput);
-  const recentSince = new Date(entryDate);
-  recentSince.setUTCDate(recentSince.getUTCDate() - RECENT_ORDER_LOOKBACK_DAYS);
 
   const previousMonth = toPreviousMonthStart(dateInput);
 
-  // Order matters — must match the array below.
-  const [route, products, profile, previousBills, recentEntries] = await Promise.all([
-    prisma.route.findFirst({
-      where: { id: routeId, cityId, vehicleId, isActive: true },
-      select: {
-        id: true,
-        code: true,
-        name: true,
-        shift: true,
-        monthlySequences: {
-          where: { status: "ACTIVE", sequenceMonth },
-          orderBy: { sequenceNo: "asc" },
-          select: {
-            customerId: true,
-            sequenceNo: true,
-            customer: { select: { code: true, name: true, area: true, mobile: true, latitude: true, longitude: true } },
-          },
+  // Fetched alone, ahead of the rest: the recent-order lookup below needs
+  // this route's customer ids to scope itself, so it can't run in the same
+  // Promise.all.
+  const route = await prisma.route.findFirst({
+    where: { id: routeId, cityId, vehicleId, isActive: true },
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      shift: true,
+      monthlySequences: {
+        where: { status: "ACTIVE", sequenceMonth },
+        orderBy: { sequenceNo: "asc" },
+        select: {
+          customerId: true,
+          sequenceNo: true,
+          customer: { select: { code: true, name: true, area: true, mobile: true, latitude: true, longitude: true } },
         },
-        entries: {
-          where: { entryDate },
-          take: 1,
-          select: {
-            lines: {
-              select: {
-                customerId: true,
-                skipped: true,
-                remarks: true,
-                productEntries: { select: { productId: true, quantity: true, rateSnapshot: true } },
-              },
+      },
+      entries: {
+        where: { entryDate },
+        take: 1,
+        select: {
+          lines: {
+            select: {
+              customerId: true,
+              skipped: true,
+              remarks: true,
+              productEntries: { select: { productId: true, quantity: true, rateSnapshot: true } },
             },
           },
         },
       },
-    }),
+    },
+  });
+
+  if (!route) {
+    return null;
+  }
+
+  const routeCustomerIds = route.monthlySequences.map((seq) => seq.customerId);
+
+  // Order matters — must match the array below.
+  const [products, profile, previousBills, recentOrders] = await Promise.all([
     // cityId is REQUIRED here, not optional hardening: without it this
     // returned every city's catalog merged together, so a driver saw
     // products that don't exist in their city (and could have delivered
@@ -161,49 +164,37 @@ export async function getDriverSheet(
       },
       select: { id: true, customerId: true, closingBalance: true },
     }),
-    // One bounded query for the whole route, not per customer: every prior
-    // day's non-skipped lines, newest first, so we can pick each customer's
-    // most recent delivery in a single pass below.
-    prisma.dailyRouteEntry.findMany({
-      where: { routeId, entryDate: { lt: entryDate, gte: recentSince } },
-      orderBy: { entryDate: "desc" },
-      select: {
-        lines: {
-          where: { skipped: false },
-          select: { customerId: true, productEntries: { select: { productId: true, quantity: true } } },
-        },
-      },
+    // The same most-recent-non-zero-quantity cache the web Daily Entry and
+    // Monthly Deliveries screens' own "Fill usual" reads (see
+    // src/lib/daily-entry-guard.ts's updateRecentOrderCache, which keeps it
+    // current). This used to be reconstructed here from scratch — a 45-day
+    // scan of every line and product row on the route, the single heaviest
+    // query the driver app ran, re-run on every sheet sync. Reading the
+    // already-maintained cache instead is both far cheaper (one row per
+    // customer+product actually seen, not one row per line per day) and more
+    // consistent with what "usual order" means everywhere else in the app —
+    // per-product independently, not frozen to whichever single day the old
+    // scan happened to land on first.
+    prisma.customerProductRecentOrder.findMany({
+      where: { customerId: { in: routeCustomerIds } },
+      select: { customerId: true, productId: true, entries: true },
     }),
   ]);
-
-  if (!route) {
-    return null;
-  }
 
   const lineByCustomer = new Map((route.entries[0]?.lines ?? []).map((line) => [line.customerId, line]));
   const previousBillByCustomer = new Map(previousBills.map((bill) => [bill.customerId, bill]));
   const previousMonthLabel = previousMonth.toISOString().slice(0, 7);
 
-  // First non-empty delivery found per customer, walking newest-to-oldest —
-  // that's their most recent "usual order".
   const recentOrderByCustomer = new Map<string, Map<string, number>>();
-  for (const entry of recentEntries) {
-    for (const line of entry.lines) {
-      if (recentOrderByCustomer.has(line.customerId)) {
-        continue;
-      }
-      const quantities = new Map<string, number>();
-      line.productEntries.forEach((productEntry) => {
-        const quantity = Number(productEntry.quantity);
-        if (quantity > 0) {
-          quantities.set(productEntry.productId, quantity);
-        }
-      });
-      if (quantities.size > 0) {
-        recentOrderByCustomer.set(line.customerId, quantities);
-      }
+  recentOrders.forEach((order) => {
+    const entries = order.entries as unknown as Array<{ date: string; quantity: number }>;
+    const mostRecent = entries[0];
+    if (mostRecent && mostRecent.quantity > 0) {
+      const quantities = recentOrderByCustomer.get(order.customerId) ?? new Map<string, number>();
+      quantities.set(order.productId, mostRecent.quantity);
+      recentOrderByCustomer.set(order.customerId, quantities);
     }
-  }
+  });
 
   const customers: DriverSheetCustomer[] = route.monthlySequences.map((seq) => {
     const savedLine = lineByCustomer.get(seq.customerId);
