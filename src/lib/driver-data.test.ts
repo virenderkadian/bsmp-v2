@@ -92,9 +92,25 @@ beforeAll(async () => {
   await rawPrisma.dailyRouteEntryLine.create({
     data: { entryId: todayEntry.id, customerId, sequenceNo: 1, skipped: true },
   });
+
+  // getDriverSheet reads the recent-order SUGGESTION from this cache table
+  // (the same one Daily Entry/Monthly Deliveries' "Fill usual" reads — see
+  // updateRecentOrderCache in daily-entry-guard.ts), not by re-scanning raw
+  // delivery rows. In production this row is written by the normal save
+  // path; this fixture writes it directly to simulate yesterday's delivery
+  // without going through that path, matching the exact shape
+  // updateRecentOrderCache produces.
+  await rawPrisma.customerProductRecentOrder.create({
+    data: {
+      customerId,
+      productId,
+      entries: [{ date: "2027-01-14", quantity: 5 }],
+    },
+  });
 });
 
 afterAll(async () => {
+  await rawPrisma.customerProductRecentOrder.deleteMany({ where: { customerId, productId } });
   // Scoped by routeId (not just the two beforeAll entries) since the
   // location-backfill tests below create further entries via saveDriverLine.
   await rawPrisma.dailyRouteEntryLineProduct.deleteMany({ where: { line: { entry: { routeId } } } });
