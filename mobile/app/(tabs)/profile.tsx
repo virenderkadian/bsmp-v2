@@ -1,6 +1,7 @@
 import Constants from "expo-constants";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
+import { TAB_BAR_HEIGHT } from "@/components/ActiveRoutePill";
 import { useSession } from "@/session";
 import { THEME_IDS, THEME_META, type ThemeId } from "@/theme";
 import { useTheme, type Appearance } from "@/theme-preference";
@@ -69,6 +70,7 @@ const APPEARANCE_OPTIONS: Array<{ id: Appearance; label: string }> = [
 
 export default function ProfileScreen() {
   const colors = useColors();
+  const insets = useSafeAreaInsets();
   const { vehicle, signOut } = useSession();
   const { appearance, setAppearance, themeId, setThemeId } = useTheme();
   const version = Constants.expoConfig?.version ?? "1.0.0";
@@ -82,7 +84,11 @@ export default function ProfileScreen() {
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.ground }} edges={["top", "left", "right"]}>
-      <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
+      {/* NativeTabs' bar isn't excluded from this screen's own frame (see the
+      comment on TAB_BAR_HEIGHT in ActiveRoutePill.tsx), so without this the
+      last card — here, Log out — renders underneath it with no extra
+      scroll room to reveal it. */}
+      <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 24 + insets.bottom + TAB_BAR_HEIGHT }}>
         <ScreenTitle title="Profile" />
 
         <Card style={{ flexDirection: "row", alignItems: "center", gap: 13, marginBottom: 16 }}>
