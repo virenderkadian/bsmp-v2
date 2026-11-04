@@ -176,6 +176,72 @@ export type DriverSaveLineResponse = {
   saved: DriverSheetCustomer;
 };
 
+// ---- Pending dues (bills issued but not yet locked, any past month) ----
+//
+// Read-only: nothing here writes money. GENERATED-only and
+// closingBalance > 0, same rule as DriverSheetCustomer.previousBill, but
+// across every unpaid month a customer has (not just last month) and across
+// every route this vehicle runs (not just today's).
+
+export type DriverDuesBill = {
+  billId: string;
+  month: string; // YYYY-MM
+  outstanding: string; // Decimal serialized as string
+};
+
+export type DriverDuesCustomer = {
+  customerId: string;
+  customerCode: string;
+  customerName: string;
+  mobile: string | null;
+  // This month's position on the route, for sorting in delivery order. Null
+  // if the customer is no longer on the route's active sequence (moved off
+  // it since the unpaid bill was issued) — sorted to the end in that case.
+  sequenceNo: number | null;
+  totalOutstanding: string; // sum of bills below
+  bills: DriverDuesBill[]; // oldest month first
+};
+
+export type DriverDuesRoute = {
+  routeId: string;
+  routeCode: string;
+  routeName: string;
+  customers: DriverDuesCustomer[];
+  totalOutstanding: string;
+};
+
+export type DriverDuesResponse = {
+  routes: DriverDuesRoute[];
+  grandTotalOutstanding: string;
+  customerCount: number;
+};
+
+// ---- Bill detail (read-only view of one MonthlyBill) ----
+
+export type DriverBillDetailItem = {
+  productId: string;
+  code: string;
+  name: string;
+  shortName: string | null;
+  unit: string;
+  totalQty: string;
+  averageRate: string;
+  totalAmount: string;
+};
+
+export type DriverBillDetailResponse = {
+  billId: string;
+  month: string; // YYYY-MM
+  status: "GENERATED" | "LOCKED";
+  customer: { customerId: string; customerCode: string; customerName: string; mobile: string | null };
+  route: { routeId: string; routeCode: string; routeName: string };
+  openingBalance: string;
+  deliveryAmount: string;
+  paymentAmount: string;
+  closingBalance: string;
+  items: DriverBillDetailItem[];
+};
+
 // ---- Errors ----
 
 export type DriverErrorResponse = {
