@@ -342,10 +342,19 @@ describe("driver sheet previous-month bill (dev DB)", () => {
     expect(sheet!.customers.find((entry) => entry.customerId === customerId)?.previousBill).toBeNull();
   });
 
-  it("does not disturb the recent-order prefill", async () => {
+  it("reads the recent-order suggestion intact, not scrambled with the previous-month bill", async () => {
     // Regression guard: the bill query sits in the same Promise.all as the
     // delivery-history query, and getting that order wrong silently swapped the
     // two — dues broke AND every quantity suggestion did.
+    //
+    // Expected value is "1", not the "5" seeded in beforeAll: the
+    // "saveDriverLine location backfill" tests above legitimately move this
+    // same customer+product's suggestion forward with their own saves (the
+    // last one, dated 2027-01-28, saves quantity 1) — saveDriverLine keeps
+    // CustomerProductRecentOrder current now (see updateRecentOrderCache),
+    // same as the web Daily Entry save always has. This test only cares that
+    // whatever that current value is comes through intact rather than
+    // getting swapped with the bill's closingBalance.
     await setBill("GENERATED", 450);
 
     const sheet = await getDriverSheet(vehicleId, cityId, routeId, "2027-01-16");
@@ -353,7 +362,7 @@ describe("driver sheet previous-month bill (dev DB)", () => {
       .find((entry) => entry.customerId === customerId)
       ?.products.find((entry) => entry.productId === productId);
 
-    expect(product?.defaultQty).toBe("5");
+    expect(product?.defaultQty).toBe("1");
   });
 });
 

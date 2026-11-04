@@ -1,4 +1,6 @@
 import type {
+  DriverBillDetailResponse,
+  DriverDuesResponse,
   DriverLoginResponse,
   DriverRoutesResponse,
   DriverSaveLineRequest,
@@ -117,4 +119,7 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(body),
     }),
+
+  dues: () => request<DriverDuesResponse>("/api/driver/dues"),
+  billDetail: (billId: string) => request<DriverBillDetailResponse>(`/api/driver/bills/${billId}`),
 };

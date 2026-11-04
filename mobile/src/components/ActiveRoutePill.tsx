@@ -10,7 +10,7 @@ import { useColors } from "@/ui";
 // liquid glass styling; 56dp is Material's baseline bottom-nav height.
 // NativeTabs doesn't expose the real rendered height, so this is an
 // approximation — nudge it if it visibly overlaps or gaps on a real device.
-const TAB_BAR_HEIGHT = Platform.select({ ios: 49, android: 56, default: 56 });
+export const TAB_BAR_HEIGHT = Platform.select({ ios: 49, android: 56, default: 56 });
 
 // A persistent, tappable reminder that a route is mid-delivery — visible on
 // every screen (Dashboard/Delivery/Profile, or the app cold-started back into

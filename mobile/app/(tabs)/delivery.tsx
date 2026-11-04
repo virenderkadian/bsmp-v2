@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, RefreshControl, ScrollView, Text } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import type { DriverRoute } from "@shared/driver-api-types";
 import { api, ApiError } from "@/api";
+import { TAB_BAR_HEIGHT } from "@/components/ActiveRoutePill";
 import { RouteCard } from "@/route-card";
 import { Card, ScreenTitle, useColors } from "@/ui";
 
 export default function DeliveryScreen() {
   const colors = useColors();
+  const insets = useSafeAreaInsets();
   const [routes, setRoutes] = useState<DriverRoute[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -37,7 +39,7 @@ export default function DeliveryScreen() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.ground }} edges={["top", "left", "right"]}>
       <ScrollView
-        contentContainerStyle={{ padding: 18, paddingBottom: 40 }}
+        contentContainerStyle={{ padding: 18, paddingBottom: 24 + insets.bottom + TAB_BAR_HEIGHT }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.brand} />}
       >
         <ScreenTitle title="Delivery" subtitle={routes ? `${count} route${count === 1 ? "" : "s"} assigned` : undefined} />

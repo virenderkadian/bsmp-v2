@@ -1,5 +1,10 @@
 import { prisma } from "@/lib/prisma";
+import { updateRecentOrderCache } from "@/lib/daily-entry-guard";
 import type {
+  DriverBillDetailResponse,
+  DriverDuesCustomer,
+  DriverDuesResponse,
+  DriverDuesRoute,
   DriverRoute,
   DriverSheetCustomer,
   DriverSheetProduct,
@@ -373,12 +378,46 @@ export async function saveDriverLine(
       select: { id: true },
     });
 
+    // Captured before the delete below, so a resave (the driver correcting a
+    // line already saved today) only feeds the "usual order" cache (see
+    // updateRecentOrderCache) the pairs whose quantity actually changed,
+    // same as the web Daily Entry save path does.
+    const previousProducts = await tx.dailyRouteEntryLineProduct.findMany({
+      where: { lineId: line.id },
+      select: { productId: true, quantity: true },
+    });
+    const previousQtyByProduct = new Map(
+      previousProducts.map((row) => [row.productId, Number(row.quantity)]),
+    );
+
     await tx.dailyRouteEntryLineProduct.deleteMany({ where: { lineId: line.id } });
     if (productRows.length > 0) {
       await tx.dailyRouteEntryLineProduct.createMany({
         data: productRows.map((row) => ({ lineId: line.id, ...row })),
       });
     }
+
+    // Keep CustomerProductRecentOrder in step with a driver's own save too —
+    // without this, a route worked entirely from the mobile app would never
+    // update "usual order"/"unusual quantity" on the web Daily Entry grid,
+    // even though that cache is exactly what the mobile sheet's own "usual"
+    // default (see getDriverSheet below) reads from.
+    const newQtyByProduct = new Map(productRows.map((row) => [row.productId, row.quantity]));
+    const touchedProductIds = new Set([...previousQtyByProduct.keys(), ...newQtyByProduct.keys()]);
+    const changes = [...touchedProductIds]
+      .map((productId) => ({
+        productId,
+        newQty: newQtyByProduct.get(productId) ?? 0,
+        previousQty: previousQtyByProduct.get(productId) ?? 0,
+      }))
+      .filter((change) => change.newQty !== change.previousQty)
+      .map((change) => ({
+        customerId,
+        productId: change.productId,
+        date: entryDate.toISOString().slice(0, 10),
+        newQty: change.newQty,
+      }));
+    await updateRecentOrderCache(tx, changes);
 
     // Backfill the customer's location from their first delivery that
     // includes one. After that, a new fix only overwrites it if the driver
@@ -536,4 +575,198 @@ export async function updateDriverCustomerMobile(
   });
 
   return { ok: true, customer: { customerId: updated.id, mobile: updated.mobile } };
+}
+
+// Every GENERATED, still-owing bill across every route this vehicle runs —
+// not just last month, unlike DriverSheetCustomer.previousBill, which only
+// ever shows last month's and is scoped to whichever route sheet is open
+// right now. This is the full picture for a "who still owes money" screen.
+// Read-only: nothing here is a write path.
+export async function getDriverDues(vehicleId: string, cityId: string): Promise<DriverDuesResponse> {
+  const sequenceMonth = toMonthStart(new Date().toISOString().slice(0, 10));
+
+  const bills = await prisma.monthlyBill.findMany({
+    where: {
+      route: { vehicleId, cityId, isActive: true },
+      status: "GENERATED",
+      closingBalance: { gt: 0 },
+    },
+    select: {
+      id: true,
+      customerId: true,
+      billingMonth: true,
+      closingBalance: true,
+      route: { select: { id: true, code: true, name: true } },
+      customer: { select: { code: true, name: true, mobile: true } },
+    },
+    orderBy: { billingMonth: "asc" },
+  });
+
+  if (bills.length === 0) {
+    return { routes: [], grandTotalOutstanding: "0.00", customerCount: 0 };
+  }
+
+  // This month's delivery-sequence position, so each route's list can read
+  // in the same order the driver actually walks it. A customer can have an
+  // unpaid bill without still being on the route (moved off since) — sorted
+  // to the end of their route in that case rather than dropped, since the
+  // money is still owed regardless of today's assignment.
+  const routeIds = [...new Set(bills.map((bill) => bill.route.id))];
+  const sequences = await prisma.monthlyRouteCustomerSequence.findMany({
+    where: { routeId: { in: routeIds }, sequenceMonth, status: "ACTIVE" },
+    select: { routeId: true, customerId: true, sequenceNo: true },
+  });
+  const sequenceByKey = new Map(sequences.map((seq) => [`${seq.routeId}:${seq.customerId}`, seq.sequenceNo]));
+
+  type CustomerAccumulator = {
+    customerCode: string;
+    customerName: string;
+    mobile: string | null;
+    bills: Array<{ billId: string; month: string; outstanding: number }>;
+  };
+  type RouteAccumulator = {
+    routeCode: string;
+    routeName: string;
+    customers: Map<string, CustomerAccumulator>;
+  };
+  const routeAccumulators = new Map<string, RouteAccumulator>();
+
+  for (const bill of bills) {
+    const routeAcc = routeAccumulators.get(bill.route.id) ?? {
+      routeCode: bill.route.code,
+      routeName: bill.route.name,
+      customers: new Map<string, CustomerAccumulator>(),
+    };
+    routeAccumulators.set(bill.route.id, routeAcc);
+
+    const customerAcc = routeAcc.customers.get(bill.customerId) ?? {
+      customerCode: bill.customer.code,
+      customerName: bill.customer.name,
+      mobile: bill.customer.mobile,
+      bills: [],
+    };
+    customerAcc.bills.push({
+      billId: bill.id,
+      month: bill.billingMonth.toISOString().slice(0, 7),
+      outstanding: Number(bill.closingBalance),
+    });
+    routeAcc.customers.set(bill.customerId, customerAcc);
+  }
+
+  let grandTotal = 0;
+  let customerCount = 0;
+  const routes: DriverDuesRoute[] = [...routeAccumulators.entries()]
+    .map(([routeId, routeAcc]) => {
+      let routeTotal = 0;
+      const customers: DriverDuesCustomer[] = [...routeAcc.customers.entries()]
+        .map(([customerId, customerAcc]) => {
+          const total = customerAcc.bills.reduce((sum, bill) => sum + bill.outstanding, 0);
+          routeTotal += total;
+          customerCount += 1;
+          return {
+            customerId,
+            customerCode: customerAcc.customerCode,
+            customerName: customerAcc.customerName,
+            mobile: customerAcc.mobile,
+            sequenceNo: sequenceByKey.get(`${routeId}:${customerId}`) ?? null,
+            totalOutstanding: total.toFixed(2),
+            bills: customerAcc.bills
+              .slice()
+              .sort((a, b) => (a.month < b.month ? -1 : a.month > b.month ? 1 : 0))
+              .map((bill) => ({ billId: bill.billId, month: bill.month, outstanding: bill.outstanding.toFixed(2) })),
+          };
+        })
+        .sort((a, b) => {
+          if (a.sequenceNo !== null && b.sequenceNo !== null) return a.sequenceNo - b.sequenceNo;
+          if (a.sequenceNo !== null) return -1;
+          if (b.sequenceNo !== null) return 1;
+          return a.customerName.localeCompare(b.customerName, undefined, { numeric: true });
+        });
+      grandTotal += routeTotal;
+      return {
+        routeId,
+        routeCode: routeAcc.routeCode,
+        routeName: routeAcc.routeName,
+        customers,
+        totalOutstanding: routeTotal.toFixed(2),
+      };
+    })
+    .sort((a, b) => a.routeCode.localeCompare(b.routeCode));
+
+  return { routes, grandTotalOutstanding: grandTotal.toFixed(2), customerCount };
+}
+
+export type GetDriverBillDetailResult =
+  | { ok: true; bill: DriverBillDetailResponse }
+  | { ok: false; error: string };
+
+// Read-only view of one bill's full breakdown, the mobile equivalent of
+// opening a bill on the web — same fields, no write path. Authorization is
+// "this bill's route belongs to this vehicle, in this driver's city", same
+// scoping saveDriverLine and recordDriverPayment already use.
+export async function getDriverBillDetail(
+  vehicleId: string,
+  cityId: string,
+  billId: string,
+): Promise<GetDriverBillDetailResult> {
+  const bill = await prisma.monthlyBill.findFirst({
+    where: { id: billId, route: { vehicleId, cityId } },
+    select: {
+      id: true,
+      billingMonth: true,
+      status: true,
+      openingBalance: true,
+      deliveryAmount: true,
+      paymentAmount: true,
+      closingBalance: true,
+      customer: { select: { id: true, code: true, name: true, mobile: true } },
+      route: { select: { id: true, code: true, name: true } },
+      items: {
+        select: {
+          totalQty: true,
+          averageRate: true,
+          totalAmount: true,
+          product: { select: { id: true, code: true, name: true, shortName: true, unit: true } },
+        },
+      },
+    },
+  });
+  if (!bill) {
+    return { ok: false, error: "Bill not found." };
+  }
+  if (bill.status !== "GENERATED" && bill.status !== "LOCKED") {
+    // A DRAFT or CANCELLED bill was never issued to the customer — nothing
+    // for a driver to be shown against it.
+    return { ok: false, error: "This bill hasn't been issued yet." };
+  }
+
+  return {
+    ok: true,
+    bill: {
+      billId: bill.id,
+      month: bill.billingMonth.toISOString().slice(0, 7),
+      status: bill.status,
+      customer: {
+        customerId: bill.customer.id,
+        customerCode: bill.customer.code,
+        customerName: bill.customer.name,
+        mobile: bill.customer.mobile,
+      },
+      route: { routeId: bill.route.id, routeCode: bill.route.code, routeName: bill.route.name },
+      openingBalance: String(bill.openingBalance),
+      deliveryAmount: String(bill.deliveryAmount),
+      paymentAmount: String(bill.paymentAmount),
+      closingBalance: String(bill.closingBalance),
+      items: bill.items.map((item) => ({
+        productId: item.product.id,
+        code: item.product.code,
+        name: item.product.name,
+        shortName: item.product.shortName,
+        unit: item.product.unit,
+        totalQty: String(item.totalQty),
+        averageRate: String(item.averageRate),
+        totalAmount: String(item.totalAmount),
+      })),
+    },
+  };
 }
