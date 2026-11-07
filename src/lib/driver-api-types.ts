@@ -53,7 +53,10 @@ export type DriverStockProduct = {
   unit: string;
   given: string;
   returned: string;
+  eveningSold: string;
+  morningSold: string;
   eveningTakenRecorded: boolean;
+  eveningReturnRecorded: boolean;
   morningReturnRecorded: boolean;
 };
 export type DriverStockResponse = {
