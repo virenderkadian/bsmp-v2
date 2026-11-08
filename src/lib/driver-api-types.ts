@@ -39,6 +39,40 @@ export type DriverRoute = {
 
 export type DriverRoutesResponse = {
   routes: DriverRoute[];
+  today: string;
+  cycleDate: string;
+  eveningDate: string;
+  previousCycleDate: string;
+  previousEveningDate: string;
+};
+
+export type DriverStockAction = "EVENING_TAKEN" | "EVENING_REFILL" | "EVENING_RETURN" | "MORNING_REFILL" | "MORNING_RETURN";
+export type DriverStockProduct = {
+  id: string;
+  name: string;
+  unit: string;
+  given: string;
+  returned: string;
+  eveningSold: string;
+  morningSold: string;
+  eveningTakenRecorded: boolean;
+  eveningReturnRecorded: boolean;
+  morningReturnRecorded: boolean;
+};
+export type DriverStockResponse = {
+  cycleDate: string;
+  eveningDate: string;
+  shift: RouteShift;
+  editable: boolean;
+  complete: boolean;
+  products: DriverStockProduct[];
+};
+export type DriverStockRequest = {
+  requestId: string;
+  cycleDate: string;
+  productId: string;
+  action: DriverStockAction;
+  quantity: string;
 };
 
 // ---- Delivery sheet (a route's round for a date) ----

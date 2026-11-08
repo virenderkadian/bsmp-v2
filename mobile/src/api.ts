@@ -10,6 +10,8 @@ import type {
   DriverPaymentResponse,
   DriverUpdateCustomerRequest,
   DriverUpdateCustomerResponse,
+  DriverStockRequest,
+  DriverStockResponse,
 } from "@shared/driver-api-types";
 
 // Base URL of the web app that serves /api/driver/*. Point this at your machine's
@@ -100,6 +102,8 @@ export const api = {
       body: JSON.stringify({ vehicleCode, pin }),
     }),
   routes: () => request<DriverRoutesResponse>("/api/driver/routes"),
+  stock: (cycleDate?: string) => request<DriverStockResponse>(`/api/driver/stock${cycleDate ? `?cycleDate=${encodeURIComponent(cycleDate)}` : ""}`),
+  saveStock: (body: DriverStockRequest) => request<DriverStockResponse>("/api/driver/stock", { method: "POST", body: JSON.stringify(body) }),
   sheet: (routeId: string, date: string) =>
     request<DriverSheetResponse>(`/api/driver/routes/${routeId}/sheet?date=${encodeURIComponent(date)}`),
   saveLine: (routeId: string, customerId: string, body: DriverSaveLineRequest) =>
