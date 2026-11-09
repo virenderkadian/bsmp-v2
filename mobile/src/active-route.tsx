@@ -40,7 +40,8 @@ const ActiveRouteContext = createContext<ActiveRouteValue>({
 // combination means the indicator is never stale by more than a moment even
 // though the underlying state (saved daily-entry lines) has no push channel.
 export function ActiveRouteProvider({ children }: { children: ReactNode }) {
-  const { token } = useSession();
+  const { token, vehicle } = useSession();
+  const vehicleId = vehicle?.id ?? null;
   const [activeRoute, setActiveRoute] = useState<ActiveRouteInfo | null>(null);
   const [completedRouteIds, setCompletedRouteIds] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState<Record<string, RouteProgress>>({});
@@ -70,7 +71,7 @@ export function ActiveRouteProvider({ children }: { children: ReactNode }) {
         inFlight.current = false;
       }
     })();
-  }, [token]);
+  }, [token, vehicleId]);
 
   useEffect(() => {
     if (!token) {
@@ -80,6 +81,11 @@ export function ActiveRouteProvider({ children }: { children: ReactNode }) {
       setRoutesInfo(null);
       return;
     }
+    // A different vehicle (an admin switched): drop what was known about the last one.
+    setActiveRoute(null);
+    setCompletedRouteIds(new Set());
+    setProgress({});
+    setRoutesInfo(null);
     refresh();
     const poll = setInterval(refresh, 60_000);
     const subscription = AppState.addEventListener("change", (state) => {

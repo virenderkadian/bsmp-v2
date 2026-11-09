@@ -304,3 +304,31 @@ export type AdminLoginResponse = { token: string; user: AdminUser };
 export type AdminVehicle = { id: string; code: string; name: string; cityId: string; cityName: string };
 
 export type AdminVehiclesResponse = { vehicles: AdminVehicle[] };
+
+// ---- Vehicle cash deposits recorded by an admin (Expected cash screen) ----
+
+export type VehiclePaymentMode = "CASH" | "UPI" | "BANK_TRANSFER" | "CHEQUE";
+
+export type AdminVehiclePayment = {
+  id: string;
+  amount: string; // Decimal serialized as string
+  mode: VehiclePaymentMode;
+  status: "PENDING" | "VERIFIED" | "CANCELLED";
+  paymentDate: string; // YYYY-MM-DD
+  referenceNo: string | null;
+  notes: string | null;
+  createdAt: string; // ISO timestamp
+};
+
+export type AdminVehiclePaymentRequest = {
+  // Generated once per entry on the phone and used as the payment's id, so a retry
+  // after a dropped connection can never record the money twice.
+  requestId: string;
+  cycleDate: string; // YYYY-MM-DD
+  amount: string;
+  mode: VehiclePaymentMode;
+  referenceNo?: string;
+  notes?: string;
+};
+
+export type AdminVehiclePaymentsResponse = { cycleDate: string; payments: AdminVehiclePayment[] };

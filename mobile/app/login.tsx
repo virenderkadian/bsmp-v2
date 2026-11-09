@@ -1,5 +1,6 @@
 import { Redirect } from "expo-router";
 import { useState } from "react";
+import { Pressable } from "react-native";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -16,7 +17,12 @@ import { PrimaryButton, useColors } from "@/ui";
 
 export default function LoginScreen() {
   const colors = useColors();
-  const { token, loading, signIn } = useSession();
+  const { token, loading, signIn, signInAdmin } = useSession();
+  // The same app signs in drivers (vehicle code + PIN) and admins (their web
+  // email + password); admins then pick a vehicle to act on.
+  const [mode, setMode] = useState<"driver" | "admin">("driver");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [vehicleCode, setVehicleCode] = useState("");
   const [pin, setPin] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -37,8 +43,13 @@ export default function LoginScreen() {
     setError(null);
     setSubmitting(true);
     try {
-      const result = await api.login(vehicleCode.trim(), pin.trim());
-      await signIn(result.token, result.vehicle);
+      if (mode === "admin") {
+        const result = await api.adminLogin(email.trim(), password);
+        await signInAdmin(result.token, result.user);
+      } else {
+        const result = await api.login(vehicleCode.trim(), pin.trim());
+        await signIn(result.token, result.vehicle);
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong. Try again.");
     } finally {
@@ -87,9 +98,48 @@ export default function LoginScreen() {
           >
             <Text style={{ fontSize: 30 }}>🥛</Text>
           </View>
-          <Text style={{ color: colors.ink, fontSize: 22, fontWeight: "800", letterSpacing: -0.4 }}>Driver sign-in</Text>
-          <Text style={{ color: colors.inkSoft, fontSize: 14, marginTop: 4 }}>Enter your vehicle code &amp; PIN</Text>
+          <Text style={{ color: colors.ink, fontSize: 22, fontWeight: "800", letterSpacing: -0.4 }}>
+            {mode === "admin" ? "Admin sign-in" : "Driver sign-in"}
+          </Text>
+          <Text style={{ color: colors.inkSoft, fontSize: 14, marginTop: 4 }}>
+            {mode === "admin" ? "Use your web app email & password" : "Enter your vehicle code & PIN"}
+          </Text>
         </View>
+
+        {mode === "admin" ? (
+          <>
+            <Text style={labelStyle}>Email</Text>
+            <TextInput
+              value={email}
+              onChangeText={setEmail}
+              placeholder="you@company.com"
+              placeholderTextColor={colors.inkFaint}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType="username"
+              style={[inputStyle, { marginBottom: 16 }]}
+            />
+            <Text style={labelStyle}>Password</Text>
+            <TextInput
+              value={password}
+              onChangeText={setPassword}
+              placeholder="••••••••"
+              placeholderTextColor={colors.inkFaint}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              textContentType="password"
+              style={[inputStyle, { marginBottom: 18 }]}
+            />
+            {error ? (
+              <Text style={{ color: colors.danger, fontSize: 13.5, fontWeight: "600", marginBottom: 14, marginLeft: 4 }}>{error}</Text>
+            ) : null}
+            <PrimaryButton label="Sign in" onPress={onSubmit} loading={submitting} disabled={!email.trim() || !password} />
+          </>
+        ) : null}
+        {mode === "driver" ? (
+          <>
 
         <Text style={labelStyle}>Vehicle code</Text>
         <TextInput
@@ -119,6 +169,17 @@ export default function LoginScreen() {
         ) : null}
 
         <PrimaryButton label="Log in" onPress={onSubmit} loading={submitting} disabled={!vehicleCode.trim() || pin.trim().length < 4} />
+          </>
+        ) : null}
+
+        <Pressable
+          onPress={() => { setMode(mode === "admin" ? "driver" : "admin"); setError(null); }}
+          style={({ pressed }) => ({ alignSelf: "center", marginTop: 18, paddingVertical: 8, paddingHorizontal: 12, opacity: pressed ? 0.6 : 1 })}
+        >
+          <Text style={{ color: colors.brand, fontSize: 14, fontWeight: "700" }}>
+            {mode === "admin" ? "Driver sign-in" : "Admin sign-in"}
+          </Text>
+        </Pressable>
 
         {/* Dev diagnostic — shows exactly which server this build is calling, so a
             stuck/failed login is never a mystery. Remove once the API URL is stable. */}

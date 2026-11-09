@@ -2,6 +2,7 @@ import Constants from "expo-constants";
 import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { TAB_BAR_HEIGHT } from "@/components/ActiveRoutePill";
+import { useRouter } from "expo-router";
 import { useSession } from "@/session";
 import { THEME_IDS, THEME_META, type ThemeId } from "@/theme";
 import { useTheme, type Appearance } from "@/theme-preference";
@@ -71,13 +72,14 @@ const APPEARANCE_OPTIONS: Array<{ id: Appearance; label: string }> = [
 export default function ProfileScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { vehicle, signOut } = useSession();
+  const router = useRouter();
+  const { vehicle, admin, signOut } = useSession();
   const { appearance, setAppearance, themeId, setThemeId } = useTheme();
   const version = Constants.expoConfig?.version ?? "1.0.0";
 
   const soon = () => Alert.alert("Coming soon", "This will be added in a later update.");
   const confirmLogout = () =>
-    Alert.alert("Log out?", "You'll need your vehicle code and PIN to sign back in.", [
+    Alert.alert("Log out?", admin ? "You'll need your email and password to sign back in." : "You'll need your vehicle code and PIN to sign back in.", [
       { text: "Cancel", style: "cancel" },
       { text: "Log out", style: "destructive", onPress: () => signOut() },
     ]);
@@ -95,13 +97,21 @@ export default function ProfileScreen() {
           <View style={{ width: 52, height: 52, borderRadius: 16, backgroundColor: colors.brandTint, alignItems: "center", justifyContent: "center" }}>
             <Text style={{ fontSize: 24 }}>🚚</Text>
           </View>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800" }}>
               {vehicle ? `${vehicle.code} · ${vehicle.name}` : "Vehicle"}
             </Text>
-            <Text style={{ color: colors.inkSoft, fontSize: 13 }}>Signed in</Text>
+            <Text style={{ color: colors.inkSoft, fontSize: 13 }}>
+              {admin ? `Signed in as ${admin.name} (${admin.role === "SUPERADMIN" ? "Superadmin" : "Admin"})` : "Signed in"}
+            </Text>
           </View>
         </Card>
+
+        {admin ? (
+          <View style={{ marginBottom: 16 }}>
+            <GhostButton label="Switch vehicle" onPress={() => router.push("/admin/vehicles" as never)} />
+          </View>
+        ) : null}
 
         <Eyebrow>Appearance</Eyebrow>
         <Card style={{ paddingVertical: 2, marginBottom: 16 }}>

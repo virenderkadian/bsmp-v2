@@ -10,7 +10,7 @@ import { useSession } from "@/session";
 import { useColors } from "@/ui";
 
 export default function TabsLayout() {
-  const { loading, token } = useSession();
+  const { loading, token, admin, vehicle } = useSession();
   const colors = useColors();
 
   if (loading) {
@@ -23,11 +23,17 @@ export default function TabsLayout() {
   if (!token) {
     return <Redirect href="/login" />;
   }
+  // An admin acts on one vehicle at a time; until they pick one there is nothing to show.
+  if (admin && !vehicle) {
+    return <Redirect href={"/admin/vehicles" as never} />;
+  }
 
   return (
     // tintColor: the selected tab otherwise falls back to iOS system blue, which
     // clashes with the theme (clearly so in light mode).
-    <NativeTabs tintColor={colors.brand}>
+    // Keyed by vehicle: switching vehicles (admin) rebuilds every tab from
+    // scratch, so nothing from the previous vehicle can linger on screen.
+    <NativeTabs key={vehicle?.id ?? "none"} tintColor={colors.brand}>
       <NativeTabs.Trigger name="index">
         <Label>Dashboard</Label>
         <Icon sf="chart.bar.fill" drawable="ic_menu_today" />

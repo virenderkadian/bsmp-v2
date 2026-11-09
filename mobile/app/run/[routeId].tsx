@@ -1,7 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import Animated, { FadeInLeft, FadeInRight } from "react-native-reanimated";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
   KeyboardAvoidingView,
@@ -113,6 +115,19 @@ export default function RunScreen() {
   const [sheet, setSheet] = useState<DriverSheetResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cursor, setCursor] = useState(0);
+  // Which way the driver is moving, so the new stop's card can come in from that
+  // side. Read during render (before the effect below records the new value).
+  const lastCursor = useRef(cursor);
+  const cardDirection = cursor >= lastCursor.current ? "next" : "previous";
+  const hasShownCard = useRef(false);
+  useEffect(() => {
+    lastCursor.current = cursor;
+    hasShownCard.current = true;
+  }, [cursor]);
+  const [reduceMotion, setReduceMotion] = useState(false);
+  useEffect(() => {
+    void AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion).catch(() => undefined);
+  }, []);
   const [draftQty, setDraftQty] = useState<Record<string, number>>({});
   // Which product rows are showing on the stop card. The card stays short:
   // only what the customer usually takes (or already has a quantity), with the
@@ -777,6 +792,14 @@ export default function RunScreen() {
         // The decimal keypad has no Done key on iOS; dragging the card dismisses it.
         keyboardDismissMode="on-drag"
       >
+        {/* Keyed by customer, so every stop change plays this: a short slide-and-fade
+            from the side the driver is moving toward, to make it obvious that the
+            card is now a different customer. Not on the first card shown, and not
+            when the phone asks for reduced motion. */}
+        <Animated.View
+          key={customer.customerId}
+          entering={reduceMotion || !hasShownCard.current ? undefined : (cardDirection === "next" ? FadeInRight : FadeInLeft).duration(240)}
+        >
         <Card>
           <View>
           {/* Status and unpaid amount on the left, the buttons on the right. The
@@ -1104,6 +1127,7 @@ export default function RunScreen() {
             <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800" }}>₹ {Math.round(stopTotal)}</Text>
           </View>
         </Card>
+        </Animated.View>
 
         <Modal
           visible={menuPos !== null}

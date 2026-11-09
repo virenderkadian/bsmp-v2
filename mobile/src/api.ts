@@ -1,4 +1,9 @@
 import type {
+  AdminLoginResponse,
+  AdminVehiclePayment,
+  AdminVehiclePaymentRequest,
+  AdminVehiclePaymentsResponse,
+  AdminVehiclesResponse,
   DriverBillDetailResponse,
   DriverDuesResponse,
   DriverLoginResponse,
@@ -37,6 +42,14 @@ export function setAuthToken(token: string | null): void {
   authToken = token;
 }
 
+// For an admin: which vehicle the driver endpoints should act on. Sent with
+// every request; the server re-checks it against the admin's cities each time.
+let actingVehicleId: string | null = null;
+
+export function setActingVehicle(vehicleId: string | null): void {
+  actingVehicleId = vehicleId;
+}
+
 export class ApiError extends Error {
   status: number;
   constructor(message: string, status: number) {
@@ -64,6 +77,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       headers: {
         "Content-Type": "application/json",
         ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        ...(actingVehicleId ? { "x-vehicle-id": actingVehicleId } : {}),
         ...(PROTECTION_BYPASS ? { "x-vercel-protection-bypass": PROTECTION_BYPASS } : {}),
         ...(init?.headers ?? {}),
       },
@@ -96,6 +110,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  adminLogin: (email: string, password: string) =>
+    request<AdminLoginResponse>("/api/admin-app/login", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    }),
+  adminVehicles: () => request<AdminVehiclesResponse>("/api/admin-app/vehicles"),
+  adminVehiclePayments: (cycleDate: string) =>
+    request<AdminVehiclePaymentsResponse>(`/api/admin-app/vehicle-payments?cycleDate=${encodeURIComponent(cycleDate)}`),
+  adminAddVehiclePayment: (body: AdminVehiclePaymentRequest) =>
+    request<{ ok: true; payment: AdminVehiclePayment }>("/api/admin-app/vehicle-payments", { method: "POST", body: JSON.stringify(body) }),
   login: (vehicleCode: string, pin: string) =>
     request<DriverLoginResponse>("/api/driver/login", {
       method: "POST",
