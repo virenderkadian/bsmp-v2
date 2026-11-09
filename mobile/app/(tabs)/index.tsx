@@ -3,7 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import type { DriverDuesResponse, DriverRoutesResponse, DriverStockResponse } from "@shared/driver-api-types";
-import { expectedStock, expectedStockTotal } from "@/stock-expected";
+import { expectedCashSummary } from "@/stock-expected";
 import { api, ApiError } from "@/api";
 import { TAB_BAR_HEIGHT } from "@/components/ActiveRoutePill";
 import { RouteCard } from "@/route-card";
@@ -50,6 +50,7 @@ export default function DashboardScreen() {
     setRefreshing(false);
   }, [load]);
 
+  const cash = stock && stock.products.length > 0 && stock.products.every((product) => product.rate !== undefined) ? expectedCashSummary(stock) : null;
   const today = new Date().toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
 
   return (
@@ -67,10 +68,15 @@ export default function DashboardScreen() {
         </View>
 
         <View style={{ flexDirection: "row", gap: 10, marginBottom: 16 }}>
-          <Card style={{ flex: 1 }}>
-            <Text style={{ color: colors.inkFaint, fontSize: 11, fontWeight: "700", letterSpacing: 0.6, textTransform: "uppercase" }}>Routes today</Text>
-            <Text style={{ color: colors.ink, fontSize: 23, fontWeight: "800", marginTop: 4 }}>{routeData ? routeData.routes.length : "—"}</Text>
-          </Card>
+          <Pressable style={{ flex: 1 }} disabled={!cash} onPress={() => router.push("/expected-cash" as never)}>
+            <Card>
+              <Text style={{ color: colors.inkFaint, fontSize: 11, fontWeight: "700", letterSpacing: 0.6, textTransform: "uppercase" }}>Expected cash</Text>
+              <Text style={{ color: cash && cash.net < 0 ? colors.danger : colors.ink, fontSize: 23, fontWeight: "800", marginTop: 4 }}>
+                {cash ? `${cash.net < 0 ? "−" : ""}${formatRupees(String(Math.abs(cash.net)))}` : "—"}
+              </Text>
+              {cash ? <Text style={{ color: colors.inkSoft, fontSize: 12, marginTop: 2 }}>{cash.finalised ? "To hand in" : "Still to account for"}</Text> : null}
+            </Card>
+          </Pressable>
           <Pressable
             style={{ flex: 1 }}
             disabled={!dues || dues.customerCount === 0}
@@ -103,44 +109,6 @@ export default function DashboardScreen() {
             <Text style={{ color: colors.danger, fontSize: 14 }}>{error}</Text>
           </Card>
         ) : null}
-
-        {stock && stock.products.length > 0 && stock.products.every((product) => product.rate !== undefined) ? (() => {
-          const rows = stock.products.map((product) => ({ product, ...expectedStock(product) }));
-          const gross = expectedStockTotal(stock.products);
-          const deposited = Number(stock.depositedVerified) || 0;
-          const total = Math.round((gross - deposited) * 100) / 100;
-          const finalised = stock.complete;
-          return (
-            <>
-              <Eyebrow>{finalised ? "To hand in (cash / online)" : "Still to account for"}</Eyebrow>
-              <Card style={{ marginBottom: 18 }}>
-                <Text style={{ color: total < 0 ? colors.danger : colors.ink, fontSize: 23, fontWeight: "800" }}>
-                  {total < 0 ? "−" : ""}{formatRupees(String(Math.abs(total)))}
-                </Text>
-                <Text style={{ color: colors.inkSoft, fontSize: 12, marginTop: 2, marginBottom: 8 }}>
-                  {finalised ? "Stock not delivered or returned, to be paid in cash or online."
-                    : "Given − delivered − returned so far. Return what is left, or collect this amount."}
-                </Text>
-                {rows.map(({ product, qty, amount }) => (
-                  <View key={product.id} style={{ flexDirection: "row", paddingVertical: 4 }}>
-                    <Text style={{ flex: 1, color: colors.ink, fontSize: 14 }}>{product.name}</Text>
-                    <Text style={{ color: qty < 0 ? colors.danger : colors.inkSoft, fontSize: 14 }}>
-                      {qty} {product.unit} · {qty < 0 ? "−" : ""}{formatRupees(String(Math.abs(amount)))}
-                    </Text>
-                  </View>
-                ))}
-                {deposited > 0 ? (
-                  <Text style={{ color: colors.inkSoft, fontSize: 12, marginTop: 6 }}>
-                    {formatRupees(String(gross))} expected − {formatRupees(String(deposited))} already received
-                  </Text>
-                ) : null}
-                {rows.some((row) => row.qty < 0) ? (
-                  <Text style={{ color: colors.danger, fontSize: 12, marginTop: 6 }}>Negative means more was delivered or returned than given. Check the stock entries.</Text>
-                ) : null}
-              </Card>
-            </>
-          );
-        })() : null}
 
         <Eyebrow>Quick actions</Eyebrow>
         <Card style={{ paddingVertical: 0, marginBottom: 18 }}>

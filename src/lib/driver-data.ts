@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { updateRecentOrderCache } from "@/lib/daily-entry-guard";
+import { classifyRecentOrder, type RecentEntry, type RecentOrderSuggestion } from "@/lib/driver-suggestion";
 import type {
   DriverBillDetailResponse,
   DriverDuesCustomer,
@@ -147,7 +148,11 @@ export async function getDriverSheet(
     // products that don't exist in their city (and could have delivered
     // against one, writing a cross-city row into billing).
     prisma.product.findMany({
-      where: { cityId, isActive: true, showInDailyEntry: true },
+      // Daily Entry products PLUS anything in vehicle reconciliation. A product
+      // counted in reconciliation but missing here can never be entered by the
+      // driver, so reconciliation would see it as given but never delivered and
+      // report the whole quantity as a cash sale.
+      where: { cityId, isActive: true, OR: [{ showInDailyEntry: true }, { includeInReconciliation: true }] },
       orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
       select: { id: true, code: true, name: true, shortName: true, unit: true, defaultRate: true },
     }),
@@ -190,26 +195,29 @@ export async function getDriverSheet(
   const previousBillByCustomer = new Map(previousBills.map((bill) => [bill.customerId, bill]));
   const previousMonthLabel = previousMonth.toISOString().slice(0, 7);
 
-  const recentOrderByCustomer = new Map<string, Map<string, number>>();
+  // Per customer+product: is this part of their usual order (pre-fill it) or
+  // only an occasional purchase (offer it, don't pre-fill)? See
+  // driver-suggestion.ts for the rule and why.
+  const suggestionByCustomer = new Map<string, Map<string, RecentOrderSuggestion>>();
   recentOrders.forEach((order) => {
-    const entries = order.entries as unknown as Array<{ date: string; quantity: number }>;
-    const mostRecent = entries[0];
-    if (mostRecent && mostRecent.quantity > 0) {
-      const quantities = recentOrderByCustomer.get(order.customerId) ?? new Map<string, number>();
-      quantities.set(order.productId, mostRecent.quantity);
-      recentOrderByCustomer.set(order.customerId, quantities);
+    const entries = order.entries as unknown as RecentEntry[];
+    const suggestion = classifyRecentOrder(entries, dateInput);
+    if (suggestion.usualQty !== undefined || suggestion.occasional) {
+      const byProduct = suggestionByCustomer.get(order.customerId) ?? new Map<string, RecentOrderSuggestion>();
+      byProduct.set(order.productId, suggestion);
+      suggestionByCustomer.set(order.customerId, byProduct);
     }
   });
 
   const customers: DriverSheetCustomer[] = route.monthlySequences.map((seq) => {
     const savedLine = lineByCustomer.get(seq.customerId);
     const savedProducts = new Map((savedLine?.productEntries ?? []).map((entry) => [entry.productId, entry]));
-    const recentOrder = recentOrderByCustomer.get(seq.customerId);
+    const suggestions = suggestionByCustomer.get(seq.customerId);
 
     const sheetProducts: DriverSheetProduct[] = products.map((product) => {
       const saved = savedProducts.get(product.id);
-      const recentQty = recentOrder?.get(product.id);
-      const defaultQty = recentQty !== undefined ? String(recentQty) : "0";
+      const suggestion = suggestions?.get(product.id);
+      const defaultQty = suggestion?.usualQty !== undefined ? String(suggestion.usualQty) : "0";
       // Once there's a real line for today, it's authoritative — 0 if this
       // product isn't on it, never the recent-order suggestion. Without this,
       // a skipped (or partially-delivered) line would misreport the
@@ -224,6 +232,9 @@ export async function getDriverSheet(
         rate: String(saved?.rateSnapshot ?? product.defaultRate),
         defaultQty,
         deliveredQty,
+        occasional: suggestion?.occasional
+          ? { quantity: String(suggestion.occasional.quantity), date: suggestion.occasional.date, daysAgo: suggestion.occasional.daysAgo }
+          : null,
       };
     });
 

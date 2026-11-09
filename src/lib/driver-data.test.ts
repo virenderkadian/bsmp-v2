@@ -104,7 +104,7 @@ beforeAll(async () => {
     data: {
       customerId,
       productId,
-      entries: [{ date: "2027-01-14", quantity: 5 }],
+      entries: [{ date: "2027-01-14", quantity: 5 }, { date: "2027-01-13", quantity: 5 }],
     },
   });
 });
@@ -347,6 +347,46 @@ describe("driver sheet previous-month bill (dev DB)", () => {
     // delivery-history query, and getting that order wrong silently swapped the
     // two — dues broke AND every quantity suggestion did.
     //
+    // Expected value is "5", the usual quantity seeded in beforeAll. Later
+    // saves in this file are dated AFTER this sheet's date, so they are not
+    // history for it. This test only cares that the suggestion comes through
+    // intact rather than getting swapped with the bill's closingBalance.
+    await setBill("GENERATED", 450);
+
+    const sheet = await getDriverSheet(vehicleId, cityId, routeId, sheetDate);
+    const customer = sheet!.customers.find((entry) => entry.customerId === customerId);
+
+    expect(customer?.previousBill).not.toBeNull();
+    expect(customer?.previousBill?.outstanding).toBe("450");
+    expect(customer?.previousBill?.month).toBe("2026-12");
+  });
+
+  it("hides a LOCKED bill — the office already collected it", async () => {
+    await setBill("LOCKED", 450);
+
+    const sheet = await getDriverSheet(vehicleId, cityId, routeId, sheetDate);
+    expect(sheet!.customers.find((entry) => entry.customerId === customerId)?.previousBill).toBeNull();
+  });
+
+  it("hides a DRAFT bill — it was never issued to the customer", async () => {
+    await setBill("DRAFT", 450);
+
+    const sheet = await getDriverSheet(vehicleId, cityId, routeId, sheetDate);
+    expect(sheet!.customers.find((entry) => entry.customerId === customerId)?.previousBill).toBeNull();
+  });
+
+  it("hides a fully-paid bill even when still GENERATED", async () => {
+    await setBill("GENERATED", 0);
+
+    const sheet = await getDriverSheet(vehicleId, cityId, routeId, sheetDate);
+    expect(sheet!.customers.find((entry) => entry.customerId === customerId)?.previousBill).toBeNull();
+  });
+
+  it("reads the recent-order suggestion intact, not scrambled with the previous-month bill", async () => {
+    // Regression guard: the bill query sits in the same Promise.all as the
+    // delivery-history query, and getting that order wrong silently swapped the
+    // two — dues broke AND every quantity suggestion did.
+    //
     // Expected value is "1", not the "5" seeded in beforeAll: the
     // "saveDriverLine location backfill" tests above legitimately move this
     // same customer+product's suggestion forward with their own saves (the
@@ -362,7 +402,27 @@ describe("driver sheet previous-month bill (dev DB)", () => {
       .find((entry) => entry.customerId === customerId)
       ?.products.find((entry) => entry.productId === productId);
 
-    expect(product?.defaultQty).toBe("1");
+    expect(product?.defaultQty).toBe("5");
+  });
+});
+
+describe("driver sheet product catalog (dev DB)", () => {
+  it("offers reconciliation products even when they are hidden from Daily Entry", async () => {
+    const suffix = Date.now().toString().slice(-8);
+    const hidden = await rawPrisma.product.create({
+      data: { cityId, code: `DQH-${suffix}`, name: "Recon Only", unit: "KG", defaultRate: 60, isActive: true, showInDailyEntry: false, includeInReconciliation: true },
+    });
+    const plain = await rawPrisma.product.create({
+      data: { cityId, code: `DQN-${suffix}`, name: "Neither", unit: "KG", defaultRate: 60, isActive: true, showInDailyEntry: false, includeInReconciliation: false },
+    });
+    try {
+      const sheet = await getDriverSheet(vehicleId, cityId, routeId, "2027-01-16");
+      const ids = sheet!.customers.find((c) => c.customerId === customerId)!.products.map((p) => p.productId);
+      expect(ids).toContain(hidden.id);
+      expect(ids).not.toContain(plain.id);
+    } finally {
+      await rawPrisma.product.deleteMany({ where: { id: { in: [hidden.id, plain.id] } } });
+    }
   });
 });
 

@@ -102,6 +102,10 @@ export type DriverSheetProduct = {
   // The quantity currently marked delivered (defaults to defaultQty until the
   // driver saves an explicit value).
   deliveredQty: string;
+  // Set when the customer took this product recently but not regularly, so it
+  // is deliberately NOT pre-filled (defaultQty/deliveredQty stay "0" until a
+  // line is saved). The app offers it as a tap-to-add suggestion instead.
+  occasional?: { quantity: string; date: string; daysAgo: number } | null;
 };
 
 // A customer as the driver sees them on the round, in sequence order, with
