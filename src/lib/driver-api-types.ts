@@ -55,6 +55,8 @@ export type DriverStockProduct = {
   returned: string;
   eveningSold: string;
   morningSold: string;
+  // Per-unit value used to price the expected cash figure.
+  rate: string;
   eveningTakenRecorded: boolean;
   eveningReturnRecorded: boolean;
   morningReturnRecorded: boolean;
@@ -65,6 +67,9 @@ export type DriverStockResponse = {
   shift: RouteShift;
   editable: boolean;
   complete: boolean;
+  // Verified cash/online deposits already received for this cycle; the office
+  // balance is expected cash minus this.
+  depositedVerified: string;
   products: DriverStockProduct[];
 };
 export type DriverStockRequest = {

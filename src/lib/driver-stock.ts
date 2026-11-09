@@ -21,10 +21,11 @@ export async function getDriverStock(vehicleId: string, cityId: string, requeste
   if (requestedCycle && !validDay(requestedCycle)) throw new StockError("Invalid cycle date.");
   const cycleDate = requestedCycle ?? window.cycleDate;
   const eveningDate = dayOffset(cycleDate, -1);
-  const [products, rows, audits, soldRows] = await Promise.all([
-    prisma.product.findMany({ where: { cityId, isActive: true, includeInReconciliation: true }, orderBy: { displayOrder: "asc" }, select: { id: true, name: true, unit: true } }),
-    prisma.vehicleCycleStock.findMany({ where: { vehicleId, cycleDate: new Date(`${cycleDate}T00:00:00Z`), product: { cityId } }, select: { productId: true, givenQty: true, returnedQty: true } }),
+  const [products, rows, audits, deposits, soldRows] = await Promise.all([
+    prisma.product.findMany({ where: { cityId, isActive: true, includeInReconciliation: true }, orderBy: { displayOrder: "asc" }, select: { id: true, name: true, unit: true, defaultRate: true } }),
+    prisma.vehicleCycleStock.findMany({ where: { vehicleId, cycleDate: new Date(`${cycleDate}T00:00:00Z`), product: { cityId } }, select: { productId: true, givenQty: true, returnedQty: true, rateSnapshot: true } }),
     prisma.auditLog.findMany({ where: { cityId, entityType: "DriverStock", entityId: vehicleId, action: { in: ["EVENING_TAKEN", "EVENING_RETURN", "MORNING_RETURN"] } }, select: { action: true, after: true } }),
+    prisma.vehicleCashSalePayment.aggregate({ where: { vehicleId, cycleDate: new Date(`${cycleDate}T00:00:00Z`), status: "VERIFIED" }, _sum: { amount: true } }),
     prisma.$queryRaw<SoldRow[]>`
       SELECT dp."productId" AS "productId", r."shift"::text AS "shift",
         SUM(dp."quantity")::numeric AS "quantity"
@@ -48,13 +49,15 @@ export async function getDriverStock(vehicleId: string, cityId: string, requeste
       given: String(stock.get(product.id)?.givenQty ?? 0), returned: String(stock.get(product.id)?.returnedQty ?? 0),
       eveningSold: sold.get(`${product.id}:EVENING`) ?? "0",
       morningSold: sold.get(`${product.id}:MORNING`) ?? "0",
+      rate: String(stock.get(product.id)?.rateSnapshot ?? product.defaultRate ?? 0),
       eveningTakenRecorded: events.some((event) => event.action === "EVENING_TAKEN"),
       eveningReturnRecorded: events.some((event) => event.action === "EVENING_RETURN"),
       morningReturnRecorded: events.some((event) => event.action === "MORNING_RETURN"),
     };
   });
   return { cycleDate, eveningDate, shift: cycleDate === window.cycleDate ? window.shift : "MORNING", editable: cycleDate === window.cycleDate,
-    complete: result.length > 0 && result.every((product) => product.morningReturnRecorded), products: result };
+    complete: result.length > 0 && result.every((product) => product.morningReturnRecorded),
+    depositedVerified: String(deposits._sum.amount ?? 0), products: result };
 }
 
 export class StockError extends Error {
