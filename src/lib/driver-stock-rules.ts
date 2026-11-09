@@ -25,3 +25,16 @@ export function nextStockTotals(given: number, returned: number, action: string,
     returned: action === "MORNING_RETURN" ? quantity : returned,
   };
 }
+
+// What the driver still has to account for on one product: given minus both
+// rounds' deliveries minus what is already returned. Same formula as the web
+// vehicle reconciliation. Positive = stock that should come back or be paid
+// for (cash / online); negative = a shortage, i.e. a data or loss problem.
+export function expectedStock(product: { given: string; returned: string; eveningSold: string; morningSold: string; rate: string }) {
+  const qty = Math.round((Number(product.given) - Number(product.eveningSold) - Number(product.morningSold) - Number(product.returned)) * 1000) / 1000;
+  return { qty, amount: Math.round(qty * Number(product.rate) * 100) / 100 };
+}
+
+export function expectedStockTotal(products: Array<Parameters<typeof expectedStock>[0]>) {
+  return Math.round(products.reduce((sum, product) => sum + expectedStock(product).amount, 0) * 100) / 100;
+}

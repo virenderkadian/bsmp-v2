@@ -7,6 +7,7 @@ const mock = vi.hoisted(() => ({
 vi.mock("@/lib/prisma", () => ({ prisma: {
   product: { findMany: mock.productFindMany, findFirst: mock.productFindFirst },
   vehicleCycleStock: { findMany: mock.stockFindMany },
+  vehicleCashSalePayment: { aggregate: vi.fn().mockResolvedValue({ _sum: { amount: null } }) },
   auditLog: { findMany: mock.auditFindMany, findUnique: mock.auditFindUnique },
   $queryRaw: mock.queryRaw, $transaction: mock.transaction,
 } }));

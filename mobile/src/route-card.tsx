@@ -1,22 +1,30 @@
 import { useRouter } from "expo-router";
 import { Alert, Text, View } from "react-native";
+import { useEffect, useState } from "react";
 import type { DriverRoute } from "@shared/driver-api-types";
 import { useActiveRoute } from "@/active-route";
 import { Card, Chip, PrimaryButton, useColors } from "@/ui";
+import { isRouteCompleted } from "@/route-completion";
+import { todayStr } from "@/local-date";
 
-export function RouteCard({ route }: { route: DriverRoute }) {
+export function RouteCard({ route, date, serverToday }: { route: DriverRoute; date?: string; serverToday?: string }) {
   const colors = useColors();
   const router = useRouter();
   const { activeRoute, completedRouteIds, progress } = useActiveRoute();
 
-  const isThisRouteActive = activeRoute?.id === route.id;
-  const isCompleted = completedRouteIds.has(route.id);
-  const routeProgress = progress[route.id];
+  const today = serverToday ?? todayStr();
+  const isThisRouteActive = activeRoute?.id === route.id && (date ?? today) === today;
+  const routeDate = date ?? today;
+  const [datedCompleted, setDatedCompleted] = useState(false);
+  useEffect(() => { void isRouteCompleted(route.id, routeDate).then(setDatedCompleted); }, [route.id, routeDate]);
+  const isCompleted = routeDate === today ? completedRouteIds.has(route.id) : datedCompleted;
+  const routeProgress = routeDate === today ? progress[route.id] : undefined;
   // Only one route can be "in progress" at a time — a partially-completed
   // round left behind would be easy to forget about otherwise. A route stays
   // active until the driver explicitly finishes it, so this now also catches
   // the "every stop marked but never finished" case.
-  const blockedByOther = activeRoute !== null && activeRoute.id !== route.id;
+  const blockedByOther = activeRoute !== null && (activeRoute.id !== route.id || routeDate !== today);
+  const future = routeDate > today;
 
   const handlePress = () => {
     if (blockedByOther && activeRoute) {
@@ -31,7 +39,7 @@ export function RouteCard({ route }: { route: DriverRoute }) {
       ]);
       return;
     }
-    router.push(`/run/${route.id}`);
+    router.push({ pathname: "/run/[routeId]", params: { routeId: route.id, date: routeDate } });
   };
 
   return (
@@ -45,9 +53,10 @@ export function RouteCard({ route }: { route: DriverRoute }) {
           <Chip label={route.shift === "MORNING" ? "Morning" : "Evening"} tone="brand" />
         </View>
       </View>
+      <Text style={{ color: colors.inkSoft, fontSize: 12, marginTop: 6 }}>{routeDate}</Text>
       {isCompleted && routeProgress ? (
         <Text style={{ color: colors.delivered, fontSize: 12.5, fontWeight: "700", marginTop: 8 }}>
-          {routeProgress.done}/{routeProgress.total} stops · finished today
+          {routeProgress.done}/{routeProgress.total} stops · finished
         </Text>
       ) : isThisRouteActive ? (
         <Text style={{ color: colors.brand, fontSize: 12.5, fontWeight: "700", marginTop: 8 }}>
@@ -56,8 +65,9 @@ export function RouteCard({ route }: { route: DriverRoute }) {
       ) : null}
       <View style={{ marginTop: 12 }}>
         <PrimaryButton
-          label={isCompleted ? "View summary" : isThisRouteActive ? "Continue round" : "Start round"}
+          label={future ? "Available on route date" : isCompleted ? "View summary" : isThisRouteActive ? "Continue round" : "Start round"}
           onPress={handlePress}
+          disabled={future}
         />
       </View>
     </Card>

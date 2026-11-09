@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, RefreshControl, ScrollView, Text } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import type { DriverRoute } from "@shared/driver-api-types";
+import type { DriverRoutesResponse } from "@shared/driver-api-types";
 import { api, ApiError } from "@/api";
 import { TAB_BAR_HEIGHT } from "@/components/ActiveRoutePill";
+import { CycleSwitch } from "@/components/CycleSwitch";
 import { RouteCard } from "@/route-card";
 import { Card, ScreenTitle, useColors } from "@/ui";
 
 export default function DeliveryScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const [routes, setRoutes] = useState<DriverRoute[] | null>(null);
+  const [data, setData] = useState<DriverRoutesResponse | null>(null);
+  const [previous, setPrevious] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -18,14 +20,16 @@ export default function DeliveryScreen() {
     try {
       setError(null);
       const result = await api.routes();
-      setRoutes(result.routes);
+      setData(result);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't load your routes.");
     }
   }, []);
 
   useEffect(() => {
-    load();
+    void load();
+    const timer = setInterval(() => { void load(); }, 60_000);
+    return () => clearInterval(timer);
   }, [load]);
 
   const onRefresh = useCallback(async () => {
@@ -34,7 +38,7 @@ export default function DeliveryScreen() {
     setRefreshing(false);
   }, [load]);
 
-  const count = routes?.length ?? 0;
+  const count = data?.routes.length ?? 0;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.ground }} edges={["top", "left", "right"]}>
@@ -42,7 +46,8 @@ export default function DeliveryScreen() {
         contentContainerStyle={{ padding: 18, paddingBottom: 24 + insets.bottom + TAB_BAR_HEIGHT }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.brand} />}
       >
-        <ScreenTitle title="Delivery" subtitle={routes ? `${count} route${count === 1 ? "" : "s"} assigned` : undefined} />
+        <ScreenTitle title="Delivery" subtitle={data ? `${count} route${count === 1 ? "" : "s"} assigned` : undefined} />
+        {data ? <CycleSwitch previous={previous} onChange={setPrevious} /> : null}
 
         {error ? (
           <Card style={{ marginBottom: 12 }}>
@@ -50,14 +55,15 @@ export default function DeliveryScreen() {
           </Card>
         ) : null}
 
-        {!routes && !error ? (
+        {!data && !error ? (
           <ActivityIndicator color={colors.brand} style={{ marginTop: 20 }} />
-        ) : routes && routes.length === 0 ? (
+        ) : data && data.routes.length === 0 ? (
           <Card>
             <Text style={{ color: colors.inkSoft, fontSize: 14 }}>No routes assigned to this vehicle yet.</Text>
           </Card>
         ) : (
-          routes?.map((route) => <RouteCard key={route.id} route={route} />)
+          data?.routes.map((route) => <RouteCard key={`${route.id}-${previous}`} route={route} serverToday={data.today}
+            date={route.shift === "EVENING" ? previous ? data.previousEveningDate : data.eveningDate : previous ? data.previousCycleDate : data.cycleDate} />)
         )}
       </ScrollView>
     </SafeAreaView>

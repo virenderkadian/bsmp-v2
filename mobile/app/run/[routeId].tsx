@@ -7,6 +7,7 @@ import { useActiveRoute } from "@/active-route";
 import { api, ApiError } from "@/api";
 import { getCashSaleEntries, type CashSaleEntry } from "@/cash-sale";
 import { CashSaleModal } from "@/components/CashSaleModal";
+import { StockPanel } from "@/components/StockPanel";
 import { CollectPaymentModal } from "@/components/CollectPaymentModal";
 import { RouteMapModal } from "@/components/RouteMapModal";
 import { SlideToConfirm } from "@/components/SlideToConfirm";
@@ -44,6 +45,13 @@ function formatBillMonth(month: string): string {
     month: "short",
     timeZone: "UTC",
   });
+}
+
+function cycleDateForRoute(date: string, shift: "MORNING" | "EVENING") {
+  if (shift === "MORNING") return date;
+  const day = new Date(`${date}T00:00:00Z`);
+  day.setUTCDate(day.getUTCDate() + 1);
+  return day.toISOString().slice(0, 10);
 }
 
 function statusOf(customer: DriverSheetCustomer, isQueued: boolean): { tone: "delivered" | "skipped" | "pending"; label: string } {
@@ -84,7 +92,8 @@ export default function RunScreen() {
   // partly behind the nav buttons, so the inset is applied to the scroll
   // content and the overlays instead.
   const insets = useSafeAreaInsets();
-  const { routeId } = useLocalSearchParams<{ routeId: string }>();
+  const { routeId, date } = useLocalSearchParams<{ routeId: string; date?: string }>();
+  const runDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : todayStr();
   const { refresh: refreshActiveRoute } = useActiveRoute();
   const { pendingCount, isOnline: online, syncing, syncNow } = useOfflineSync();
 
@@ -138,7 +147,7 @@ export default function RunScreen() {
     if (!routeId) return;
     try {
       setError(null);
-      const result = await api.sheet(routeId, todayStr());
+      const result = await api.sheet(routeId, runDate);
       // A queued save hasn't reached the server, so the fetched sheet shows
       // that stop as untouched — its quantities would fall back to the
       // prefill and it would look undelivered after an app restart. Re-apply
@@ -164,7 +173,7 @@ export default function RunScreen() {
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't load this route.");
     }
-  }, [routeId]);
+  }, [routeId, runDate]);
 
   useEffect(() => {
     load();
@@ -174,15 +183,15 @@ export default function RunScreen() {
   // on mount so re-entering a finished route shows the summary, not the run.
   useEffect(() => {
     if (!routeId) return;
-    isRouteCompleted(routeId, todayStr()).then(setCompleted);
-  }, [routeId]);
+    isRouteCompleted(routeId, runDate).then(setCompleted);
+  }, [routeId, runDate]);
 
   // Refreshed whenever the round is finished or the cash sale sheet closes, so
   // the summary reflects sales entered right up to the end of the round.
   useEffect(() => {
     if (!routeId || cashSaleOpen) return;
-    getCashSaleEntries(routeId, todayStr()).then(setCashSales);
-  }, [routeId, cashSaleOpen, completed]);
+    getCashSaleEntries(routeId, runDate).then(setCashSales);
+  }, [routeId, runDate, cashSaleOpen, completed]);
 
   const refreshQueuedIds = useCallback(async () => {
     if (!routeId) return;
@@ -228,7 +237,7 @@ export default function RunScreen() {
 
   const commitFinish = async () => {
     if (!routeId) return;
-    await markRouteCompleted(routeId, todayStr());
+    await markRouteCompleted(routeId, runDate);
     setCompleted(true);
     // Releases the one-active-route guard and clears the resume pill.
     refreshActiveRoute();
@@ -257,7 +266,7 @@ export default function RunScreen() {
   // state) is what makes it stick across a reload.
   const reopenAt = async (index: number) => {
     if (!routeId) return;
-    await reopenRoute(routeId, todayStr());
+    await reopenRoute(routeId, runDate);
     setCompleted(false);
     setCursor(index);
     refreshActiveRoute();
@@ -376,7 +385,7 @@ export default function RunScreen() {
       const locationFields = skipped ? {} : await resolveLocationForSave(customer.latitude, customer.longitude);
       setSavingStage("saving");
       const request: DriverSaveLineRequest = {
-        date: todayStr(),
+        date: runDate,
         skipped,
         remarks: remarks.trim() || undefined,
         products,
@@ -615,6 +624,7 @@ export default function RunScreen() {
               ))}
             </Card>
           ) : null}
+          <StockPanel compact cycleDate={cycleDateForRoute(sheet.date, sheet.route.shift)} routeShift={sheet.route.shift} />
           <PrimaryButton label="Back to routes" onPress={() => router.back()} />
           <Pressable
             onPress={() => void reopen()}
@@ -628,7 +638,7 @@ export default function RunScreen() {
           visible={cashSaleOpen}
           onClose={() => setCashSaleOpen(false)}
           routeId={sheet.route.id}
-          sessionDate={todayStr()}
+          sessionDate={runDate}
           products={sheet.customers[0]?.products ?? []}
         />
 
@@ -1010,7 +1020,7 @@ export default function RunScreen() {
         visible={cashSaleOpen}
         onClose={() => setCashSaleOpen(false)}
         routeId={sheet.route.id}
-        sessionDate={todayStr()}
+        sessionDate={runDate}
         products={sheet.customers[0]?.products ?? []}
       />
 
