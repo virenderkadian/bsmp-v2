@@ -11,6 +11,7 @@ import { TAB_BAR_HEIGHT } from "@/components/ActiveRoutePill";
 import { RouteCard } from "@/route-card";
 import { inCycleOrder } from "@/route-progress";
 import { useSession } from "@/session";
+import { radius } from "@/theme";
 import { Card, Chip, Eyebrow, ScreenTitle, useColors } from "@/ui";
 
 function formatRupees(value: string): string {
@@ -21,7 +22,7 @@ export default function DashboardScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { vehicle } = useSession();
+  const { vehicle, admin } = useSession();
   const [routeData, setRouteData] = useState<DriverRoutesResponse | null>(null);
   const [dues, setDues] = useState<DriverDuesResponse | null>(null);
   const [stock, setStock] = useState<DriverStockResponse | null>(null);
@@ -73,11 +74,20 @@ export default function DashboardScreen() {
       >
         {/* The vehicle is what this screen is about; the tab already says
             "Dashboard", so it does not need to say it again. */}
-        <View style={{ marginBottom: 14 }}>
-          <Text style={{ color: colors.inkSoft, fontSize: 13 }}>{today}{vehicle ? ` · ${vehicle.code}` : ""}</Text>
-          <Text style={{ color: colors.ink, fontSize: 23, fontWeight: "800", letterSpacing: -0.4 }} numberOfLines={1}>
-            {vehicle ? vehicle.name : "Dashboard"}
-          </Text>
+        <View style={{ marginBottom: 14, flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: colors.inkSoft, fontSize: 13 }}>{today}{vehicle ? ` · ${vehicle.code}` : ""}</Text>
+            <Text style={{ color: colors.ink, fontSize: 23, fontWeight: "800", letterSpacing: -0.4 }} numberOfLines={1}>
+              {vehicle ? vehicle.name : "Dashboard"}
+            </Text>
+          </View>
+          {admin ? (
+            <Pressable onPress={() => router.push("/admin/vehicles" as never)} accessibilityLabel="Switch vehicle"
+              style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: 6, height: 38, paddingHorizontal: 14, borderRadius: radius.pill, backgroundColor: colors.brandTint, opacity: pressed ? 0.7 : 1 })}>
+              <Ionicons name="swap-horizontal" size={18} color={colors.brand} />
+              <Text style={{ color: colors.brand, fontSize: 13.5, fontWeight: "800" }}>Switch</Text>
+            </Pressable>
+          ) : null}
         </View>
 
         <View style={{ flexDirection: "row", gap: 10, marginBottom: 12 }}>

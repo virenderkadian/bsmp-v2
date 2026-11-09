@@ -2,12 +2,14 @@ import { useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
-import type { DriverStockResponse } from "@shared/driver-api-types";
+import type { AdminVehiclePayment, DriverStockResponse } from "@shared/driver-api-types";
 import { useMorningStarted } from "@/active-route";
+import { AddVehiclePaymentModal } from "@/components/AddVehiclePaymentModal";
+import { useSession } from "@/session";
 import { api, ApiError } from "@/api";
 import { expectedCashSummary } from "@/stock-expected";
 import { radius } from "@/theme";
-import { Card, Chip, Eyebrow, useColors } from "@/ui";
+import { Card, Chip, Eyebrow, PrimaryButton, useColors } from "@/ui";
 
 function rupees(value: number): string {
   return `${value < 0 ? "−" : ""}₹${Math.round(Math.abs(value)).toLocaleString("en-IN")}`;
@@ -33,15 +35,24 @@ export default function ExpectedCashScreen() {
   const [stock, setStock] = useState<DriverStockResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const { admin, vehicle } = useSession();
+  // Admin only: the deposits already recorded for this cycle, and the form to add one.
+  const [payments, setPayments] = useState<AdminVehiclePayment[]>([]);
+  const [addOpen, setAddOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
       setError(null);
-      setStock(await api.stock());
+      const result = await api.stock();
+      setStock(result);
+      if (admin) {
+        // Best effort: the figures above still stand if this list cannot load.
+        setPayments((await api.adminVehiclePayments(result.cycleDate).catch(() => null))?.payments ?? []);
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't load stock.");
     }
-  }, []);
+  }, [admin]);
   useEffect(() => { void load(); }, [load]);
   const onRefresh = useCallback(async () => { setRefreshing(true); await load(); setRefreshing(false); }, [load]);
 
@@ -115,6 +126,37 @@ export default function ExpectedCashScreen() {
               ) : null}
             </Card>
 
+            {admin ? (
+              <View style={{ marginBottom: 20 }}>
+                <PrimaryButton label="Add payment" onPress={() => setAddOpen(true)} />
+                {payments.length > 0 ? (
+                  <View style={{ marginTop: 16 }}>
+                    <Eyebrow>Payments received</Eyebrow>
+                    <Card style={{ padding: 0 }}>
+                      {payments.map((payment, index) => (
+                        <View key={payment.id} style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 12, paddingHorizontal: 14,
+                          borderTopWidth: index === 0 ? 0 : 1, borderTopColor: colors.border, opacity: payment.status === "CANCELLED" ? 0.5 : 1 }}>
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "800", textDecorationLine: payment.status === "CANCELLED" ? "line-through" : "none" }}>
+                              {/* Exact, unlike the whole-rupee totals: a deposit of 1,500.50 must read as 1,500.50. */}
+                              ₹{Number(payment.amount).toLocaleString("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 2 })}
+                            </Text>
+                            <Text style={{ color: colors.inkSoft, fontSize: 12.5 }} numberOfLines={1}>
+                              {{ CASH: "Cash", UPI: "UPI", BANK_TRANSFER: "Bank transfer", CHEQUE: "Cheque" }[payment.mode]}
+                              {payment.referenceNo ? ` · ${payment.referenceNo}` : ""}
+                              {payment.notes ? ` · ${payment.notes}` : ""}
+                            </Text>
+                          </View>
+                          <Chip label={payment.status === "VERIFIED" ? "Received" : payment.status === "PENDING" ? "Pending" : "Cancelled"}
+                            tone={payment.status === "VERIFIED" ? "delivered" : "pending"} />
+                        </View>
+                      ))}
+                    </Card>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
+
             <Eyebrow>By product</Eyebrow>
             <Text style={{ color: colors.inkFaint, fontSize: 12.5, lineHeight: 18, marginBottom: 10, marginLeft: 4 }}>
               Left = given − evening − morning − returned
@@ -160,6 +202,17 @@ export default function ExpectedCashScreen() {
           </>
         ) : null}
       </ScrollView>
+
+      {admin && stock ? (
+        <AddVehiclePaymentModal
+          visible={addOpen}
+          onClose={() => setAddOpen(false)}
+          onSaved={() => { setAddOpen(false); void load(); }}
+          vehicleLabel={vehicle ? `${vehicle.code} · ${vehicle.name}` : "this vehicle"}
+          cycleDate={stock.cycleDate}
+          balance={summary ? Math.max(0, summary.net) : 0}
+        />
+      ) : null}
     </SafeAreaView>
   );
 }
