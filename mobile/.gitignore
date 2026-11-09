@@ -1,5 +1,8 @@
 # Expo / React Native
-node_modules/
+# No trailing slash: a trailing slash only matches a real directory, not a
+# symlink — and node_modules may be a symlink (see ~/.local-node-modules, used
+# to keep it off this Mac's iCloud-synced Desktop folder).
+node_modules
 .expo/
 dist/
 web-build/
@@ -16,3 +19,6 @@ android/
 # Misc
 .DS_Store
 expo-env.d.ts
+
+# Local build secrets (see .env.build.local.example)
+.env.build.local

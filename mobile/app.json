@@ -2,7 +2,7 @@
   "expo": {
     "name": "BSMP Driver",
     "slug": "bsmp-driver",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "scheme": "bsmpdriver",
     "userInterfaceStyle": "automatic",
@@ -12,6 +12,7 @@
       "supportsTablet": false,
       "bundleIdentifier": "in.bsmp.driver",
       "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
         "NSLocationWhenInUseUsageDescription": "Used to save a customer's location the first time you deliver to them, and to give you directions there."
       }
     },
