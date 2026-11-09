@@ -20,6 +20,5 @@ android/
 .DS_Store
 expo-env.d.ts
 
-# Local build secrets (see .env.build.local.example)
-.env.build.local
-!.env.build.local.example
+# Local build secrets (see .build-secrets.local.example)
+.build-secrets.local
