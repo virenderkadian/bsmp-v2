@@ -3,6 +3,7 @@ import type { UserRole } from "@prisma/client";
 import type { AdminVehicle } from "@/lib/driver-api-types";
 import { prisma } from "@/lib/prisma";
 import { getJwtSecret } from "@/lib/jwt-secret";
+import { setCityContext } from "@/lib/city-context";
 
 // Admin sign-in for the mobile app.
 //
@@ -127,4 +128,17 @@ export async function requireAdmin(request: Request): Promise<AdminAccess | null
   if (!token) return null;
   const payload = await verifyAdminToken(token);
   return payload ? resolveAdminAccess(payload.userId) : null;
+}
+
+// Guard for admin-only endpoints that act on ONE vehicle (as opposed to the driver
+// endpoints, which a vehicle's own driver may also call): a valid admin token, a
+// vehicle the admin may see, and the city context set for the Prisma city guard.
+// Null means respond 401.
+export async function requireAdminVehicle(request: Request): Promise<{ access: AdminAccess; vehicle: { vehicleId: string; cityId: string } } | null> {
+  const access = await requireAdmin(request);
+  if (!access) return null;
+  const vehicle = await resolveAdminVehicle(access, request.headers.get("x-vehicle-id") ?? "");
+  if (!vehicle) return null;
+  setCityContext(vehicle.cityId);
+  return { access, vehicle };
 }
