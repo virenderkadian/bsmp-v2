@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { DriverStockAction, DriverStockRequest, DriverStockResponse } from "@/lib/driver-api-types";
-import { dayOffset, stockWindow, validDay } from "@/lib/driver-stock-rules";
+import { dayOffset, stockAuditWindow, stockWindow, validDay } from "@/lib/driver-stock-rules";
 
 const stockActions = new Set<DriverStockAction>(["EVENING_TAKEN", "EVENING_REFILL", "EVENING_RETURN", "MORNING_REFILL", "MORNING_RETURN"]);
 type AuditAfter = { cycleDate?: string; productId?: string; requestId?: string };
@@ -24,7 +24,7 @@ export async function getDriverStock(vehicleId: string, cityId: string, requeste
   const [products, rows, audits, deposits, soldRows] = await Promise.all([
     prisma.product.findMany({ where: { cityId, isActive: true, includeInReconciliation: true }, orderBy: { displayOrder: "asc" }, select: { id: true, name: true, unit: true, defaultRate: true } }),
     prisma.vehicleCycleStock.findMany({ where: { vehicleId, cycleDate: new Date(`${cycleDate}T00:00:00Z`), product: { cityId } }, select: { productId: true, givenQty: true, returnedQty: true, rateSnapshot: true } }),
-    prisma.auditLog.findMany({ where: { cityId, entityType: "DriverStock", entityId: vehicleId, action: { in: ["EVENING_TAKEN", "EVENING_RETURN", "MORNING_RETURN"] } }, select: { action: true, after: true } }),
+    prisma.auditLog.findMany({ where: { cityId, entityType: "DriverStock", entityId: vehicleId, action: { in: ["EVENING_TAKEN", "EVENING_RETURN", "MORNING_RETURN"] }, createdAt: stockAuditWindow(cycleDate) }, select: { action: true, after: true } }),
     prisma.vehicleCashSalePayment.aggregate({ where: { vehicleId, cycleDate: new Date(`${cycleDate}T00:00:00Z`), status: "VERIFIED" }, _sum: { amount: true } }),
     prisma.$queryRaw<SoldRow[]>`
       SELECT dp."productId" AS "productId", r."shift"::text AS "shift",
@@ -84,7 +84,7 @@ export async function saveDriverStock(vehicleId: string, cityId: string, input: 
   try {
     await prisma.$transaction(async (tx) => {
       const previous = await tx.vehicleCycleStock.findUnique({ where: { vehicleId_productId_cycleDate: { vehicleId, productId: product.id, cycleDate } } });
-      const audits = await tx.auditLog.findMany({ where: { cityId, entityType: "DriverStock", entityId: vehicleId, action: { in: ["EVENING_TAKEN", "EVENING_RETURN", "MORNING_RETURN"] } }, select: { action: true, after: true } });
+      const audits = await tx.auditLog.findMany({ where: { cityId, entityType: "DriverStock", entityId: vehicleId, action: { in: ["EVENING_TAKEN", "EVENING_RETURN", "MORNING_RETURN"] }, createdAt: stockAuditWindow(input.cycleDate) }, select: { action: true, after: true } });
       const done = (action: DriverStockAction) => audits.some((audit) => audit.action === action && isStockAudit(audit.after, input.cycleDate, product.id));
       if (input.action === "EVENING_TAKEN" && done("EVENING_TAKEN")) throw new StockError("Stock taken was already recorded for this product.", 409);
       if (input.action === "EVENING_RETURN" && done("EVENING_RETURN")) throw new StockError("Evening return was already recorded for this product.", 409);

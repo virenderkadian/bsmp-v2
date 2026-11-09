@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Alert, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { SafeModal } from "@/components/SafeModal";
 import type { DriverSheetProduct } from "@shared/driver-api-types";
 import {
   addCashSaleEntry,
@@ -127,12 +127,12 @@ export function CashSaleModal({
   const sessionTotals = summariseCashSales(entries);
 
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.ground }}>
+    <SafeModal visible={visible} onClose={onClose}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 4 }}>
           <Text style={{ flex: 1, color: colors.ink, fontSize: 18, fontWeight: "800" }}>Cash Sale</Text>
           <Pressable
             onPress={onClose}
+            hitSlop={10}
             style={{ width: 34, height: 34, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
           >
             <Text style={{ color: colors.ink, fontSize: 16 }}>✕</Text>
@@ -312,7 +312,6 @@ export function CashSaleModal({
             )}
           </ScrollView>
         )}
-      </SafeAreaView>
-    </Modal>
+    </SafeModal>
   );
 }

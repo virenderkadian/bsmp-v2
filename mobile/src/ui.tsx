@@ -21,6 +21,13 @@ export function Card({ children, style }: { children: ReactNode; style?: ViewSty
           borderWidth: StyleSheet.hairlineWidth,
           borderRadius: radius.lg,
           padding: 16,
+          // A soft lift so a white card reads as a card against the tinted
+          // background. Invisible on the dark themes, where it isn't needed.
+          shadowColor: "#0b1713",
+          shadowOpacity: 0.08,
+          shadowRadius: 10,
+          shadowOffset: { width: 0, height: 3 },
+          elevation: 2,
         },
         style,
       ]}
@@ -115,7 +122,7 @@ export function ProgressBar({ value }: { value: number }) {
   const { colors } = useTheme();
   const pct = Math.max(0, Math.min(1, value));
   return (
-    <View style={{ height: 8, borderRadius: radius.pill, backgroundColor: colors.pendingTint, overflow: "hidden" }}>
+    <View style={{ height: 8, borderRadius: radius.pill, backgroundColor: colors.borderStrong, overflow: "hidden" }}>
       <View style={{ height: "100%", width: `${pct * 100}%`, backgroundColor: colors.brand, borderRadius: radius.pill }} />
     </View>
   );

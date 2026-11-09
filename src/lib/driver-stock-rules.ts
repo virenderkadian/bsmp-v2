@@ -38,3 +38,17 @@ export function expectedStock(product: { given: string; returned: string; evenin
 export function expectedStockTotal(products: Array<Parameters<typeof expectedStock>[0]>) {
   return Math.round(products.reduce((sum, product) => sum + expectedStock(product).amount, 0) * 100) / 100;
 }
+
+// Stock events for a cycle are only ever written during that cycle's own
+// window (the evening before it and the cycle day itself), so looking them up
+// needs only a few days either side of the cycle date, not the vehicle's whole
+// history. Without this bound the query re-read every stock event ever
+// recorded for the vehicle, growing every day and running on every dashboard
+// load. The margin is deliberately generous: late syncs and timezone edges
+// cost nothing, an over-tight window would silently lose an event.
+export function stockAuditWindow(cycleDate: string) {
+  return {
+    gte: new Date(`${dayOffset(cycleDate, -3)}T00:00:00Z`),
+    lt: new Date(`${dayOffset(cycleDate, 4)}T00:00:00Z`),
+  };
+}

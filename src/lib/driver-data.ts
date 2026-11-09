@@ -606,6 +606,9 @@ export async function updateDriverCustomerMobile(
 export async function getDriverDues(vehicleId: string, cityId: string): Promise<DriverDuesResponse> {
   const sequenceMonth = toMonthStart(new Date().toISOString().slice(0, 10));
 
+  const profile = await prisma.businessProfile.findUnique({ where: { cityId }, select: { businessName: true, upiId: true } });
+  const upi = profile?.upiId ? { upiId: profile.upiId, payeeName: profile.businessName } : null;
+
   const bills = await prisma.monthlyBill.findMany({
     where: {
       route: { vehicleId, cityId, isActive: true },
@@ -624,7 +627,7 @@ export async function getDriverDues(vehicleId: string, cityId: string): Promise<
   });
 
   if (bills.length === 0) {
-    return { routes: [], grandTotalOutstanding: "0.00", customerCount: 0 };
+    return { routes: [], grandTotalOutstanding: "0.00", customerCount: 0, upi };
   }
 
   // This month's delivery-sequence position, so each route's list can read
@@ -714,7 +717,7 @@ export async function getDriverDues(vehicleId: string, cityId: string): Promise<
     })
     .sort((a, b) => a.routeCode.localeCompare(b.routeCode));
 
-  return { routes, grandTotalOutstanding: grandTotal.toFixed(2), customerCount };
+  return { routes, grandTotalOutstanding: grandTotal.toFixed(2), customerCount, upi };
 }
 
 export type GetDriverBillDetailResult =

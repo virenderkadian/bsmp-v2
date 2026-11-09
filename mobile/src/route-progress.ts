@@ -17,7 +17,7 @@ export async function fetchRouteProgress(
   const entries = await Promise.all(
     routes.map(async (route): Promise<[string, RouteProgress]> => {
       try {
-        const sheet = await api.sheet(route.id, date);
+        const sheet = await api.sheet(route.id, date, { full: false });
         const total = sheet.customers.length;
         const done = sheet.customers.filter((customer) => customer.saved).length;
         return [route.id, { done, total }];
@@ -51,4 +51,25 @@ export function findActiveRoute(
     }
   }
   return null;
+}
+
+// Routes in the order a reconciliation cycle runs them: the evening round
+// first, then the morning round that follows it. The server lists morning
+// first (its own sort), which read backwards against stock and cash, which
+// always go evening -> morning.
+export function inCycleOrder(routes: DriverRoute[]): DriverRoute[] {
+  return [...routes].sort((a, b) =>
+    a.shift === b.shift ? a.code.localeCompare(b.code, undefined, { numeric: true }) : a.shift === "EVENING" ? -1 : 1,
+  );
+}
+
+// Only the CURRENT reconciliation cycle can be changed from the phone: its
+// evening round (the day before the cycle date) and its morning round (the
+// cycle date). Anything older — the "Previous cycle" on the Delivery tab, or a
+// round the cycle has moved on from — is view-only.
+export function isEditableCycleDate(shift: "MORNING" | "EVENING", date: string, cycleDate: string): boolean {
+  if (shift === "MORNING") return date === cycleDate;
+  const evening = new Date(`${cycleDate}T00:00:00Z`);
+  evening.setUTCDate(evening.getUTCDate() - 1);
+  return date === evening.toISOString().slice(0, 10);
 }

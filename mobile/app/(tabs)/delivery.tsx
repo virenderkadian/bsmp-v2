@@ -6,6 +6,7 @@ import { api, ApiError } from "@/api";
 import { TAB_BAR_HEIGHT } from "@/components/ActiveRoutePill";
 import { CycleSwitch } from "@/components/CycleSwitch";
 import { RouteCard } from "@/route-card";
+import { inCycleOrder } from "@/route-progress";
 import { Card, ScreenTitle, useColors } from "@/ui";
 
 export default function DeliveryScreen() {
@@ -62,8 +63,8 @@ export default function DeliveryScreen() {
             <Text style={{ color: colors.inkSoft, fontSize: 14 }}>No routes assigned to this vehicle yet.</Text>
           </Card>
         ) : (
-          data?.routes.map((route) => <RouteCard key={`${route.id}-${previous}`} route={route} serverToday={data.today}
-            date={route.shift === "EVENING" ? previous ? data.previousEveningDate : data.eveningDate : previous ? data.previousCycleDate : data.cycleDate} />)
+          data ? inCycleOrder(data.routes).map((route) => <RouteCard key={`${route.id}-${previous}`} route={route} serverToday={data.today}
+            date={route.shift === "EVENING" ? previous ? data.previousEveningDate : data.eveningDate : previous ? data.previousCycleDate : data.cycleDate} />) : null
         )}
       </ScrollView>
     </SafeAreaView>

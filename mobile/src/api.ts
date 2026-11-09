@@ -104,8 +104,14 @@ export const api = {
   routes: () => request<DriverRoutesResponse>("/api/driver/routes"),
   stock: (cycleDate?: string) => request<DriverStockResponse>(`/api/driver/stock${cycleDate ? `?cycleDate=${encodeURIComponent(cycleDate)}` : ""}`),
   saveStock: (body: DriverStockRequest) => request<DriverStockResponse>("/api/driver/stock", { method: "POST", body: JSON.stringify(body) }),
-  sheet: (routeId: string, date: string) =>
-    request<DriverSheetResponse>(`/api/driver/routes/${routeId}/sheet?date=${encodeURIComponent(date)}&catalog=full`),
+  // `full` (the default) asks for every product the delivery card can offer.
+  // Callers that only count stops pass { full: false }: they never look at the
+  // products, and this is polled every minute, so the lean sheet keeps that
+  // cheap on both the phone and the server.
+  sheet: (routeId: string, date: string, options: { full?: boolean } = {}) =>
+    request<DriverSheetResponse>(
+      `/api/driver/routes/${routeId}/sheet?date=${encodeURIComponent(date)}${options.full === false ? "" : "&catalog=full"}`,
+    ),
   saveLine: (routeId: string, customerId: string, body: DriverSaveLineRequest) =>
     request<DriverSaveLineResponse>(`/api/driver/routes/${routeId}/lines/${customerId}`, {
       method: "POST",

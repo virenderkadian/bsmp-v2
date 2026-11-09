@@ -257,6 +257,9 @@ export type DriverDuesResponse = {
   routes: DriverDuesRoute[];
   grandTotalOutstanding: string;
   customerCount: number;
+  // The city's UPI payee, so a payment can be collected from the dues screens
+  // with the same scan code the delivery card used. Absent on older servers.
+  upi?: { upiId: string; payeeName: string } | null;
 };
 
 // ---- Bill detail (read-only view of one MonthlyBill) ----

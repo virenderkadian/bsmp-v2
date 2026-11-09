@@ -24,7 +24,9 @@ function displayDate(day: string) {
   return new Date(`${day}T00:00:00Z`).toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: "UTC" });
 }
 
-export function StockPanel({ compact = false, onSaved, cycleDate: requestedCycleDate, routeShift }: { compact?: boolean; onSaved?: () => void; cycleDate?: string; routeShift?: RouteShift }) {
+// `onStock` hands the loaded stock to a parent that wants to show something
+// derived from it (e.g. a total), so the parent never needs a second request.
+export function StockPanel({ compact = false, onSaved, onStock, cycleDate: requestedCycleDate, routeShift }: { compact?: boolean; onSaved?: () => void; onStock?: (stock: DriverStockResponse) => void; cycleDate?: string; routeShift?: RouteShift }) {
   const colors = useColors();
   const [stock, setStock] = useState<DriverStockResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -36,6 +38,7 @@ export function StockPanel({ compact = false, onSaved, cycleDate: requestedCycle
   const [notice, setNotice] = useState<string | null>(null);
   const [currentCycleDate, setCurrentCycleDate] = useState<string | null>(null);
   const [showPrevious, setShowPrevious] = useState(false);
+  useEffect(() => { if (stock) onStock?.(stock); }, [stock, onStock]);
 
   const priorDate = currentCycleDate ? (() => { const day = new Date(`${currentCycleDate}T00:00:00Z`); day.setUTCDate(day.getUTCDate() - 1); return day.toISOString().slice(0, 10); })() : null;
   const viewedCycleDate = requestedCycleDate ?? (showPrevious ? priorDate ?? undefined : undefined);
@@ -97,19 +100,27 @@ export function StockPanel({ compact = false, onSaved, cycleDate: requestedCycle
   return <View>
     {!compact && !requestedCycleDate && currentCycleDate ? <CycleSwitch previous={showPrevious} onChange={(value) => { setLoading(true); setShowPrevious(value); }} /> : null}
     {stock ? <>
-      {compact ? <Eyebrow>Vehicle stock</Eyebrow> : <Text style={{ color: colors.inkSoft, fontSize: 13, marginBottom: 3 }}>
-        {displayDate(stock.eveningDate)} evening → {displayDate(stock.cycleDate)} morning
-      </Text>}
-      <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 16 }}>
-        <Text style={{ color: colors.ink, fontSize: compact ? 17 : 23, fontWeight: "800", letterSpacing: -0.4 }}>
-          {stock.shift === "EVENING" ? "Evening" : "Morning"} stock
+      {compact ? <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 10 }}>
+        <View style={{ flex: 1 }}>
+          <Text style={{ color: colors.ink, fontSize: 16, fontWeight: "800", letterSpacing: -0.3 }}>
+            {stock.shift === "EVENING" ? "Evening" : "Morning"} stock
+          </Text>
+          <Text style={{ color: colors.inkFaint, fontSize: 12.5, marginTop: 1 }}>
+            {displayDate(stock.eveningDate)} evening → {displayDate(stock.cycleDate)} morning
+          </Text>
+        </View>
+        <Chip label={stock.complete ? "Completed" : !stock.editable || shiftClosed ? "View only" : "In progress"} tone={stock.complete ? "delivered" : !stock.editable || shiftClosed ? "pending" : "brand"} />
+      </View> : <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 10 }}>
+        {/* One line: which stock this is, which cycle, and where it stands. */}
+        <Text style={{ flex: 1, color: colors.inkSoft, fontSize: 13 }} numberOfLines={1}>
+          <Text style={{ color: colors.ink, fontWeight: "800" }}>{stock.shift === "EVENING" ? "Evening" : "Morning"} stock</Text>
+          {"  ·  "}{displayDate(stock.eveningDate)} → {displayDate(stock.cycleDate)}
         </Text>
         <Chip label={stock.complete ? "Completed" : !stock.editable || shiftClosed ? "View only" : "In progress"} tone={stock.complete ? "delivered" : !stock.editable || shiftClosed ? "pending" : "brand"} />
-      </View>
-      {notice ? <View style={{ backgroundColor: colors.deliveredTint, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 11, marginBottom: 14 }}>
+      </View>}
+      {notice ? <View style={{ backgroundColor: colors.deliveredTint, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 10, marginBottom: 10 }}>
         <Text style={{ color: colors.delivered, fontSize: 13, fontWeight: "700" }}>✓ {notice}</Text>
       </View> : null}
-      <Eyebrow>Products</Eyebrow>
       {stock.products.map((product) => {
         const actions: DriverStockAction[] = stock.shift === "EVENING"
           ? [
@@ -118,28 +129,30 @@ export function StockPanel({ compact = false, onSaved, cycleDate: requestedCycle
               ...(!product.eveningReturnRecorded ? ["EVENING_RETURN" as const] : []),
             ]
           : product.morningReturnRecorded ? [] : ["MORNING_REFILL", "MORNING_RETURN"];
-        return <Card key={product.id} style={{ marginBottom: 10 }}>
-          <View style={{ flexDirection: "row", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
-            <Text style={{ color: colors.ink, fontSize: 16, fontWeight: "800", flex: 1 }} numberOfLines={2}>{product.name}</Text>
+        const num = (value: string | undefined) => String(Number(value) || 0);
+        // Four small columns instead of two stacked rows of big ones: the same
+        // figures in about a third of the height.
+        const stats = [
+          { label: "Given", value: num(product.given) },
+          { label: "Evening", value: num(product.eveningSold) },
+          { label: "Morning", value: num(product.morningSold) },
+          { label: "Returned", value: product.morningReturnRecorded ? num(product.returned) : "—" },
+        ];
+        const hasActivity = stats.some((stat) => stat.value !== "0" && stat.value !== "—");
+        return <Card key={product.id} style={{ marginBottom: 8, padding: 12 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "800", flex: 1 }} numberOfLines={1}>
+              {product.name} <Text style={{ color: colors.inkFaint, fontSize: 12, fontWeight: "600" }}>{product.unit.toLowerCase() === "litre" ? "L" : product.unit.toLowerCase()}</Text>
+            </Text>
             {product.morningReturnRecorded ? <Chip label="Returned" tone="delivered" /> : null}
           </View>
-          <View style={{ flexDirection: "row", gap: 18, marginTop: 10 }}>
-            <View><Text style={{ color: colors.inkFaint, fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.8 }}>Given</Text>
-              <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800", marginTop: 2 }}>{product.given} <Text style={{ color: colors.inkSoft, fontSize: 12 }}>{product.unit}</Text></Text></View>
-            {stock.shift === "MORNING" ? <View><Text style={{ color: colors.inkFaint, fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.8 }}>Final return</Text>
-              <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800", marginTop: 2 }}>{product.morningReturnRecorded ? product.returned : "—"} <Text style={{ color: colors.inkSoft, fontSize: 12 }}>{product.morningReturnRecorded ? product.unit : ""}</Text></Text></View> : null}
-          </View>
-          {product.eveningSold !== undefined && product.morningSold !== undefined ? <View style={{ flexDirection: "row", gap: 18, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.border, marginTop: 10, paddingTop: 10 }}>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.inkSoft, fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.7 }}>Evening sold</Text>
-              <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800", marginTop: 3 }}>{product.eveningSold} <Text style={{ color: colors.inkSoft, fontSize: 12 }}>{product.unit}</Text></Text>
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.inkSoft, fontSize: 11, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.7 }}>Morning sold</Text>
-              <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800", marginTop: 3 }}>{product.morningSold} <Text style={{ color: colors.inkSoft, fontSize: 12 }}>{product.unit}</Text></Text>
-            </View>
+          {hasActivity ? <View style={{ flexDirection: "row", marginTop: 8 }}>
+            {stats.map((stat) => <View key={stat.label} style={{ flex: 1 }}>
+              <Text style={{ color: colors.inkFaint, fontSize: 10.5, fontWeight: "700", textTransform: "uppercase", letterSpacing: 0.4 }}>{stat.label}</Text>
+              <Text style={{ color: stat.value === "0" || stat.value === "—" ? colors.inkFaint : colors.ink, fontSize: 16, fontWeight: "800", marginTop: 1 }}>{stat.value}</Text>
+            </View>)}
           </View> : null}
-          {stock.editable && !shiftClosed && actions.length > 0 ? <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+          {stock.editable && !shiftClosed && actions.length > 0 ? <View style={{ flexDirection: "row", gap: 8, marginTop: 10 }}>
             {actions.map((action) => {
               const cue = actionCues[action];
               const foreground = cue.tone === "add" ? colors.delivered : cue.tone === "subtract" ? colors.skipped : colors.brand;
@@ -147,10 +160,10 @@ export function StockPanel({ compact = false, onSaved, cycleDate: requestedCycle
               return <Pressable key={action} onPress={() => open(product, action)}
                 accessibilityRole="button"
                 accessibilityLabel={`${labels[action]} for ${product.name}`}
-                style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", minHeight: 44, borderWidth: 1, borderColor: colors.border,
-                  backgroundColor: background, borderRadius: radius.md, paddingHorizontal: 12, paddingVertical: 7, opacity: pressed ? 0.7 : 1 })}>
-                <Text style={{ color: foreground, fontSize: 17, fontWeight: "800", marginRight: 6 }}>{cue.symbol}</Text>
-                <Text style={{ color: foreground, fontWeight: "700", fontSize: 13 }}>{cue.shortLabel}</Text>
+                style={({ pressed }) => ({ flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", minHeight: 40,
+                  backgroundColor: background, borderRadius: radius.md, paddingHorizontal: 8, opacity: pressed ? 0.7 : 1 })}>
+                <Text style={{ color: foreground, fontSize: 16, fontWeight: "800", marginRight: 5 }}>{cue.symbol}</Text>
+                <Text style={{ color: foreground, fontWeight: "700", fontSize: 13 }} numberOfLines={1}>{cue.shortLabel}</Text>
               </Pressable>;
             })}
           </View> : null}
