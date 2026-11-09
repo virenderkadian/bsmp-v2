@@ -11,6 +11,10 @@ import { type NextRequest, NextResponse } from "next/server";
 // the Supabase gate here must not intercept it — without this exemption every
 // driver call gets 307-redirected to /login and the app can never talk to a
 // deployed environment.
+// /api/admin-app is the mobile app's admin sign-in and vehicle list (see
+// src/lib/admin-app-auth.ts): it checks the password itself and answers with its
+// own Bearer token, so — as with /api/driver — the Supabase cookie gate must not
+// intercept it.
 // /api/notifications is the office-PC sender agent (see
 // src/lib/notifications/agent-auth.ts): it authenticates with its own Bearer
 // shared secret, never Supabase cookies, so — exactly as with /api/driver — the
@@ -21,6 +25,7 @@ const PUBLIC_PATHS = [
   "/forgot-password",
   "/reset-password",
   "/api/driver",
+  "/api/admin-app",
   "/api/notifications",
 ];
 

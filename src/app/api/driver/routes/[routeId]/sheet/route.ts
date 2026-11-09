@@ -18,7 +18,9 @@ export async function GET(request: Request, context: { params: Promise<{ routeId
   const url = new URL(request.url);
   const date = url.searchParams.get("date") ?? new Date().toISOString().slice(0, 10);
 
-  const sheet = await getDriverSheet(driver.vehicleId, driver.cityId, routeId, date);
+  const sheet = await getDriverSheet(driver.vehicleId, driver.cityId, routeId, date, {
+    includeReconciliationProducts: url.searchParams.get("catalog") === "full",
+  });
   if (!sheet) {
     return driverJson({ error: "Route not found for this vehicle." }, 404);
   }

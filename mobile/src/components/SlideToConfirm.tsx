@@ -1,13 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useState } from "react";
+import { useEffect } from "react";
 import { StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, {
-  runOnJS,
-  useAnimatedStyle,
-  useSharedValue,
-  withSpring,
-} from "react-native-reanimated";
+import Animated, { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { radius } from "@/theme";
 import { useColors } from "@/ui";
 
@@ -21,14 +16,18 @@ type Props = {
   tone: "delivered" | "skipped";
   onConfirm: () => void;
   disabled?: boolean;
+  // Changes whenever the control should snap back to its start — e.g. the
+  // driver moved to another stop. The control stays mounted; remounting it
+  // (the old approach, via a React key) made the arrow knob vanish for a frame
+  // until its width was measured, which read as flicker on Previous/Next.
+  resetKey?: string;
 };
 
 // A committed slide (iOS "slide to power off" style): drag the handle across the
 // track past THRESHOLD to fire onConfirm. Two of these — one dragging right to
 // deliver, one dragging left to skip — so a stray tap can never mark a stop.
-export function SlideToConfirm({ direction, label, tone, onConfirm, disabled }: Props) {
+export function SlideToConfirm({ direction, label, tone, onConfirm, disabled, resetKey }: Props) {
   const colors = useColors();
-  const [trackWidth, setTrackWidth] = useState(0);
   const x = useSharedValue(0);
   const maxTravel = useSharedValue(0);
 
@@ -37,9 +36,12 @@ export function SlideToConfirm({ direction, label, tone, onConfirm, disabled }: 
 
   const onLayout = (event: LayoutChangeEvent) => {
     const width = event.nativeEvent.layout.width;
-    setTrackWidth(width);
     maxTravel.value = Math.max(0, width - KNOB - PAD * 2);
   };
+
+  useEffect(() => {
+    x.value = 0;
+  }, [resetKey, x]);
 
   const gesture = Gesture.Pan()
     .enabled(!disabled)
@@ -75,8 +77,8 @@ export function SlideToConfirm({ direction, label, tone, onConfirm, disabled }: 
         height: 54,
         borderRadius: radius.md,
         backgroundColor: bg,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: colors.border,
+        borderWidth: 1,
+        borderColor: fg,
         justifyContent: "center",
         overflow: "hidden",
         opacity: disabled ? 0.5 : 1,
@@ -100,29 +102,29 @@ export function SlideToConfirm({ direction, label, tone, onConfirm, disabled }: 
       <Animated.Text style={[{ textAlign: "center", color: fg, fontSize: 14, fontWeight: "700" }, labelStyle]}>
         {label}
       </Animated.Text>
-      {trackWidth > 0 ? (
-        <GestureDetector gesture={gesture}>
-          <Animated.View
-            style={[
-              {
-                position: "absolute",
-                [direction === "right" ? "left" : "right"]: PAD,
-                width: KNOB,
-                height: KNOB,
-                borderRadius: radius.sm,
-                backgroundColor: colors.surface,
-                borderWidth: StyleSheet.hairlineWidth,
-                borderColor: colors.borderStrong,
-                alignItems: "center",
-                justifyContent: "center",
-              },
-              knobStyle,
-            ]}
-          >
-            <Ionicons name={arrowIcon} size={26} color={fg} />
-          </Animated.View>
-        </GestureDetector>
-      ) : null}
+      {/* Always rendered: the knob is positioned from the track edge, not from
+          the measured width, so it needs no layout pass to appear. */}
+      <GestureDetector gesture={gesture}>
+        <Animated.View
+          style={[
+            {
+              position: "absolute",
+              [direction === "right" ? "left" : "right"]: PAD,
+              width: KNOB,
+              height: KNOB,
+              borderRadius: radius.sm,
+              backgroundColor: colors.surface,
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: colors.borderStrong,
+              alignItems: "center",
+              justifyContent: "center",
+            },
+            knobStyle,
+          ]}
+        >
+          <Ionicons name={arrowIcon} size={26} color={fg} />
+        </Animated.View>
+      </GestureDetector>
     </View>
   );
 }

@@ -1,6 +1,8 @@
 import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 import { setCityContext } from "@/lib/city-context";
+import { getJwtSecret } from "@/lib/jwt-secret";
+import { recordAdminWrite, resolveAdminAccess, resolveAdminVehicle, verifyAdminToken } from "@/lib/admin-app-auth";
 
 // Driver mobile-app auth. Deliberately separate from the Supabase Auth used by
 // admin users: a vehicle logs in with its code + a PIN, and carries a signed
@@ -36,21 +38,12 @@ export function verifyPin(pin: string, stored: string | null | undefined): boole
 
 // ---- JWT ----
 
-const encoder = new TextEncoder();
-
-function getSecret(): Uint8Array {
-  const secret = process.env.DRIVER_JWT_SECRET;
-  if (!secret || secret.length < 32) {
-    throw new Error(
-      "DRIVER_JWT_SECRET is missing or too short (needs a 32+ character secret).",
-    );
-  }
-  return encoder.encode(secret);
-}
-
 export type DriverTokenPayload = {
   vehicleId: string;
   cityId: string;
+  // Present only when an ADMIN is acting on this vehicle (see requireDriver);
+  // a real vehicle login never has it.
+  admin?: { userId: string; role: string; name: string };
 };
 
 // Long-lived by design: a driver logs in once and stays signed in. Rotate the
@@ -63,12 +56,16 @@ export async function signDriverToken(payload: DriverTokenPayload): Promise<stri
     .setSubject(payload.vehicleId)
     .setIssuedAt()
     .setExpirationTime(TOKEN_TTL)
-    .sign(getSecret());
+    .sign(getJwtSecret());
 }
 
 export async function verifyDriverToken(token: string): Promise<DriverTokenPayload | null> {
   try {
-    const { payload } = await jwtVerify(token, getSecret());
+    const { payload } = await jwtVerify(token, getJwtSecret());
+    // An admin token is never a vehicle login, whatever else it carries.
+    if (payload.kind !== undefined) {
+      return null;
+    }
     const vehicleId = payload.sub;
     const cityId = payload.cityId;
     if (typeof vehicleId === "string" && typeof cityId === "string") {
@@ -91,9 +88,36 @@ export async function requireDriver(request: Request): Promise<DriverTokenPayloa
     return null;
   }
   const payload = await verifyDriverToken(token);
-  if (!payload) {
+  if (payload) {
+    setCityContext(payload.cityId);
+    return payload;
+  }
+
+  // Not a vehicle token: an admin acting on a vehicle. They can do what the
+  // vehicle's driver can do. The vehicle comes from the request and is
+  // re-checked against the admin's current cities every time, and a write is
+  // recorded in the audit trail as THEIRS before it goes through (see
+  // recordAdminWrite) — a driver endpoint on its own would attribute it to the
+  // vehicle.
+  const admin = await verifyAdminToken(token);
+  if (!admin) {
     return null;
   }
-  setCityContext(payload.cityId);
-  return payload;
+  const vehicleId = request.headers.get("x-vehicle-id") ?? "";
+  const access = await resolveAdminAccess(admin.userId);
+  if (!access) {
+    return null;
+  }
+  const vehicle = await resolveAdminVehicle(access, vehicleId);
+  if (!vehicle) {
+    return null;
+  }
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    // Fail closed: no unattributed admin write.
+    if (!(await recordAdminWrite(access, vehicle, request))) {
+      return null;
+    }
+  }
+  setCityContext(vehicle.cityId);
+  return { vehicleId: vehicle.vehicleId, cityId: vehicle.cityId, admin: { userId: access.userId, role: access.role, name: access.fullName } };
 }

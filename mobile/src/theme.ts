@@ -42,8 +42,8 @@ const semanticLight: SemanticColors = {
   deliveredTint: "#dcfce7",
   skipped: "#b45309",
   skippedTint: "#fdf0d8",
-  pending: "#5f7168",
-  pendingTint: "#eaf0ed",
+  pending: "#4f6159",
+  pendingTint: "#dde7e2",
   danger: "#b91c1c",
 };
 
@@ -64,17 +64,17 @@ const identities: Record<ThemeId, { light: IdentityColors; dark: IdentityColors 
   // The original "dawn dairy" identity — default.
   teal: {
     light: {
-      ground: "#eef3f1",
+      ground: "#e0e8e4",
       surface: "#ffffff",
-      surface2: "#f6faf8",
-      border: "#e1e8e4",
-      borderStrong: "#cdd8d2",
-      ink: "#0e1b17",
-      inkSoft: "#56655f",
-      inkFaint: "#8a9994",
+      surface2: "#edf3f0",
+      border: "#cfdad4",
+      borderStrong: "#aebdb5",
+      ink: "#0b1713",
+      inkSoft: "#42514b",
+      inkFaint: "#697973",
       brand: "#0f766e",
       brandStrong: "#0b5f58",
-      brandTint: "#d6efeb",
+      brandTint: "#c9e6e1",
       onBrand: "#ffffff",
     },
     dark: {
@@ -97,14 +97,14 @@ const identities: Record<ThemeId, { light: IdentityColors; dark: IdentityColors 
   // brand color in a palette built for this app's own operational contrast.
   ocean: {
     light: {
-      ground: "#eef4fb",
+      ground: "#e0e9f4",
       surface: "#ffffff",
-      surface2: "#f4f9fd",
-      border: "#dde7f2",
-      borderStrong: "#c3d4e8",
-      ink: "#101c2e",
-      inkSoft: "#55677e",
-      inkFaint: "#8a97a8",
+      surface2: "#ecf2f9",
+      border: "#cdd9e8",
+      borderStrong: "#a9bcd4",
+      ink: "#0d1829",
+      inkSoft: "#425468",
+      inkFaint: "#687889",
       brand: "#2563eb",
       brandStrong: "#1d4ed8",
       brandTint: "#dbeafe",
@@ -130,14 +130,14 @@ const identities: Record<ThemeId, { light: IdentityColors; dark: IdentityColors 
   // color would make the two easy to mix up at a glance.
   indigo: {
     light: {
-      ground: "#f3f0fb",
+      ground: "#e7e2f4",
       surface: "#ffffff",
-      surface2: "#f8f6fd",
-      border: "#e3daf5",
-      borderStrong: "#cbb9ec",
-      ink: "#1e1533",
-      inkSoft: "#6a5d85",
-      inkFaint: "#a396bd",
+      surface2: "#f0ecf9",
+      border: "#d6cbee",
+      borderStrong: "#b5a3de",
+      ink: "#1a112e",
+      inkSoft: "#52457a",
+      inkFaint: "#7f729c",
       brand: "#6d28d9",
       brandStrong: "#5b21b6",
       brandTint: "#ede4fc",

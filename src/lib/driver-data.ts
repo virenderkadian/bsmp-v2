@@ -93,6 +93,10 @@ export async function getDriverSheet(
   cityId: string,
   routeId: string,
   dateInput: string,
+  // Only newer app builds ask for the full catalog (they collapse it behind an
+  // "Add product" control). Older builds in drivers' hands render every product
+  // as a row, so they keep getting the original Daily Entry list.
+  options: { includeReconciliationProducts?: boolean } = {},
 ): Promise<DriverSheetResponse | null> {
   const sequenceMonth = toMonthStart(dateInput);
   const entryDate = toDay(dateInput);
@@ -152,7 +156,13 @@ export async function getDriverSheet(
       // counted in reconciliation but missing here can never be entered by the
       // driver, so reconciliation would see it as given but never delivered and
       // report the whole quantity as a cash sale.
-      where: { cityId, isActive: true, OR: [{ showInDailyEntry: true }, { includeInReconciliation: true }] },
+      where: {
+        cityId,
+        isActive: true,
+        ...(options.includeReconciliationProducts
+          ? { OR: [{ showInDailyEntry: true }, { includeInReconciliation: true }] }
+          : { showInDailyEntry: true }),
+      },
       orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
       select: { id: true, code: true, name: true, shortName: true, unit: true, defaultRate: true },
     }),
@@ -596,6 +606,9 @@ export async function updateDriverCustomerMobile(
 export async function getDriverDues(vehicleId: string, cityId: string): Promise<DriverDuesResponse> {
   const sequenceMonth = toMonthStart(new Date().toISOString().slice(0, 10));
 
+  const profile = await prisma.businessProfile.findUnique({ where: { cityId }, select: { businessName: true, upiId: true } });
+  const upi = profile?.upiId ? { upiId: profile.upiId, payeeName: profile.businessName } : null;
+
   const bills = await prisma.monthlyBill.findMany({
     where: {
       route: { vehicleId, cityId, isActive: true },
@@ -614,7 +627,7 @@ export async function getDriverDues(vehicleId: string, cityId: string): Promise<
   });
 
   if (bills.length === 0) {
-    return { routes: [], grandTotalOutstanding: "0.00", customerCount: 0 };
+    return { routes: [], grandTotalOutstanding: "0.00", customerCount: 0, upi };
   }
 
   // This month's delivery-sequence position, so each route's list can read
@@ -704,7 +717,7 @@ export async function getDriverDues(vehicleId: string, cityId: string): Promise<
     })
     .sort((a, b) => a.routeCode.localeCompare(b.routeCode));
 
-  return { routes, grandTotalOutstanding: grandTotal.toFixed(2), customerCount };
+  return { routes, grandTotalOutstanding: grandTotal.toFixed(2), customerCount, upi };
 }
 
 export type GetDriverBillDetailResult =

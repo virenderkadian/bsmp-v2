@@ -11,7 +11,7 @@
 export const USUAL_WINDOW_DAYS = 14;
 export const USUAL_MIN_DELIVERIES = 2;
 // Beyond this, a past delivery is too old to be worth suggesting at all.
-export const OCCASIONAL_LOOKBACK_DAYS = 30;
+export const OCCASIONAL_LOOKBACK_DAYS = 7;
 
 export type RecentEntry = { date: string; quantity: number };
 

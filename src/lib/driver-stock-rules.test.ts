@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { expectedStock, expectedStockTotal, nextStockTotals, stockWindow, validDay } from "@/lib/driver-stock-rules";
+import { expectedStock, expectedStockTotal, nextStockTotals, stockAuditWindow, stockWindow, validDay } from "@/lib/driver-stock-rules";
 
 describe("driver stock cycle", () => {
   it("switches to the evening cycle at 4 pm India time", () => {
@@ -29,5 +29,16 @@ describe("driver stock cycle", () => {
 
   it("reports a shortage as negative", () => {
     expect(expectedStock({ given: "10", returned: "0", eveningSold: "6", morningSold: "5", rate: "50" })).toEqual({ qty: -1, amount: -50 });
+  });
+
+  it("bounds the stock-event lookup to a few days around the cycle", () => {
+    const window = stockAuditWindow("2026-11-10");
+    expect(window.gte.toISOString()).toBe("2026-11-07T00:00:00.000Z");
+    expect(window.lt.toISOString()).toBe("2026-11-14T00:00:00.000Z");
+    // The evening before the cycle and the cycle day itself are both inside it.
+    const evening = new Date("2026-11-09T11:00:00Z");
+    const morning = new Date("2026-11-10T03:00:00Z");
+    expect(evening >= window.gte && evening < window.lt).toBe(true);
+    expect(morning >= window.gte && morning < window.lt).toBe(true);
   });
 });

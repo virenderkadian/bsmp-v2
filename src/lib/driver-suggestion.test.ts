@@ -29,7 +29,9 @@ describe("classifyRecentOrder", () => {
     expect(classifyRecentOrder([{ date: "2027-01-12", quantity: 1 }, { date: "2027-01-05", quantity: 1 }], sheet)).toEqual({ usualQty: 1 });
   });
 
-  it("suggests nothing for a delivery older than 30 days", () => {
+  it("suggests a one-off delivery up to 7 days old, and nothing older", () => {
+    expect(classifyRecentOrder([{ date: "2027-01-08", quantity: 1 }], sheet).occasional?.daysAgo).toBe(7);
+    expect(classifyRecentOrder([{ date: "2027-01-07", quantity: 1 }], sheet)).toEqual({});
     expect(classifyRecentOrder([{ date: "2026-12-01", quantity: 1 }], sheet)).toEqual({});
   });
 

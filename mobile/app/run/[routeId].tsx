@@ -1,15 +1,28 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
-import { ActivityIndicator, Alert, Linking, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  Linking,
+  Modal,
+  Platform,
+  Pressable,
+  ScrollView,
+  Text,
+  TextInput,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import type { DriverSaveLineRequest, DriverSheetCustomer, DriverSheetResponse } from "@shared/driver-api-types";
 import { useActiveRoute } from "@/active-route";
+import { EditPrompt } from "@/components/EditPrompt";
 import { api, ApiError } from "@/api";
 import { getCashSaleEntries, type CashSaleEntry } from "@/cash-sale";
 import { CashSaleModal } from "@/components/CashSaleModal";
 import { StockPanel } from "@/components/StockPanel";
-import { CollectPaymentModal } from "@/components/CollectPaymentModal";
 import { RouteMapModal } from "@/components/RouteMapModal";
 import { SlideToConfirm } from "@/components/SlideToConfirm";
 import { Stepper } from "@/components/Stepper";
@@ -18,25 +31,21 @@ import { openNavigation, resolveLocationForSave } from "@/location";
 import { productShortLabel } from "@/product-label";
 import { summariseRound, summariseRoundCashSales } from "@/round-summary";
 import { enqueueSave, getQueueForRoute } from "@/offline-queue";
-import { enqueuePayment, newPaymentId } from "@/payment-queue";
+import { getPaidToday } from "@/payments-today";
+import { saveUpi } from "@/upi-cache";
 import { useOfflineSync } from "@/offline-sync-context";
 import { isRouteCompleted, markRouteCompleted, reopenRoute } from "@/route-completion";
-import { todayStr } from "@/route-progress";
+import { isEditableCycleDate, todayStr } from "@/route-progress";
 import { isOnline } from "@/sync";
 import { radius } from "@/theme";
 import { Card, Chip, PrimaryButton, ProgressBar, useColors } from "@/ui";
 
-// Tall enough for the worst case — area line plus the unpaid pill — so the
-// card is the same height for every stop regardless of which are present.
-const CUSTOMER_META_SLOT_HEIGHT = 52;
-
-// Navigate + Call, plus the gap. Held constant whether either is shown.
+// The single "more" button; Note, Navigate and Call live in its menu.
 const ACTION_BUTTON_SIZE = 42;
 
 // Two SlideToConfirm controls (54 each) plus the 10 gap between them — the
 // tallest this zone ever gets.
 const ACTION_ZONE_HEIGHT = 118;
-const ACTION_SLOT_WIDTH = ACTION_BUTTON_SIZE * 2 + 8;
 
 // "2026-12" -> "Dec" — the driver only needs to know which month, and the
 // card has no room for more.
@@ -55,7 +64,10 @@ function cycleDateForRoute(date: string, shift: "MORNING" | "EVENING") {
   return day.toISOString().slice(0, 10);
 }
 
-function statusOf(customer: DriverSheetCustomer, isQueued: boolean): { tone: "delivered" | "skipped" | "pending"; label: string } {
+function statusOf(
+  customer: DriverSheetCustomer,
+  isQueued: boolean,
+): { tone: "delivered" | "skipped" | "pending"; label: string } {
   if (!customer.saved) return { tone: "pending", label: "Pending" };
   if (isQueued) return { tone: "pending", label: customer.skipped ? "Skipped · queued" : "Delivered · queued" };
   return customer.skipped ? { tone: "skipped", label: "Skipped" } : { tone: "delivered", label: "Delivered" };
@@ -95,14 +107,27 @@ export default function RunScreen() {
   const insets = useSafeAreaInsets();
   const { routeId, date } = useLocalSearchParams<{ routeId: string; date?: string }>();
   const runDate = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : todayStr();
-  const { refresh: refreshActiveRoute } = useActiveRoute();
+  const { refresh: refreshActiveRoute, routesInfo } = useActiveRoute();
   const { pendingCount, isOnline: online, syncing, syncNow } = useOfflineSync();
 
   const [sheet, setSheet] = useState<DriverSheetResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cursor, setCursor] = useState(0);
   const [draftQty, setDraftQty] = useState<Record<string, number>>({});
+  // Which product rows are showing on the stop card. The card stays short:
+  // only what the customer usually takes (or already has a quantity), with the
+  // rest one tap away under "Add product".
+  const [revealed, setRevealed] = useState<Set<string>>(new Set());
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [remarks, setRemarks] = useState("");
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [footerHeight, setFooterHeight] = useState(0);
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
+  const menuButtonRef = useRef<View>(null);
+  // iOS drops a modal opened while another is still dismissing, so a menu
+  // choice runs once the menu is fully gone (see onDismiss on the menu Modal).
+  const pendingMenuAction = useRef<(() => void) | null>(null);
+  const { width: screenWidth } = useWindowDimensions();
   const [saving, setSaving] = useState(false);
   // What the save is currently waiting on. A delivery can take several seconds
   // — GPS fix, then the network round-trip — and previously nothing on screen
@@ -131,12 +156,17 @@ export default function RunScreen() {
   // (see cash-sale.ts) — never sent to the server, so it has to be read here
   // rather than arriving with the sheet.
   const [cashSales, setCashSales] = useState<CashSaleEntry[]>([]);
-  const [collectOpen, setCollectOpen] = useState(false);
-  const [collecting, setCollecting] = useState(false);
-  // Customers paid on THIS run, so the card can say so — the pill alone would
-  // otherwise still read "unpaid" right after collecting, and a driver would
-  // reasonably ask again on the next visit.
+  // Customers a payment has been recorded for today, so the card can say so —
+  // the pill alone would otherwise still read "unpaid" (the office has not
+  // verified it yet) and a driver would reasonably ask again. Read from storage
+  // rather than held here: collecting now happens on the customer's dues screen,
+  // and the marker has to survive leaving this screen and restarting the app.
   const [paidNow, setPaidNow] = useState<Set<string>>(new Set());
+  useFocusEffect(
+    useCallback(() => {
+      void getPaidToday().then(setPaidNow);
+    }, []),
+  );
   // Drivers are the ones who find a wrong or missing number, so they can fix it
   // where they notice it. Held locally so the card updates without refetching
   // the whole sheet.
@@ -149,6 +179,7 @@ export default function RunScreen() {
     try {
       setError(null);
       const result = await api.sheet(routeId, runDate);
+      void saveUpi(result.upi);
       // A queued save hasn't reached the server, so the fetched sheet shows
       // that stop as untouched — its quantities would fall back to the
       // prefill and it would look undelivered after an app restart. Re-apply
@@ -218,6 +249,16 @@ export default function RunScreen() {
       next[product.productId] = Number(product.deliveredQty) || 0;
     });
     setDraftQty(next);
+    setRevealed(
+      new Set(
+        customer.products
+          .filter((product) => Number(product.deliveredQty) > 0 || Number(product.defaultQty) > 0)
+          .map((product) => product.productId),
+      ),
+    );
+    setPickerOpen(false);
+    setNoteOpen(false);
+    setMenuPos(null);
     setRemarks(customer.remarks ?? "");
     setEditMode(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -276,52 +317,6 @@ export default function RunScreen() {
   const reopen = async () => {
     const firstPending = sheet?.customers.findIndex((entry) => !entry.saved) ?? -1;
     await reopenAt(firstPending >= 0 ? firstPending : 0);
-  };
-
-  const collectPayment = async (amount: number, mode: "CASH" | "UPI") => {
-    if (!customer || !routeId || collecting) return;
-    setCollecting(true);
-    try {
-      const request = {
-        // Generated here, and it becomes the payment's primary key server-side.
-        // That is what makes a retry safe: sending twice is fine, recording
-        // twice is not.
-        paymentId: newPaymentId(),
-        customerId: customer.customerId,
-        amount,
-        mode,
-        paidOn: todayStr(),
-      };
-
-      let queued = false;
-      if (await isOnline()) {
-        try {
-          await api.recordPayment(routeId, request);
-        } catch (err) {
-          if (err instanceof ApiError && err.status !== 0) {
-            throw err;
-          }
-          queued = true;
-        }
-      } else {
-        queued = true;
-      }
-
-      if (queued) {
-        await enqueuePayment(routeId, customer.name, request);
-      }
-
-      setPaidNow((prev) => new Set(prev).add(customer.customerId));
-      setCollectOpen(false);
-      setSnackbar({
-        index: cursor,
-        label: `₹${Math.round(amount)} ${mode === "CASH" ? "cash" : "UPI"}${queued ? " (offline, will sync)" : ""}`,
-      });
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Couldn't record the payment.");
-    } finally {
-      setCollecting(false);
-    }
   };
 
   const saveMobile = async () => {
@@ -399,7 +394,12 @@ export default function RunScreen() {
           const result = await api.saveLine(routeId, customer.customerId, request);
           setSheet((prev) =>
             prev
-              ? { ...prev, customers: prev.customers.map((entry) => (entry.customerId === result.saved.customerId ? result.saved : entry)) }
+              ? {
+                  ...prev,
+                  customers: prev.customers.map((entry) =>
+                    entry.customerId === result.saved.customerId ? result.saved : entry,
+                  ),
+                }
               : prev,
           );
         } catch (err) {
@@ -427,7 +427,9 @@ export default function RunScreen() {
             ? {
                 ...prev,
                 customers: prev.customers.map((entry) =>
-                  entry.customerId === customer.customerId ? buildOptimisticCustomer(entry, skipped, remarks, products) : entry,
+                  entry.customerId === customer.customerId
+                    ? buildOptimisticCustomer(entry, skipped, remarks, products)
+                    : entry,
                 ),
               }
             : prev,
@@ -435,7 +437,10 @@ export default function RunScreen() {
         refreshQueuedIds();
       }
 
-      setSnackbar({ index: cursor, label: `${skipped ? "Skipped" : "Delivered"}${queued ? " (offline, will sync)" : ""}` });
+      setSnackbar({
+        index: cursor,
+        label: `${skipped ? "Skipped" : "Delivered"}${queued ? " (offline, will sync)" : ""}`,
+      });
       setEditMode(false); // freshly saved — lock again even if we don't move (e.g. last stop)
       advance();
       // Progress just changed (and may have just hit 100%) — let the pill and
@@ -451,10 +456,28 @@ export default function RunScreen() {
 
   const header = (
     <>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingTop: 4, paddingBottom: 10 }}>
+      <View
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 12,
+          paddingHorizontal: 16,
+          paddingTop: 4,
+          paddingBottom: 10,
+        }}
+      >
         <Pressable
           onPress={() => router.back()}
-          style={{ width: 36, height: 36, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
+          style={{
+            width: 36,
+            height: 36,
+            borderRadius: 11,
+            borderWidth: 1,
+            borderColor: colors.border,
+            backgroundColor: colors.surface,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
         >
           <Ionicons name="chevron-back" size={20} color={colors.ink} />
         </Pressable>
@@ -478,7 +501,16 @@ export default function RunScreen() {
         {sheet && total > 0 && !completed ? (
           <Pressable
             onPress={() => setCashSaleOpen(true)}
-            style={{ width: 36, height: 36, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 11,
+              borderWidth: 1,
+              borderColor: colors.border,
+              backgroundColor: colors.surface,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
           >
             <Ionicons name="cash-outline" size={20} color={colors.ink} />
           </Pressable>
@@ -486,7 +518,16 @@ export default function RunScreen() {
         {sheet && total > 0 ? (
           <Pressable
             onPress={() => setMapOpen(true)}
-            style={{ width: 36, height: 36, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 11,
+              borderWidth: 1,
+              borderColor: colors.border,
+              backgroundColor: colors.surface,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
           >
             <Ionicons name="map-outline" size={20} color={colors.ink} />
           </Pressable>
@@ -494,7 +535,16 @@ export default function RunScreen() {
         {sheet && total > 0 && !completed ? (
           <Pressable
             onPress={() => setStopsListOpen(true)}
-            style={{ width: 36, height: 36, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 11,
+              borderWidth: 1,
+              borderColor: colors.border,
+              backgroundColor: colors.surface,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
           >
             <Ionicons name="list" size={20} color={colors.ink} />
           </Pressable>
@@ -507,14 +557,18 @@ export default function RunScreen() {
       ) : null}
       {routeQueueCount > 0 ? (
         <View style={{ flexDirection: "row", alignItems: "center", gap: 8, paddingHorizontal: 18, paddingBottom: 10 }}>
-          <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: online ? colors.brand : colors.inkFaint }} />
+          <View
+            style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: online ? colors.brand : colors.inkFaint }}
+          />
           <Text style={{ flex: 1, color: colors.inkSoft, fontSize: 12 }}>
             {online
               ? `${routeQueueCount} stop${routeQueueCount === 1 ? "" : "s"} syncing…`
               : `${routeQueueCount} stop${routeQueueCount === 1 ? "" : "s"} waiting to sync (offline)`}
           </Text>
           <Pressable onPress={() => syncNow()} disabled={syncing || !online} hitSlop={6}>
-            <Text style={{ color: colors.brand, fontSize: 12, fontWeight: "700", opacity: syncing || !online ? 0.4 : 1 }}>
+            <Text
+              style={{ color: colors.brand, fontSize: 12, fontWeight: "700", opacity: syncing || !online ? 0.4 : 1 }}
+            >
               {syncing ? "Syncing…" : "Sync now"}
             </Text>
           </Pressable>
@@ -560,11 +614,23 @@ export default function RunScreen() {
         {header}
         <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 18 + insets.bottom }}>
           <View style={{ alignItems: "center", paddingVertical: 12 }}>
-            <View style={{ width: 60, height: 60, borderRadius: 30, backgroundColor: colors.deliveredTint, alignItems: "center", justifyContent: "center", marginBottom: 12 }}>
+            <View
+              style={{
+                width: 60,
+                height: 60,
+                borderRadius: 30,
+                backgroundColor: colors.deliveredTint,
+                alignItems: "center",
+                justifyContent: "center",
+                marginBottom: 12,
+              }}
+            >
               <Ionicons name="checkmark" size={34} color={colors.delivered} />
             </View>
             <Text style={{ color: colors.ink, fontSize: 22, fontWeight: "800" }}>Round complete</Text>
-            <Text style={{ color: colors.inkSoft, fontSize: 14, marginTop: 2 }}>{sheet.route.code} · {sheet.route.name}</Text>
+            <Text style={{ color: colors.inkSoft, fontSize: 14, marginTop: 2 }}>
+              {sheet.route.code} · {sheet.route.name}
+            </Text>
           </View>
           <Card style={{ marginBottom: 12 }}>
             <Row label="Delivered" value={String(delivered)} color={colors.delivered} colors={colors} />
@@ -584,7 +650,17 @@ export default function RunScreen() {
           </Card>
           {cashSaleTotals.length > 0 ? (
             <>
-              <Text style={{ color: colors.inkFaint, fontSize: 11, fontWeight: "700", letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 8, marginLeft: 4 }}>
+              <Text
+                style={{
+                  color: colors.inkFaint,
+                  fontSize: 11,
+                  fontWeight: "700",
+                  letterSpacing: 1.2,
+                  textTransform: "uppercase",
+                  marginBottom: 8,
+                  marginLeft: 4,
+                }}
+              >
                 Cash sales today
               </Text>
               {/* Deliberately a SEPARATE card from the delivered totals rather
@@ -593,12 +669,7 @@ export default function RunScreen() {
                   delivery figures disagree with what actually gets billed. */}
               <Card style={{ marginBottom: 12 }}>
                 {cashSaleTotals.map((item) => (
-                  <Row
-                    key={item.productId}
-                    label={item.label}
-                    value={`${item.qty} ${item.unit}`}
-                    colors={colors}
-                  />
+                  <Row key={item.productId} label={item.label} value={`${item.qty} ${item.unit}`} colors={colors} />
                 ))}
                 <Row
                   label="Cash collected"
@@ -625,11 +696,20 @@ export default function RunScreen() {
               ))}
             </Card>
           ) : null}
-          <StockPanel compact cycleDate={cycleDateForRoute(sheet.date, sheet.route.shift)} routeShift={sheet.route.shift} />
+          <StockPanel
+            compact
+            cycleDate={cycleDateForRoute(sheet.date, sheet.route.shift)}
+            routeShift={sheet.route.shift}
+          />
           <PrimaryButton label="Back to routes" onPress={() => router.back()} />
           <Pressable
             onPress={() => void reopen()}
-            style={({ pressed }) => ({ marginTop: 12, paddingVertical: 12, alignItems: "center", opacity: pressed ? 0.6 : 1 })}
+            style={({ pressed }) => ({
+              marginTop: 12,
+              paddingVertical: 12,
+              alignItems: "center",
+              opacity: pressed ? 0.6 : 1,
+            })}
           >
             <Text style={{ color: colors.inkSoft, fontSize: 13.5, fontWeight: "700" }}>Reopen route</Text>
           </Pressable>
@@ -663,161 +743,216 @@ export default function RunScreen() {
 
   const status = statusOf(customer, queuedIds.has(customer.customerId));
   // Offered, not pre-filled: only while the driver hasn't already added it.
-  const takenBefore = customer.products.filter((product) => product.occasional && (draftQty[product.productId] ?? 0) === 0);
-  const stopTotal = customer.products.reduce((sum, product) => sum + (draftQty[product.productId] ?? 0) * Number(product.rate), 0);
+  const shownProducts = customer.products.filter(
+    (product) => revealed.has(product.productId) || (draftQty[product.productId] ?? 0) > 0,
+  );
+  const shownIds = new Set(shownProducts.map((product) => product.productId));
+  // Occasional products are offered in the "Taken before" box instead.
+  const hiddenProducts = customer.products.filter((product) => !shownIds.has(product.productId) && !product.occasional);
+  const reveal = (productId: string) => setRevealed((prev) => new Set(prev).add(productId));
+  const takenBefore = customer.products.filter(
+    (product) => product.occasional && (draftQty[product.productId] ?? 0) === 0,
+  );
+  const stopTotal = customer.products.reduce(
+    (sum, product) => sum + (draftQty[product.productId] ?? 0) * Number(product.rate),
+    0,
+  );
   // A saved stop is read-only until explicitly unlocked, so browsing with
   // Prev/Next can't silently overwrite an already-recorded delivery.
-  const canEdit = !customer.saved || editMode;
+  // Only the current cycle can be changed from the phone; a previous cycle is
+  // view-only. (Unknown while the routes list is still loading: treated as
+  // editable rather than locking a driver out for a moment.)
+  const cycleEditable = !routesInfo || isEditableCycleDate(sheet.route.shift, runDate, routesInfo.cycleDate);
+  const canEdit = cycleEditable && (!customer.saved || editMode);
+  // Width the corner buttons take (phone-add appears only when there is no
+  // number), kept clear of the status row and the name.
+  const actionsWidth = customer.mobile ? ACTION_BUTTON_SIZE : ACTION_BUTTON_SIZE * 2 + 8;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: colors.ground }} edges={["top", "left", "right"]}>
       {header}
       <ScrollView
-        contentContainerStyle={{ padding: 18, paddingBottom: 30 + insets.bottom }}
+        contentContainerStyle={{ padding: 18, paddingBottom: 30 }}
         keyboardShouldPersistTaps="handled"
+        // The decimal keypad has no Done key on iOS; dragging the card dismisses it.
+        keyboardDismissMode="on-drag"
       >
         <Card>
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <View style={{ flex: 1, paddingRight: 10 }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <View>
+          {/* Status and unpaid amount on the left, the buttons on the right. The
+              left group wraps rather than cutting the amount short, so when the
+              text is large the pill drops under the status instead. */}
+          <View style={{ flexDirection: "row", alignItems: "flex-start", paddingRight: actionsWidth + 10 }}>
+          <View style={{ flex: 1, flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
                 <Chip label={status.label} tone={status.tone} />
-                {customer.saved && !editMode ? (
-                  <Pressable onPress={() => setEditMode(true)} hitSlop={6}>
-                    <Text style={{ color: colors.brand, fontSize: 12.5, fontWeight: "700" }}>Edit</Text>
-                  </Pressable>
-                ) : null}
-              </View>
-              <Text style={{ color: colors.ink, fontSize: 20, fontWeight: "800", marginTop: 9 }}>
-                {customer.sequenceNo}. {customer.name}
-              </Text>
-              {/* Fixed-height slot. Area and the unpaid pill are both
-                  conditional, and letting the card grow/shrink as you move
-                  between stops shifted the slide controls under the driver's
-                  thumb — the thing they aim at without looking. The space is
-                  reserved whether it's filled or not. */}
-              <View style={{ minHeight: CUSTOMER_META_SLOT_HEIGHT, justifyContent: "flex-start" }}>
-                {customer.area ? (
-                  <Text style={{ color: colors.inkSoft, fontSize: 13.5, marginTop: 2 }}>{customer.area}</Text>
-                ) : null}
+                {/* Unpaid / payment state sits beside the delivery status so the
+                    driver sees it in one glance, and tapping it collects. One
+                    line only (the end truncates, never the amount), so the card
+                    never changes height. */}
                 {paidNow.has(customer.customerId) ? (
                   <View
                     style={{
+                      flexShrink: 1,
                       flexDirection: "row",
                       alignItems: "center",
-                      gap: 6,
-                      alignSelf: "flex-start",
-                      marginTop: 6,
+                      gap: 4,
                       paddingVertical: 4,
                       paddingHorizontal: 9,
                       borderRadius: radius.pill,
                       backgroundColor: colors.deliveredTint,
                     }}
                   >
-                    <Text style={{ color: colors.delivered, fontSize: 12.5, fontWeight: "800" }}>
-                      Payment recorded
+                    <Ionicons name="checkmark" size={13} color={colors.delivered} />
+                    <Text numberOfLines={1} style={{ color: colors.delivered, fontSize: 12.5, fontWeight: "800" }}>
+                      Paid
                     </Text>
                   </View>
                 ) : customer.previousBill ? (
-                  // Tappable: the driver is already looking at the amount when
-                  // they decide to ask for it, so the ask and the action are the
-                  // same target.
                   <Pressable
-                    onPress={() => setCollectOpen(true)}
+                    onPress={() =>
+                      router.push({
+                        pathname: "/dues/customer/[customerId]",
+                        params: {
+                          customerId: customer.customerId,
+                          // Lets the dues screen still offer "Collect payment" when
+                          // it can't load (no signal at the door).
+                          routeId,
+                          name: customer.name,
+                          code: customer.customerCode,
+                          outstanding: customer.previousBill?.outstanding ?? "",
+                        },
+                      })
+                    }
                     style={({ pressed }) => ({
+                      flexShrink: 1,
                       flexDirection: "row",
                       alignItems: "center",
-                      gap: 6,
-                      alignSelf: "flex-start",
-                      marginTop: 6,
+                      gap: 3,
                       paddingVertical: 4,
-                      paddingHorizontal: 9,
+                      paddingLeft: 9,
+                      paddingRight: 6,
                       borderRadius: radius.pill,
                       backgroundColor: colors.skippedTint,
                       opacity: pressed ? 0.7 : 1,
                     })}
                   >
-                    <Text style={{ color: colors.skipped, fontSize: 12.5, fontWeight: "800" }}>
-                      ₹ {Math.round(Number(customer.previousBill.outstanding))} unpaid
+                    <Text
+                      numberOfLines={1}
+                      style={{ flexShrink: 1, color: colors.skipped, fontSize: 12.5, fontWeight: "800" }}
+                    >
+                      ₹ {Math.round(Number(customer.previousBill.outstanding))} unpaid ·{" "}
+                      {formatBillMonth(customer.previousBill.month)}
                     </Text>
-                    <Text style={{ color: colors.skipped, fontSize: 11.5 }}>
-                      {formatBillMonth(customer.previousBill.month)} · Collect <Ionicons name="chevron-forward" size={12} color={colors.skipped} />
-                    </Text>
+                    <Ionicons name="chevron-forward" size={13} color={colors.skipped} />
                   </Pressable>
                 ) : null}
-              </View>
-            </View>
+          </View>
             {/* Both actions are conditional — Navigate needs a saved location,
                 Call needs a number. Reserving both slots keeps the row a fixed
                 size, which matters twice over: the card height stays put, and
                 so does the width left for the customer name, which would
                 otherwise wrap differently between stops. */}
-            <View style={{ flexDirection: "row", gap: 8, width: ACTION_SLOT_WIDTH, justifyContent: "flex-end" }}>
-              {customer.latitude && customer.longitude ? (
+            {/* Note, Navigate and Call used to be three separate buttons here,
+                which cluttered the card. They live in this menu now, with their
+                names, so each one is also easier to understand. */}
+            {/* Pinned to the corner so the buttons (taller than the status chip)
+                do not stretch the row and push the name away from it. */}
+            <View style={{ position: "absolute", top: 0, right: 0, flexDirection: "row", gap: 8, justifyContent: "flex-end" }}>
+              {!customer.mobile ? (
+                // No number on file: the missing number is fixable right where
+                // the driver notices it, not only from the menu.
                 <Pressable
-                  onPress={() => openNavigation(Number(customer.latitude), Number(customer.longitude))}
-                  style={{ width: ACTION_BUTTON_SIZE, height: ACTION_BUTTON_SIZE, borderRadius: 13, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
-                >
-                  <Ionicons name="navigate-outline" size={21} color={colors.brand} />
-                </Pressable>
-              ) : (
-                <View style={{ width: ACTION_BUTTON_SIZE, height: ACTION_BUTTON_SIZE }} />
-              )}
-              {/* Tap calls; long-press edits. When there's no number at all the
-                  same slot becomes an add button, so a missing number is
-                  fixable from where the driver notices it rather than being a
-                  dead space. */}
-              <Pressable
-                onPress={() => {
-                  if (customer.mobile) {
-                    Linking.openURL(`tel:${customer.mobile}`);
-                  } else {
+                  onPress={() => {
                     setMobileDraft("");
                     setMobileEditOpen(true);
-                  }
-                }}
-                onLongPress={() => {
-                  setMobileDraft(customer.mobile ?? "");
-                  setMobileEditOpen(true);
-                }}
-                style={{ width: ACTION_BUTTON_SIZE, height: ACTION_BUTTON_SIZE, borderRadius: 13, borderWidth: 1, borderColor: customer.mobile ? colors.borderStrong : colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
-              >
-                {customer.mobile ? (
-                  <Ionicons name="call-outline" size={21} color={colors.brand} />
-                ) : (
-                  // A bare "+" said nothing about WHAT it adds. Same button
-                  // size, but a phone with a plus badge, so the purpose reads
-                  // at a glance instead of needing a long-press to discover.
-                  <View style={{ alignItems: "center", justifyContent: "center" }}>
-                    <Ionicons name="call-outline" size={21} color={colors.brand} style={{ opacity: 0.55 }} />
-                    <View
-                      style={{
-                        position: "absolute",
-                        right: -7,
-                        bottom: -5,
-                        width: 16,
-                        height: 16,
-                        borderRadius: 8,
-                        backgroundColor: colors.brand,
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      <Text style={{ color: colors.onBrand, fontSize: 12, fontWeight: "900", lineHeight: 14 }}>
-                        +
-                      </Text>
-                    </View>
+                  }}
+                  accessibilityLabel="Add phone number"
+                  style={{
+                    width: ACTION_BUTTON_SIZE,
+                    height: ACTION_BUTTON_SIZE,
+                    borderRadius: 13,
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    backgroundColor: colors.surface,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Ionicons name="call-outline" size={21} color={colors.brand} style={{ opacity: 0.55 }} />
+                  <View
+                    style={{
+                      position: "absolute",
+                      right: 5,
+                      bottom: 5,
+                      width: 16,
+                      height: 16,
+                      borderRadius: 8,
+                      backgroundColor: colors.brand,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Ionicons name="add" size={13} color={colors.onBrand} />
                   </View>
-                )}
+                </Pressable>
+              ) : null}
+              <Pressable
+                ref={menuButtonRef}
+                onPress={() =>
+                  menuButtonRef.current?.measureInWindow((x, y, width, height) =>
+                    setMenuPos({ top: y + height + 6, right: Math.max(12, screenWidth - (x + width)) }),
+                  )
+                }
+                accessibilityLabel="More actions"
+                style={{
+                  width: ACTION_BUTTON_SIZE,
+                  height: ACTION_BUTTON_SIZE,
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <Ionicons name="ellipsis-vertical" size={22} color={colors.ink} />
+                {remarks.trim() ? (
+                  <View
+                    style={{
+                      position: "absolute",
+                      top: 7,
+                      right: 7,
+                      width: 8,
+                      height: 8,
+                      borderRadius: 4,
+                      backgroundColor: colors.brand,
+                    }}
+                  />
+                ) : null}
               </Pressable>
             </View>
           </View>
+          {/* The name now has the full width: it no longer shares its row with
+              the buttons, so long names and large text wrap instead of squeezing. */}
+          <View style={{ marginTop: 6, paddingRight: actionsWidth + 10 }}>
+            <View>
+              <Text style={{ color: colors.ink, fontSize: 20, fontWeight: "800" }}>
+                {customer.name}
+              </Text>
+              {/* No reserved space: a customer with no area gets no empty line. The
+                  slide controls below can therefore sit a line higher for such a
+                  stop — a deliberate trade for a tighter card. */}
+              {customer.area ? (
+                <Text style={{ color: colors.inkSoft, fontSize: 13.5, marginTop: 2 }}>{customer.area}</Text>
+              ) : null}
+            </View>
+          </View>
+          </View>
 
-          <View style={{ height: 1, backgroundColor: colors.border, marginVertical: 14 }} />
+          <View style={{ height: 1, backgroundColor: colors.border, marginVertical: 5 }} />
 
           {customer.products.length === 0 ? (
             <Text style={{ color: colors.inkFaint, fontSize: 13 }}>No deliverables set for this customer.</Text>
+          ) : shownProducts.length === 0 ? (
+            <Text style={{ color: colors.inkFaint, fontSize: 13 }}>No usual order for this customer.</Text>
           ) : (
-            customer.products.map((product, index) => (
+            shownProducts.map((product, index) => (
               <View
                 key={product.productId}
                 style={{
@@ -830,11 +965,15 @@ export default function RunScreen() {
                 }}
               >
                 <View>
-                  <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "700" }}>{productShortLabel(product)}</Text>
-                  <Text style={{ color: colors.inkFaint, fontSize: 12.5 }}>₹ {product.rate} / {product.unit}</Text>
+                  <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "700" }}>
+                    {productShortLabel(product)}
+                  </Text>
                 </View>
                 {canEdit ? (
-                  <Stepper value={draftQty[product.productId] ?? 0} onChange={(next) => setDraftQty((prev) => ({ ...prev, [product.productId]: next }))} />
+                  <Stepper
+                    value={draftQty[product.productId] ?? 0}
+                    onChange={(next) => setDraftQty((prev) => ({ ...prev, [product.productId]: next }))}
+                  />
                 ) : (
                   <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "800" }}>
                     {draftQty[product.productId] ?? 0} {product.unit}
@@ -849,16 +988,53 @@ export default function RunScreen() {
             // deliberately NOT pre-filled — a one-off item used to come back on
             // every visit and had to be zeroed by hand, which silently billed
             // customers for things they never received. One tap adds it.
-            <View style={{ marginTop: 12, padding: 12, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface2 }}>
-              <Text style={{ color: colors.inkFaint, fontSize: 12, fontWeight: "700", marginBottom: 6 }}>Taken before</Text>
+            <View
+              style={{
+                marginTop: 12,
+                padding: 12,
+                borderRadius: radius.md,
+                borderWidth: 1,
+                borderColor: colors.border,
+                backgroundColor: colors.surface2,
+              }}
+            >
+              <Text style={{ color: colors.inkFaint, fontSize: 12, fontWeight: "700", marginBottom: 6 }}>
+                Taken before
+              </Text>
               {takenBefore.map((product) => (
-                <View key={product.productId} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 4 }}>
+                <View
+                  key={product.productId}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    paddingVertical: 4,
+                  }}
+                >
                   <Text style={{ color: colors.ink, fontSize: 14, flex: 1 }}>
-                    {productShortLabel(product)} ×{Number(product.occasional!.quantity)} · {product.occasional!.daysAgo === 0 ? "today" : product.occasional!.daysAgo === 1 ? "yesterday" : `${product.occasional!.daysAgo} days ago`}
+                    {productShortLabel(product)} ×{Number(product.occasional!.quantity)} ·{" "}
+                    {product.occasional!.daysAgo === 0
+                      ? "today"
+                      : product.occasional!.daysAgo === 1
+                        ? "yesterday"
+                        : `${product.occasional!.daysAgo} days ago`}
                   </Text>
                   <Pressable
-                    onPress={() => setDraftQty((prev) => ({ ...prev, [product.productId]: Number(product.occasional!.quantity) }))}
-                    style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 6, paddingHorizontal: 12, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.brand, opacity: pressed ? 0.6 : 1 })}
+                    onPress={() => {
+                      reveal(product.productId);
+                      setDraftQty((prev) => ({ ...prev, [product.productId]: Number(product.occasional!.quantity) }));
+                    }}
+                    style={({ pressed }) => ({
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 4,
+                      paddingVertical: 6,
+                      paddingHorizontal: 12,
+                      borderRadius: radius.pill,
+                      borderWidth: 1,
+                      borderColor: colors.brand,
+                      opacity: pressed ? 0.6 : 1,
+                    })}
                   >
                     <Ionicons name="add" size={16} color={colors.brand} />
                     <Text style={{ color: colors.brand, fontSize: 13, fontWeight: "700" }}>Add</Text>
@@ -868,17 +1044,290 @@ export default function RunScreen() {
             </View>
           ) : null}
 
-          <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 14, paddingTop: 13, borderTopWidth: 1, borderTopColor: colors.borderStrong }}>
+          {canEdit && hiddenProducts.length > 0 ? (
+            <View style={{ marginTop: 12 }}>
+              <Pressable
+                onPress={() => setPickerOpen((open) => !open)}
+                style={({ pressed }) => ({
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 6,
+                  paddingVertical: 8,
+                  opacity: pressed ? 0.6 : 1,
+                })}
+              >
+                <Ionicons name="add-circle-outline" size={20} color={colors.brand} />
+                <Text style={{ flex: 1, color: colors.brand, fontSize: 14, fontWeight: "700" }}>Add product</Text>
+                <Ionicons name={pickerOpen ? "chevron-up" : "chevron-down"} size={18} color={colors.inkFaint} />
+              </Pressable>
+              {pickerOpen ? (
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, paddingTop: 4 }}>
+                  {hiddenProducts.map((product) => (
+                    <Pressable
+                      key={product.productId}
+                      onPress={() => {
+                        reveal(product.productId);
+                        setPickerOpen(false);
+                      }}
+                      style={({ pressed }) => ({
+                        paddingVertical: 8,
+                        paddingHorizontal: 12,
+                        borderRadius: radius.pill,
+                        borderWidth: 1,
+                        borderColor: colors.borderStrong,
+                        backgroundColor: colors.surface2,
+                        opacity: pressed ? 0.6 : 1,
+                      })}
+                    >
+                      <Text style={{ color: colors.ink, fontSize: 13, fontWeight: "600" }}>
+                        {productShortLabel(product)}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginTop: 14,
+              paddingTop: 13,
+              borderTopWidth: 1,
+              borderTopColor: colors.borderStrong,
+            }}
+          >
             <Text style={{ color: colors.inkSoft, fontSize: 13, fontWeight: "600" }}>Stop total</Text>
             <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800" }}>₹ {Math.round(stopTotal)}</Text>
           </View>
         </Card>
 
+        <Modal
+          visible={menuPos !== null}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setMenuPos(null)}
+          onDismiss={() => {
+            const action = pendingMenuAction.current;
+            pendingMenuAction.current = null;
+            action?.();
+          }}
+        >
+          <Pressable style={{ flex: 1 }} onPress={() => setMenuPos(null)}>
+            {menuPos ? (
+              <View
+                style={{
+                  position: "absolute",
+                  top: menuPos.top,
+                  right: menuPos.right,
+                  minWidth: 210,
+                  backgroundColor: colors.surface,
+                  borderRadius: radius.md,
+                  borderWidth: 1,
+                  borderColor: colors.borderStrong,
+                  paddingVertical: 6,
+                  shadowColor: "#000",
+                  shadowOpacity: 0.18,
+                  shadowRadius: 14,
+                  shadowOffset: { width: 0, height: 6 },
+                  elevation: 8,
+                }}
+              >
+                {(
+                  [
+                    {
+                      key: "call",
+                      icon: "call-outline",
+                      label: customer.mobile ? customer.mobile : "Add phone number",
+                      show: true,
+                      onPress: () => {
+                        if (customer.mobile) {
+                          Linking.openURL(`tel:${customer.mobile}`);
+                        } else {
+                          setMobileDraft("");
+                          setMobileEditOpen(true);
+                        }
+                      },
+                    },
+                    {
+                      key: "navigate",
+                      icon: "navigate-outline",
+                      label: "Directions",
+                      show: Boolean(customer.latitude && customer.longitude),
+                      onPress: () => openNavigation(Number(customer.latitude), Number(customer.longitude)),
+                    },
+                    {
+                      key: "edit-phone",
+                      icon: "create-outline",
+                      label: "Edit phone number",
+                      show: Boolean(customer.mobile),
+                      onPress: () => {
+                        setMobileDraft(customer.mobile ?? "");
+                        setMobileEditOpen(true);
+                      },
+                    },
+                    {
+                      key: "note",
+                      icon: remarks.trim() ? "document-text" : "document-text-outline",
+                      label: remarks.trim() ? "Edit note" : "Add note",
+                      show: true,
+                      onPress: () => setNoteOpen(true),
+                    },
+                  ] as const
+                )
+                  .filter((item) => item.show)
+                  .map((item) => (
+                    <Pressable
+                      key={item.key}
+                      onPress={() => {
+                        if (Platform.OS === "ios") {
+                          pendingMenuAction.current = item.onPress;
+                          setMenuPos(null);
+                        } else {
+                          setMenuPos(null);
+                          item.onPress();
+                        }
+                      }}
+                      style={({ pressed }) => ({
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 12,
+                        paddingVertical: 12,
+                        paddingHorizontal: 16,
+                        opacity: pressed ? 0.6 : 1,
+                      })}
+                    >
+                      <Ionicons name={item.icon} size={20} color={colors.brand} />
+                      <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "600" }}>{item.label}</Text>
+                    </Pressable>
+                  ))}
+              </View>
+            ) : null}
+          </Pressable>
+        </Modal>
+
+        <Modal visible={noteOpen} transparent animationType="fade" onRequestClose={() => setNoteOpen(false)}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
+            <Pressable
+              style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: 18 }}
+              onPress={() => setNoteOpen(false)}
+            >
+              <Pressable
+                onPress={() => undefined}
+                style={{
+                  backgroundColor: colors.surface,
+                  borderRadius: radius.lg,
+                  borderWidth: 1,
+                  borderColor: colors.border,
+                  padding: 16,
+                }}
+              >
+                <Text style={{ color: colors.ink, fontSize: 16, fontWeight: "800", marginBottom: 10 }}>Note</Text>
+                <TextInput
+                  value={remarks}
+                  onChangeText={setRemarks}
+                  editable={canEdit}
+                  autoFocus={canEdit}
+                  multiline
+                  placeholder={canEdit ? "Add a note (optional)" : "No note"}
+                  placeholderTextColor={colors.inkFaint}
+                  style={{
+                    minHeight: 90,
+                    textAlignVertical: "top",
+                    backgroundColor: canEdit ? colors.ground : colors.surface2,
+                    borderColor: colors.border,
+                    borderWidth: 1,
+                    borderRadius: radius.md,
+                    paddingHorizontal: 14,
+                    paddingVertical: 12,
+                    color: canEdit ? colors.ink : colors.inkSoft,
+                    fontSize: 14,
+                  }}
+                />
+                <Pressable
+                  onPress={() => setNoteOpen(false)}
+                  style={({ pressed }) => ({
+                    marginTop: 12,
+                    paddingVertical: 12,
+                    borderRadius: radius.md,
+                    backgroundColor: colors.brand,
+                    alignItems: "center",
+                    opacity: pressed ? 0.7 : 1,
+                  })}
+                >
+                  <Text style={{ color: colors.onBrand, fontSize: 14, fontWeight: "800" }}>Done</Text>
+                </Pressable>
+              </Pressable>
+            </Pressable>
+          </KeyboardAvoidingView>
+        </Modal>
+
+        {/* Fixed height. Two 54px slide controls become one small button once
+            the stop is saved, and that ~70px collapse moved the whole lower
+            half of the card — including the controls a driver reaches for
+            without looking. The zone keeps its size either way. */}
+        <View style={{ marginTop: 14, minHeight: ACTION_ZONE_HEIGHT, justifyContent: "center" }}>
+          {canEdit ? (
+            <View style={{ gap: 10 }}>
+              <SlideToConfirm
+                direction="right"
+                tone="delivered"
+                label="Slide to deliver"
+                resetKey={customer.customerId}
+                disabled={saving}
+                onConfirm={() => doSave(false)}
+              />
+              <SlideToConfirm
+                direction="left"
+                tone="skipped"
+                label="Slide to skip"
+                resetKey={customer.customerId}
+                disabled={saving}
+                onConfirm={() => doSave(true)}
+              />
+            </View>
+          ) : !cycleEditable ? (
+            <View style={{ paddingVertical: 14, borderRadius: radius.md, backgroundColor: colors.surface2, borderWidth: 1, borderColor: colors.border, alignItems: "center" }}>
+              <Text style={{ color: colors.inkSoft, fontSize: 13.5, fontWeight: "700", textAlign: "center" }}>
+                Previous cycle · view only
+              </Text>
+            </View>
+          ) : (
+            <EditPrompt
+              summary={`Recorded as ${status.label.toLowerCase()}`}
+              onPress={() => setEditMode(true)}
+              bounceKey={customer.customerId}
+            />
+          )}
+        </View>
+
+        {error ? (
+          <Text style={{ color: colors.danger, fontSize: 13, marginTop: 12, textAlign: "center" }}>{error}</Text>
+        ) : null}
+      </ScrollView>
+
+      {/* Pinned to the bottom of the screen so Previous/Next (and Finish route
+          on the last stop) are always in the same place, under the thumb,
+          however long the stop card is. */}
+      <View
+        onLayout={(event) => setFooterHeight(event.nativeEvent.layout.height)}
+        style={{
+          paddingHorizontal: 18,
+          paddingTop: 10,
+          paddingBottom: Math.max(insets.bottom, 10),
+          borderTopWidth: 1,
+          borderTopColor: colors.border,
+          backgroundColor: colors.ground,
+        }}
+      >
         {/* Explicit navigation — separate from the slide controls, which
             always advance to the next PENDING stop after a save. These move
             freely between adjacent stops (including already-saved ones, to
             review or correct), one at a time. */}
-        <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
+        <View style={{ flexDirection: "row", gap: 10 }}>
           <Pressable
             onPress={() => setCursor((current) => Math.max(0, current - 1))}
             disabled={cursor === 0}
@@ -921,7 +1370,7 @@ export default function RunScreen() {
 
         {/* The only way to end a round. Filled once every stop is marked, so
             the driver can see at a glance that this is the remaining step. */}
-        {isLastStop ? (
+        {isLastStop && cycleEditable ? (
           <Pressable
             onPress={finishRoute}
             style={({ pressed }) => ({
@@ -940,62 +1389,7 @@ export default function RunScreen() {
             </Text>
           </Pressable>
         ) : null}
-
-        {/* Always rendered. Hiding it on a saved stop with no note changed the
-            card height, which moved everything under it. Read-only when the
-            stop is locked, so it still communicates "no note" rather than
-            vanishing. */}
-        <TextInput
-            value={remarks}
-            onChangeText={setRemarks}
-            editable={canEdit}
-            placeholder="Add a note (optional)"
-            placeholderTextColor={colors.inkFaint}
-            style={{
-              marginTop: 12,
-              backgroundColor: canEdit ? colors.surface : colors.surface2,
-              borderColor: colors.border,
-              borderWidth: 1,
-              borderRadius: radius.md,
-              paddingHorizontal: 14,
-              paddingVertical: 12,
-              color: canEdit ? colors.ink : colors.inkSoft,
-              fontSize: 14,
-            }}
-          />
-
-        {/* Fixed height. Two 54px slide controls become one small button once
-            the stop is saved, and that ~70px collapse moved the whole lower
-            half of the card — including the controls a driver reaches for
-            without looking. The zone keeps its size either way. */}
-        <View style={{ marginTop: 14, minHeight: ACTION_ZONE_HEIGHT, justifyContent: "center" }}>
-          {canEdit ? (
-            <View key={customer.customerId} style={{ gap: 10 }}>
-              <SlideToConfirm direction="right" tone="delivered" label="Slide to deliver" disabled={saving} onConfirm={() => doSave(false)} />
-              <SlideToConfirm direction="left" tone="skipped" label="Slide to skip" disabled={saving} onConfirm={() => doSave(true)} />
-            </View>
-          ) : (
-            <Pressable
-              onPress={() => setEditMode(true)}
-              style={({ pressed }) => ({
-                paddingVertical: 14,
-                borderRadius: radius.md,
-                backgroundColor: colors.surface2,
-                borderWidth: 1,
-                borderColor: colors.border,
-                alignItems: "center",
-                opacity: pressed ? 0.7 : 1,
-              })}
-            >
-              <Text style={{ color: colors.inkSoft, fontSize: 13.5, fontWeight: "700" }}>
-                Recorded as {status.label.toLowerCase()} · tap to edit
-              </Text>
-            </Pressable>
-          )}
-        </View>
-
-        {error ? <Text style={{ color: colors.danger, fontSize: 13, marginTop: 12, textAlign: "center" }}>{error}</Text> : null}
-      </ScrollView>
+      </View>
 
       {/* A delivery can take several seconds — GPS fix, then the network
           round-trip. Without this the controls simply stop responding and the
@@ -1006,7 +1400,7 @@ export default function RunScreen() {
             position: "absolute",
             left: 18,
             right: 18,
-            bottom: 24 + insets.bottom,
+            bottom: footerHeight + 12,
             flexDirection: "row",
             alignItems: "center",
             gap: 12,
@@ -1024,8 +1418,23 @@ export default function RunScreen() {
       ) : null}
 
       {snackbar ? (
-        <View style={{ position: "absolute", left: 18, right: 18, bottom: 24 + insets.bottom, flexDirection: "row", alignItems: "center", backgroundColor: colors.ink, borderRadius: radius.md, paddingVertical: 13, paddingHorizontal: 16 }}>
-          <Text style={{ flex: 1, color: colors.ground, fontSize: 14, fontWeight: "600" }}>{snackbar.label} · stop {snackbar.index + 1}</Text>
+        <View
+          style={{
+            position: "absolute",
+            left: 18,
+            right: 18,
+            bottom: footerHeight + 12,
+            flexDirection: "row",
+            alignItems: "center",
+            backgroundColor: colors.ink,
+            borderRadius: radius.md,
+            paddingVertical: 13,
+            paddingHorizontal: 16,
+          }}
+        >
+          <Text style={{ flex: 1, color: colors.ground, fontSize: 14, fontWeight: "600" }}>
+            {snackbar.label} · stop {snackbar.index + 1}
+          </Text>
           <Pressable
             onPress={() => {
               setCursor(snackbar.index);
@@ -1114,14 +1523,6 @@ export default function RunScreen() {
         </View>
       </Modal>
 
-      <CollectPaymentModal
-        visible={collectOpen}
-        onClose={() => setCollectOpen(false)}
-        customer={customer}
-        upi={sheet.upi}
-        saving={collecting}
-        onCollect={(amount, mode) => void collectPayment(amount, mode)}
-      />
 
       <RouteMapModal
         visible={mapOpen}
@@ -1152,7 +1553,16 @@ function Row({
   last?: boolean;
 }) {
   return (
-    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingVertical: 12, borderBottomWidth: last ? 0 : 1, borderBottomColor: colors.border }}>
+    <View
+      style={{
+        flexDirection: "row",
+        justifyContent: "space-between",
+        alignItems: "center",
+        paddingVertical: 12,
+        borderBottomWidth: last ? 0 : 1,
+        borderBottomColor: colors.border,
+      }}
+    >
       <Text style={{ color: colors.inkSoft, fontSize: 14 }}>{label}</Text>
       <Text style={{ color: color ?? colors.ink, fontSize: 15, fontWeight: "800" }}>{value}</Text>
     </View>

@@ -1,14 +1,12 @@
 import { useMemo, useState } from "react";
-import { Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import QRCode from "react-native-qrcode-svg";
-import { SafeAreaView } from "react-native-safe-area-context";
-import type { DriverSheetCustomer } from "@shared/driver-api-types";
+import { SafeModal } from "@/components/SafeModal";
 import { radius } from "@/theme";
 import { Card, PrimaryButton, useColors } from "@/ui";
 
-// Collecting at the door. Opened from the customer card, never shown inline —
-// the card has to stay readable one-handed, and this only appears when the
-// driver has actually decided to ask for money.
+// Collecting at the door: amount, scan code, and how it was paid. Opened from a
+// customer's dues screen, where the unpaid bills are already on show above it.
 export function CollectPaymentModal({
   visible,
   onClose,
@@ -19,13 +17,13 @@ export function CollectPaymentModal({
 }: {
   visible: boolean;
   onClose: () => void;
-  customer: DriverSheetCustomer;
+  customer: { name: string; customerCode: string; outstanding: number };
   upi: { upiId: string; payeeName: string } | null;
   saving: boolean;
   onCollect: (amount: number, mode: "CASH" | "UPI") => void;
 }) {
   const colors = useColors();
-  const suggested = customer.previousBill ? Number(customer.previousBill.outstanding) : 0;
+  const suggested = customer.outstanding;
   // Editable, because part payments happen — a customer hands over what they
   // have rather than the exact billed figure.
   const [amount, setAmount] = useState(suggested > 0 ? String(suggested) : "");
@@ -52,8 +50,7 @@ export function CollectPaymentModal({
   }, [upi, parsedAmount, customer.customerCode]);
 
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.ground }}>
+    <SafeModal visible={visible} onClose={onClose}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12 }}>
           <View style={{ flex: 1 }}>
             <Text style={{ color: colors.ink, fontSize: 18, fontWeight: "800" }}>Collect payment</Text>
@@ -63,6 +60,7 @@ export function CollectPaymentModal({
           </View>
           <Pressable
             onPress={onClose}
+            hitSlop={10}
             style={{ width: 34, height: 34, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
           >
             <Text style={{ color: colors.ink, fontSize: 16 }}>✕</Text>
@@ -70,17 +68,6 @@ export function CollectPaymentModal({
         </View>
 
         <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 28 }} keyboardShouldPersistTaps="handled">
-          {customer.previousBill ? (
-            <Card style={{ marginBottom: 12 }}>
-              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                <Text style={{ color: colors.inkSoft, fontSize: 13 }}>Unpaid bill</Text>
-                <Text style={{ color: colors.skipped, fontSize: 16, fontWeight: "800" }}>
-                  ₹ {Number(customer.previousBill.outstanding).toFixed(2)}
-                </Text>
-              </View>
-            </Card>
-          ) : null}
-
           <Text style={{ color: colors.inkFaint, fontSize: 11, fontWeight: "700", letterSpacing: 1.2, textTransform: "uppercase", marginBottom: 8, marginLeft: 4 }}>
             Amount received
           </Text>
@@ -156,7 +143,6 @@ export function CollectPaymentModal({
             against the customer&apos;s balance.
           </Text>
         </ScrollView>
-      </SafeAreaView>
-    </Modal>
+    </SafeModal>
   );
 }

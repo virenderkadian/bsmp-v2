@@ -257,6 +257,9 @@ export type DriverDuesResponse = {
   routes: DriverDuesRoute[];
   grandTotalOutstanding: string;
   customerCount: number;
+  // The city's UPI payee, so a payment can be collected from the dues screens
+  // with the same scan code the delivery card used. Absent on older servers.
+  upi?: { upiId: string; payeeName: string } | null;
 };
 
 // ---- Bill detail (read-only view of one MonthlyBill) ----
@@ -290,3 +293,14 @@ export type DriverBillDetailResponse = {
 export type DriverErrorResponse = {
   error: string;
 };
+
+// ---- Admin sign-in (the same app, signed in as a web admin) ----
+
+export type AdminUser = { id: string; name: string; role: "SUPERADMIN" | "ADMIN" | "USER" };
+
+export type AdminLoginResponse = { token: string; user: AdminUser };
+
+// A vehicle an admin may act on, with the city it belongs to.
+export type AdminVehicle = { id: string; code: string; name: string; cityId: string; cityName: string };
+
+export type AdminVehiclesResponse = { vehicles: AdminVehicle[] };

@@ -25,7 +25,9 @@ export default function TabsLayout() {
   }
 
   return (
-    <NativeTabs>
+    // tintColor: the selected tab otherwise falls back to iOS system blue, which
+    // clashes with the theme (clearly so in light mode).
+    <NativeTabs tintColor={colors.brand}>
       <NativeTabs.Trigger name="index">
         <Label>Dashboard</Label>
         <Icon sf="chart.bar.fill" drawable="ic_menu_today" />

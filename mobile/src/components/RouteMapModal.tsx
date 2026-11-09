@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Modal, Pressable, Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import MapView, { Marker, type Region } from "react-native-maps";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeModal } from "@/components/SafeModal";
 import type { DriverSheetCustomer } from "@shared/driver-api-types";
 import { ensureForegroundLocationPermission } from "@/location";
 import { useColors } from "@/ui";
@@ -78,8 +78,7 @@ export function RouteMapModal({
   };
 
   return (
-    <Modal visible={visible} animationType="slide" onRequestClose={onClose}>
-      <SafeAreaView style={{ flex: 1, backgroundColor: colors.ground }} edges={["top", "left", "right"]}>
+    <SafeModal visible={visible} onClose={onClose} edges={["top", "left", "right"]}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingHorizontal: 16, paddingTop: 8, paddingBottom: 12 }}>
           <View style={{ flex: 1 }}>
             <Text style={{ color: colors.ink, fontSize: 18, fontWeight: "800" }}>Route map</Text>
@@ -91,6 +90,7 @@ export function RouteMapModal({
           </View>
           <Pressable
             onPress={onClose}
+            hitSlop={10}
             style={{ width: 34, height: 34, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
           >
             <Text style={{ color: colors.ink, fontSize: 16 }}>✕</Text>
@@ -152,8 +152,7 @@ export function RouteMapModal({
             Tap a pin to see who it is, then tap the label to open that stop.
           </Text>
         </View>
-      </SafeAreaView>
-    </Modal>
+    </SafeModal>
   );
 }
 
