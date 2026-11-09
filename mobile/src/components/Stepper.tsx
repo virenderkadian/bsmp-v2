@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { radius } from "@/theme";
 import { useColors } from "@/ui";
@@ -19,7 +20,7 @@ export function Stepper({
 }) {
   const colors = useColors();
   const round = (n: number) => Math.round(n * 1000) / 1000;
-  const btn = (label: string, onPress: () => void) => (
+  const btn = (icon: "add" | "remove", onPress: () => void) => (
     <Pressable
       onPress={onPress}
       style={({ pressed }) => ({
@@ -31,7 +32,7 @@ export function Stepper({
         opacity: pressed ? 0.6 : 1,
       })}
     >
-      <Text style={{ color: colors.brand, fontSize: 20, fontWeight: "800", marginTop: -2 }}>{label}</Text>
+      <Ionicons name={icon} size={22} color={colors.brand} />
     </Pressable>
   );
 
@@ -47,7 +48,7 @@ export function Stepper({
         backgroundColor: colors.surface,
       }}
     >
-      {btn("−", () => onChange(round(Math.max(min, value - step))))}
+      {btn("remove", () => onChange(round(Math.max(min, value - step))))}
       <Text
         style={{
           width: 50,
@@ -60,7 +61,7 @@ export function Stepper({
       >
         {fmt(value)}
       </Text>
-      {btn("+", () => onChange(round(value + step)))}
+      {btn("add", () => onChange(round(value + step)))}
     </View>
   );
 }

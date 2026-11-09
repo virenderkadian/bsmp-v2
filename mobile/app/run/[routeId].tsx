@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Alert, Linking, Modal, Pressable, ScrollView, Text, TextInput, View } from "react-native";
@@ -455,7 +456,7 @@ export default function RunScreen() {
           onPress={() => router.back()}
           style={{ width: 36, height: 36, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
         >
-          <Text style={{ color: colors.ink, fontSize: 20, marginTop: -2 }}>‹</Text>
+          <Ionicons name="chevron-back" size={20} color={colors.ink} />
         </Pressable>
         <View style={{ flex: 1 }}>
           <Text style={{ color: colors.ink, fontSize: 16, fontWeight: "800" }} numberOfLines={1}>
@@ -479,7 +480,7 @@ export default function RunScreen() {
             onPress={() => setCashSaleOpen(true)}
             style={{ width: 36, height: 36, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
           >
-            <Text style={{ fontSize: 16 }}>💵</Text>
+            <Ionicons name="cash-outline" size={20} color={colors.ink} />
           </Pressable>
         ) : null}
         {sheet && total > 0 ? (
@@ -487,7 +488,7 @@ export default function RunScreen() {
             onPress={() => setMapOpen(true)}
             style={{ width: 36, height: 36, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
           >
-            <Text style={{ fontSize: 16 }}>🗺️</Text>
+            <Ionicons name="map-outline" size={20} color={colors.ink} />
           </Pressable>
         ) : null}
         {sheet && total > 0 && !completed ? (
@@ -495,7 +496,7 @@ export default function RunScreen() {
             onPress={() => setStopsListOpen(true)}
             style={{ width: 36, height: 36, borderRadius: 11, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
           >
-            <Text style={{ color: colors.ink, fontSize: 16 }}>☰</Text>
+            <Ionicons name="list" size={20} color={colors.ink} />
           </Pressable>
         ) : null}
       </View>
@@ -560,7 +561,7 @@ export default function RunScreen() {
         <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 18 + insets.bottom }}>
           <View style={{ alignItems: "center", paddingVertical: 12 }}>
             <View style={{ width: 60, height: 60, borderRadius: 30, backgroundColor: colors.deliveredTint, alignItems: "center", justifyContent: "center", marginBottom: 12 }}>
-              <Text style={{ color: colors.delivered, fontSize: 30, fontWeight: "800" }}>✓</Text>
+              <Ionicons name="checkmark" size={34} color={colors.delivered} />
             </View>
             <Text style={{ color: colors.ink, fontSize: 22, fontWeight: "800" }}>Round complete</Text>
             <Text style={{ color: colors.inkSoft, fontSize: 14, marginTop: 2 }}>{sheet.route.code} · {sheet.route.name}</Text>
@@ -661,6 +662,8 @@ export default function RunScreen() {
   }
 
   const status = statusOf(customer, queuedIds.has(customer.customerId));
+  // Offered, not pre-filled: only while the driver hasn't already added it.
+  const takenBefore = customer.products.filter((product) => product.occasional && (draftQty[product.productId] ?? 0) === 0);
   const stopTotal = customer.products.reduce((sum, product) => sum + (draftQty[product.productId] ?? 0) * Number(product.rate), 0);
   // A saved stop is read-only until explicitly unlocked, so browsing with
   // Prev/Next can't silently overwrite an already-recorded delivery.
@@ -737,7 +740,7 @@ export default function RunScreen() {
                       ₹ {Math.round(Number(customer.previousBill.outstanding))} unpaid
                     </Text>
                     <Text style={{ color: colors.skipped, fontSize: 11.5 }}>
-                      {formatBillMonth(customer.previousBill.month)} · Collect ›
+                      {formatBillMonth(customer.previousBill.month)} · Collect <Ionicons name="chevron-forward" size={12} color={colors.skipped} />
                     </Text>
                   </Pressable>
                 ) : null}
@@ -754,7 +757,7 @@ export default function RunScreen() {
                   onPress={() => openNavigation(Number(customer.latitude), Number(customer.longitude))}
                   style={{ width: ACTION_BUTTON_SIZE, height: ACTION_BUTTON_SIZE, borderRadius: 13, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
                 >
-                  <Text style={{ fontSize: 18 }}>🧭</Text>
+                  <Ionicons name="navigate-outline" size={21} color={colors.brand} />
                 </Pressable>
               ) : (
                 <View style={{ width: ACTION_BUTTON_SIZE, height: ACTION_BUTTON_SIZE }} />
@@ -779,13 +782,13 @@ export default function RunScreen() {
                 style={{ width: ACTION_BUTTON_SIZE, height: ACTION_BUTTON_SIZE, borderRadius: 13, borderWidth: 1, borderColor: customer.mobile ? colors.borderStrong : colors.border, backgroundColor: colors.surface, alignItems: "center", justifyContent: "center" }}
               >
                 {customer.mobile ? (
-                  <Text style={{ color: colors.brand, fontSize: 18 }}>📞</Text>
+                  <Ionicons name="call-outline" size={21} color={colors.brand} />
                 ) : (
                   // A bare "+" said nothing about WHAT it adds. Same button
                   // size, but a phone with a plus badge, so the purpose reads
                   // at a glance instead of needing a long-press to discover.
                   <View style={{ alignItems: "center", justifyContent: "center" }}>
-                    <Text style={{ fontSize: 18, opacity: 0.55 }}>📞</Text>
+                    <Ionicons name="call-outline" size={21} color={colors.brand} style={{ opacity: 0.55 }} />
                     <View
                       style={{
                         position: "absolute",
@@ -841,6 +844,30 @@ export default function RunScreen() {
             ))
           )}
 
+          {canEdit && takenBefore.length > 0 ? (
+            // Products this customer took recently but not regularly. They are
+            // deliberately NOT pre-filled — a one-off item used to come back on
+            // every visit and had to be zeroed by hand, which silently billed
+            // customers for things they never received. One tap adds it.
+            <View style={{ marginTop: 12, padding: 12, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface2 }}>
+              <Text style={{ color: colors.inkFaint, fontSize: 12, fontWeight: "700", marginBottom: 6 }}>Taken before</Text>
+              {takenBefore.map((product) => (
+                <View key={product.productId} style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 4 }}>
+                  <Text style={{ color: colors.ink, fontSize: 14, flex: 1 }}>
+                    {productShortLabel(product)} ×{Number(product.occasional!.quantity)} · {product.occasional!.daysAgo === 0 ? "today" : product.occasional!.daysAgo === 1 ? "yesterday" : `${product.occasional!.daysAgo} days ago`}
+                  </Text>
+                  <Pressable
+                    onPress={() => setDraftQty((prev) => ({ ...prev, [product.productId]: Number(product.occasional!.quantity) }))}
+                    style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 6, paddingHorizontal: 12, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.brand, opacity: pressed ? 0.6 : 1 })}
+                  >
+                    <Ionicons name="add" size={16} color={colors.brand} />
+                    <Text style={{ color: colors.brand, fontSize: 13, fontWeight: "700" }}>Add</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
           <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginTop: 14, paddingTop: 13, borderTopWidth: 1, borderTopColor: colors.borderStrong }}>
             <Text style={{ color: colors.inkSoft, fontSize: 13, fontWeight: "600" }}>Stop total</Text>
             <Text style={{ color: colors.ink, fontSize: 17, fontWeight: "800" }}>₹ {Math.round(stopTotal)}</Text>
@@ -866,7 +893,10 @@ export default function RunScreen() {
               opacity: cursor === 0 ? 0.4 : pressed ? 0.7 : 1,
             })}
           >
-            <Text style={{ color: colors.ink, fontSize: 14, fontWeight: "700" }}>‹ Previous</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+              <Ionicons name="chevron-back" size={16} color={colors.ink} />
+              <Text style={{ color: colors.ink, fontSize: 14, fontWeight: "700" }}>Previous</Text>
+            </View>
           </Pressable>
           <Pressable
             onPress={() => setCursor((current) => Math.min(total - 1, current + 1))}
@@ -882,7 +912,10 @@ export default function RunScreen() {
               opacity: cursor >= total - 1 ? 0.4 : pressed ? 0.7 : 1,
             })}
           >
-            <Text style={{ color: colors.ink, fontSize: 14, fontWeight: "700" }}>Next ›</Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+              <Text style={{ color: colors.ink, fontSize: 14, fontWeight: "700" }}>Next</Text>
+              <Ionicons name="chevron-forward" size={16} color={colors.ink} />
+            </View>
           </Pressable>
         </View>
 

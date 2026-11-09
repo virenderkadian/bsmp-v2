@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import { useState } from "react";
 import { StyleSheet, Text, View, type LayoutChangeEvent } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -65,7 +66,7 @@ export function SlideToConfirm({ direction, label, tone, onConfirm, disabled }: 
     opacity: maxTravel.value > 0 ? 1 - x.value / maxTravel.value : 1,
   }));
 
-  const arrow = direction === "right" ? "›" : "‹";
+  const arrowIcon = direction === "right" ? "chevron-forward" : "chevron-back";
 
   return (
     <View
@@ -97,9 +98,7 @@ export function SlideToConfirm({ direction, label, tone, onConfirm, disabled }: 
         ]}
       />
       <Animated.Text style={[{ textAlign: "center", color: fg, fontSize: 14, fontWeight: "700" }, labelStyle]}>
-        {direction === "left" ? `${arrow} ` : ""}
         {label}
-        {direction === "right" ? ` ${arrow}` : ""}
       </Animated.Text>
       {trackWidth > 0 ? (
         <GestureDetector gesture={gesture}>
@@ -120,7 +119,7 @@ export function SlideToConfirm({ direction, label, tone, onConfirm, disabled }: 
               knobStyle,
             ]}
           >
-            <Text style={{ color: fg, fontSize: 22, fontWeight: "800", marginTop: -2 }}>{arrow}</Text>
+            <Ionicons name={arrowIcon} size={26} color={fg} />
           </Animated.View>
         </GestureDetector>
       ) : null}
