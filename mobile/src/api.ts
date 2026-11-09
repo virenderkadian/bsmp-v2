@@ -105,7 +105,7 @@ export const api = {
   stock: (cycleDate?: string) => request<DriverStockResponse>(`/api/driver/stock${cycleDate ? `?cycleDate=${encodeURIComponent(cycleDate)}` : ""}`),
   saveStock: (body: DriverStockRequest) => request<DriverStockResponse>("/api/driver/stock", { method: "POST", body: JSON.stringify(body) }),
   sheet: (routeId: string, date: string) =>
-    request<DriverSheetResponse>(`/api/driver/routes/${routeId}/sheet?date=${encodeURIComponent(date)}`),
+    request<DriverSheetResponse>(`/api/driver/routes/${routeId}/sheet?date=${encodeURIComponent(date)}&catalog=full`),
   saveLine: (routeId: string, customerId: string, body: DriverSaveLineRequest) =>
     request<DriverSaveLineResponse>(`/api/driver/routes/${routeId}/lines/${customerId}`, {
       method: "POST",

@@ -93,6 +93,10 @@ export async function getDriverSheet(
   cityId: string,
   routeId: string,
   dateInput: string,
+  // Only newer app builds ask for the full catalog (they collapse it behind an
+  // "Add product" control). Older builds in drivers' hands render every product
+  // as a row, so they keep getting the original Daily Entry list.
+  options: { includeReconciliationProducts?: boolean } = {},
 ): Promise<DriverSheetResponse | null> {
   const sequenceMonth = toMonthStart(dateInput);
   const entryDate = toDay(dateInput);
@@ -152,7 +156,13 @@ export async function getDriverSheet(
       // counted in reconciliation but missing here can never be entered by the
       // driver, so reconciliation would see it as given but never delivered and
       // report the whole quantity as a cash sale.
-      where: { cityId, isActive: true, OR: [{ showInDailyEntry: true }, { includeInReconciliation: true }] },
+      where: {
+        cityId,
+        isActive: true,
+        ...(options.includeReconciliationProducts
+          ? { OR: [{ showInDailyEntry: true }, { includeInReconciliation: true }] }
+          : { showInDailyEntry: true }),
+      },
       orderBy: [{ displayOrder: "asc" }, { code: "asc" }],
       select: { id: true, code: true, name: true, shortName: true, unit: true, defaultRate: true },
     }),

@@ -416,10 +416,13 @@ describe("driver sheet product catalog (dev DB)", () => {
       data: { cityId, code: `DQN-${suffix}`, name: "Neither", unit: "KG", defaultRate: 60, isActive: true, showInDailyEntry: false, includeInReconciliation: false },
     });
     try {
-      const sheet = await getDriverSheet(vehicleId, cityId, routeId, "2027-01-16");
-      const ids = sheet!.customers.find((c) => c.customerId === customerId)!.products.map((p) => p.productId);
-      expect(ids).toContain(hidden.id);
-      expect(ids).not.toContain(plain.id);
+      const idsOf = (sheet: Awaited<ReturnType<typeof getDriverSheet>>) =>
+        sheet!.customers.find((c) => c.customerId === customerId)!.products.map((p) => p.productId);
+      const full = idsOf(await getDriverSheet(vehicleId, cityId, routeId, "2027-01-16", { includeReconciliationProducts: true }));
+      expect(full).toContain(hidden.id);
+      expect(full).not.toContain(plain.id);
+      // Older app builds don't ask for it and keep the original list.
+      expect(idsOf(await getDriverSheet(vehicleId, cityId, routeId, "2027-01-16"))).not.toContain(hidden.id);
     } finally {
       await rawPrisma.product.deleteMany({ where: { id: { in: [hidden.id, plain.id] } } });
     }

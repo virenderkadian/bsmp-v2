@@ -102,6 +102,11 @@ export default function RunScreen() {
   const [error, setError] = useState<string | null>(null);
   const [cursor, setCursor] = useState(0);
   const [draftQty, setDraftQty] = useState<Record<string, number>>({});
+  // Which product rows are showing on the stop card. The card stays short:
+  // only what the customer usually takes (or already has a quantity), with the
+  // rest one tap away under "Add product".
+  const [revealed, setRevealed] = useState<Set<string>>(new Set());
+  const [pickerOpen, setPickerOpen] = useState(false);
   const [remarks, setRemarks] = useState("");
   const [saving, setSaving] = useState(false);
   // What the save is currently waiting on. A delivery can take several seconds
@@ -218,6 +223,8 @@ export default function RunScreen() {
       next[product.productId] = Number(product.deliveredQty) || 0;
     });
     setDraftQty(next);
+    setRevealed(new Set(customer.products.filter((product) => Number(product.deliveredQty) > 0 || Number(product.defaultQty) > 0).map((product) => product.productId)));
+    setPickerOpen(false);
     setRemarks(customer.remarks ?? "");
     setEditMode(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -663,6 +670,11 @@ export default function RunScreen() {
 
   const status = statusOf(customer, queuedIds.has(customer.customerId));
   // Offered, not pre-filled: only while the driver hasn't already added it.
+  const shownProducts = customer.products.filter((product) => revealed.has(product.productId) || (draftQty[product.productId] ?? 0) > 0);
+  const shownIds = new Set(shownProducts.map((product) => product.productId));
+  // Occasional products are offered in the "Taken before" box instead.
+  const hiddenProducts = customer.products.filter((product) => !shownIds.has(product.productId) && !product.occasional);
+  const reveal = (productId: string) => setRevealed((prev) => new Set(prev).add(productId));
   const takenBefore = customer.products.filter((product) => product.occasional && (draftQty[product.productId] ?? 0) === 0);
   const stopTotal = customer.products.reduce((sum, product) => sum + (draftQty[product.productId] ?? 0) * Number(product.rate), 0);
   // A saved stop is read-only until explicitly unlocked, so browsing with
@@ -816,8 +828,10 @@ export default function RunScreen() {
 
           {customer.products.length === 0 ? (
             <Text style={{ color: colors.inkFaint, fontSize: 13 }}>No deliverables set for this customer.</Text>
+          ) : shownProducts.length === 0 ? (
+            <Text style={{ color: colors.inkFaint, fontSize: 13 }}>No usual order for this customer.</Text>
           ) : (
-            customer.products.map((product, index) => (
+            shownProducts.map((product, index) => (
               <View
                 key={product.productId}
                 style={{
@@ -857,7 +871,10 @@ export default function RunScreen() {
                     {productShortLabel(product)} ×{Number(product.occasional!.quantity)} · {product.occasional!.daysAgo === 0 ? "today" : product.occasional!.daysAgo === 1 ? "yesterday" : `${product.occasional!.daysAgo} days ago`}
                   </Text>
                   <Pressable
-                    onPress={() => setDraftQty((prev) => ({ ...prev, [product.productId]: Number(product.occasional!.quantity) }))}
+                    onPress={() => {
+                      reveal(product.productId);
+                      setDraftQty((prev) => ({ ...prev, [product.productId]: Number(product.occasional!.quantity) }));
+                    }}
                     style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: 4, paddingVertical: 6, paddingHorizontal: 12, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.brand, opacity: pressed ? 0.6 : 1 })}
                   >
                     <Ionicons name="add" size={16} color={colors.brand} />
@@ -865,6 +882,32 @@ export default function RunScreen() {
                   </Pressable>
                 </View>
               ))}
+            </View>
+          ) : null}
+
+          {canEdit && hiddenProducts.length > 0 ? (
+            <View style={{ marginTop: 12 }}>
+              <Pressable
+                onPress={() => setPickerOpen((open) => !open)}
+                style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 8, opacity: pressed ? 0.6 : 1 })}
+              >
+                <Ionicons name="add-circle-outline" size={20} color={colors.brand} />
+                <Text style={{ flex: 1, color: colors.brand, fontSize: 14, fontWeight: "700" }}>Add product</Text>
+                <Ionicons name={pickerOpen ? "chevron-up" : "chevron-down"} size={18} color={colors.inkFaint} />
+              </Pressable>
+              {pickerOpen ? (
+                <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, paddingTop: 4 }}>
+                  {hiddenProducts.map((product) => (
+                    <Pressable
+                      key={product.productId}
+                      onPress={() => { reveal(product.productId); setPickerOpen(false); }}
+                      style={({ pressed }) => ({ paddingVertical: 8, paddingHorizontal: 12, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.borderStrong, backgroundColor: colors.surface2, opacity: pressed ? 0.6 : 1 })}
+                    >
+                      <Text style={{ color: colors.ink, fontSize: 13, fontWeight: "600" }}>{productShortLabel(product)}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
             </View>
           ) : null}
 
