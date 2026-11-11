@@ -3,7 +3,7 @@ import { AppState } from "react-native";
 import { api } from "@/api";
 import { getCompletedRouteIds } from "@/route-completion";
 import type { DriverRoute } from "@shared/driver-api-types";
-import { fetchRouteProgress, findActiveRoute, todayStr, type ActiveRouteInfo, type RouteProgress } from "@/route-progress";
+import { fetchRouteProgress, findActiveRoute, isEditableCycleDate, todayStr, type ActiveRouteInfo, type RouteProgress } from "@/route-progress";
 import { useSession } from "@/session";
 
 type ActiveRouteValue = {
@@ -64,7 +64,11 @@ export function ActiveRouteProvider({ children }: { children: ReactNode }) {
         // (it would briefly read "not started" while progress was still loading).
         setRoutesInfo({ routes, today, cycleDate });
         setCompletedRouteIds(completed);
-        setActiveRoute(findActiveRoute(routes, routeProgress, completed));
+        // A round from a previous cycle (today's morning round once the 4pm
+        // switch has moved on to the evening) is view-only and can no longer be
+        // finished from the phone, so it must not hold the driver back from
+        // starting the current cycle's round.
+        setActiveRoute(findActiveRoute(routes.filter((r) => isEditableCycleDate(r.shift, date, cycleDate)), routeProgress, completed));
       } catch {
         // Silent — a background convenience indicator, not a critical path.
       } finally {
