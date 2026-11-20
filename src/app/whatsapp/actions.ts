@@ -5,6 +5,8 @@ import { z } from "zod";
 import { getCurrentCityId } from "@/lib/current-city";
 import { getCurrentUser } from "@/lib/current-user";
 import { bulkOptIn, setCustomerConsent } from "@/lib/notifications/consent";
+import { enqueuePaymentReminders, planPaymentReminders } from "@/lib/notifications/reminders";
+import { loadTemplates, submitOurTemplate, type TemplatesState } from "@/lib/notifications/template-admin";
 import { cancelPending, enqueueMonthlyBills, retryFailed, type SkippedCustomer } from "@/lib/notifications/outbox";
 import { monthInputToDate } from "@/lib/monthly-route-sequence";
 
@@ -209,5 +211,74 @@ export async function bulkOptInCustomers(
       status: "error",
       message: error instanceof Error ? error.message : "Unable to opt customers in.",
     };
+  }
+}
+
+// ---- Templates tab (admin only) ----
+
+export async function refreshTemplatesAction(): Promise<TemplatesState> {
+  await requireSendPermission();
+  return loadTemplates();
+}
+
+export async function submitTemplateAction(key: string): Promise<TemplatesState> {
+  await requireSendPermission();
+  const cityId = await getCurrentCityId();
+  return submitOurTemplate({ key, cityId });
+}
+
+// ---- Payment reminders (admin only) ----
+
+export type ReminderState =
+  | { status: "idle" }
+  | { status: "error"; message: string }
+  | {
+      status: "ready" | "queued";
+      message: string;
+      eligible: number;
+      totalOutstanding: string;
+      sample: Array<{ code: string; name: string; month: number; outstanding: string }>;
+      skipped: SkippedCustomer[];
+    };
+
+// Read-only: who WOULD get a reminder, so the office sees the list before anything is queued.
+export async function previewRemindersAction(): Promise<ReminderState> {
+  try {
+    await requireSendPermission();
+    const plan = await planPaymentReminders(await getCurrentCityId());
+    return {
+      status: "ready",
+      message: plan.candidates.length > 0 ? `${plan.candidates.length} customer(s) would get a reminder.` : "Nobody to remind right now.",
+      eligible: plan.candidates.length,
+      totalOutstanding: plan.totalOutstanding.toFixed(2),
+      sample: plan.candidates.slice(0, 10).map((candidate) => ({
+        code: candidate.customerCode, name: candidate.customerName, month: candidate.month, outstanding: candidate.outstanding.toFixed(2),
+      })),
+      skipped: plan.skipped,
+    };
+  } catch (error) {
+    return { status: "error", message: error instanceof Error ? error.message : "Unable to prepare reminders." };
+  }
+}
+
+export async function queueRemindersAction(): Promise<ReminderState> {
+  try {
+    await requireSendPermission();
+    const result = await enqueuePaymentReminders({ cityId: await getCurrentCityId() });
+    revalidatePath("/whatsapp");
+
+    const parts = [`Queued ${result.queued} reminder(s).`];
+    if (result.alreadyQueued > 0) parts.push(`${result.alreadyQueued} were already queued today.`);
+    if (result.skipped.length > 0) parts.push(`${result.skipped.length} skipped.`);
+    return {
+      status: "queued",
+      message: parts.join(" "),
+      eligible: result.queued + result.alreadyQueued,
+      totalOutstanding: "",
+      sample: [],
+      skipped: result.skipped,
+    };
+  } catch (error) {
+    return { status: "error", message: error instanceof Error ? error.message : "Unable to queue reminders." };
   }
 }

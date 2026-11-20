@@ -7,24 +7,20 @@ import { EmptyState } from "@/components/admin/empty-state";
 import { SelectInput } from "@/components/admin/select-input";
 import { SummaryStatBar } from "@/components/admin/summary-stat-bar";
 import type { ConsentSummary } from "@/lib/notifications/consent";
-import { renderTemplate } from "@/lib/notifications/templates";
+import { ZOEPACT_TEMPLATES } from "@/lib/notifications/zoepact-templates";
 import type { SendableMonth } from "@/lib/notifications/outbox";
 
 const initialState: WhatsAppActionState = { status: "idle" };
 
-// Rendered from the real template rather than hand-written, so the preview can
-// never drift from what customers actually receive.
-const PREVIEW = renderTemplate("monthly_bill_v1", {
-  businessName: "Your dairy",
-  customerName: "Ramesh Kumar",
-  customerCode: "C-1042",
-  billingMonth: "August 2026",
-  openingBalance: "340",
-  deliveryAmount: "2780",
-  paymentAmount: "780",
-  closingBalance: "2340",
-  upiLink: "upi://pay?pa=…&am=2340.00",
-});
+// Filled from the real template wording rather than hand-written, so the preview
+// can never drift from what customers actually receive.
+const PREVIEW = [
+  ZOEPACT_TEMPLATES.monthly_bill_link_v1.body
+    .replace("{{1}}", "Ramesh Kumar").replace("{{2}}", "अगस्त").replace("{{3}}", "2,340.00")
+    .replace("{{4}}", "Ramesh Kumar").replace("{{5}}", "August").replace("{{6}}", "2,340.00"),
+  ZOEPACT_TEMPLATES.monthly_bill_link_v1.footer,
+  "[ View bill ]",
+].join("\n\n");
 
 export function SendBillsPanel({
   canSend,
@@ -66,8 +62,9 @@ export function SendBillsPanel({
           <div>
             <h2 className="text-sm font-semibold text-text-primary">Queue this month&apos;s bills</h2>
             <p className="mt-1 text-sm text-text-secondary">
-              Messages are queued here and sent by the office PC over the following day or two, spaced a
-              few seconds apart. Nothing is sent from this screen directly.
+              Messages are queued here and sent through WhatsApp in small batches between 9am and 8pm.
+              Nothing is sent from this screen directly. Each message has a View bill button that opens the
+              customer&apos;s bill.
             </p>
           </div>
 
@@ -110,8 +107,8 @@ export function SendBillsPanel({
             {PREVIEW}
           </pre>
           <p className="mt-2 text-xs text-text-secondary">
-            Example figures. Real messages use each customer&apos;s own name, code, and balances, and the
-            UPI link is only included when a UPI ID is set for the city and something is owed.
+            Example figures. Real messages use each customer&apos;s own name and amount. The View bill page
+            shows the full bill, and a Pay with UPI button when a UPI ID is set and something is owed.
           </p>
         </div>
       </div>

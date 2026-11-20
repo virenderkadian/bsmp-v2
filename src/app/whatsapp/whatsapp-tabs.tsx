@@ -4,12 +4,14 @@ import { useState } from "react";
 import { ConsentPanel } from "@/app/whatsapp/consent-panel";
 import { NoticesPanel } from "@/app/whatsapp/notices-panel";
 import { OutboxPanel } from "@/app/whatsapp/outbox-panel";
+import { RemindersPanel } from "@/app/whatsapp/reminders-panel";
+import { TemplatesPanel } from "@/app/whatsapp/templates-panel";
 import { SendBillsPanel } from "@/app/whatsapp/send-bills-panel";
 import { MasterTabs } from "@/components/admin/master-tabs";
 import type { ConsentCustomer, ConsentSummary } from "@/lib/notifications/consent";
 import type { BatchProgress, FailedMessage, SendableMonth } from "@/lib/notifications/outbox";
 
-type WhatsAppTab = "bills" | "notices" | "outbox" | "consent";
+type WhatsAppTab = "bills" | "reminders" | "notices" | "outbox" | "consent" | "templates";
 
 export function WhatsAppTabs({
   canSend,
@@ -39,9 +41,11 @@ export function WhatsAppTabs({
         activeValue={activeTab}
         tabs={[
           { value: "bills", label: "Send bills" },
+          { value: "reminders", label: "Reminders" },
           { value: "notices", label: "Notices" },
           { value: "outbox", label: "Outbox", count: inFlight },
           { value: "consent", label: "Consent", count: consentSummary.optedIn },
+          { value: "templates", label: "Templates" },
         ]}
         onChange={setActiveTab}
       />
@@ -49,10 +53,12 @@ export function WhatsAppTabs({
       {activeTab === "bills" ? (
         <SendBillsPanel canSend={canSend} months={months} consentSummary={consentSummary} />
       ) : null}
+      {activeTab === "reminders" ? <RemindersPanel canSend={canSend} /> : null}
       {activeTab === "notices" ? <NoticesPanel /> : null}
       {activeTab === "outbox" ? (
         <OutboxPanel canSend={canSend} batches={batches} failed={failed} />
       ) : null}
+      {activeTab === "templates" ? <TemplatesPanel /> : null}
       {activeTab === "consent" ? (
         <ConsentPanel canSend={canSend} summary={consentSummary} customers={consentCustomers} />
       ) : null}

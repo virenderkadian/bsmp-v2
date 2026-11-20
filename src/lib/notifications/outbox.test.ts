@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { enqueueMonthlyBills } from "@/lib/notifications/outbox";
-import { claimPending, reportOutcomes } from "@/lib/notifications/dispatch";
+import { claimForZoepact, claimPending, reportOutcomes } from "@/lib/notifications/dispatch";
+import { enqueuePaymentReminders, planPaymentReminders } from "@/lib/notifications/reminders";
 
 // Exercises the real queue against the real dev database, because the parts
 // worth testing here are precisely the ones a mock would paper over: the unique
@@ -80,6 +81,23 @@ beforeAll(async () => {
   ]);
 });
 
+// A row for the office-PC agent's TEXT family, queued directly: bills no longer
+// use it (they go out as Zoepact templates), but the agent path still has to work.
+async function queueTextRow() {
+  await db.notificationOutbox.create({
+    data: {
+      customerId: customers.ok,
+      recipient: "919812345678",
+      template: "monthly_bill_v1",
+      variables: {
+        businessName: "Your dairy", customerName: "WhatsApp Test ok", customerCode: "C-1", billingMonth: "July 2026",
+        openingBalance: "340", deliveryAmount: "2780", paymentAmount: "780", closingBalance: "2340",
+      },
+      dedupeKey: `text-${Date.now()}-${Math.random()}`,
+    },
+  });
+}
+
 beforeEach(async () => {
   await db.notificationOutbox.deleteMany({ where: { customerId: { in: Object.values(customers) } } });
 });
@@ -126,10 +144,13 @@ describe("enqueueMonthlyBills", () => {
     const result = await enqueueMonthlyBills({ cityId, billingMonth: month });
     const row = await db.notificationOutbox.findFirstOrThrow({ where: { batchId: result.batchId } });
 
-    expect(row.template).toBe("monthly_bill_v1");
+    expect(row.template).toBe("monthly_bill_link_v1");
     const variables = row.variables as Record<string, unknown>;
-    expect(variables.closingBalance).toBe("2340");
+    expect(variables.amountDue).toBe("2340");
     expect(variables.customerName).toBe("WhatsApp Test ok");
+    expect(variables.month).toBe(7);
+    // Only the bill's id is stored; the signed link is made at send time.
+    expect(variables.billId).toBe(bills.ok);
   });
 
   it("queues nothing the second time — the unique index makes a double click harmless", async () => {
@@ -158,7 +179,7 @@ describe("enqueueMonthlyBills", () => {
 
 describe("claim and report", () => {
   it("renders the message and hands it over addressed for WhatsApp", async () => {
-    await enqueueMonthlyBills({ cityId, billingMonth: month });
+    await queueTextRow();
 
     const claimed = await claimPending(10);
     const mine = claimed.filter((message) => message.chatId === "919812345678@c.us");
@@ -173,7 +194,7 @@ describe("claim and report", () => {
   });
 
   it("marks a sent message SENT and keeps the provider reference", async () => {
-    await enqueueMonthlyBills({ cityId, billingMonth: month });
+    await queueTextRow();
     const claimed = await claimPending(10);
     const mine = claimed.find((m) => m.chatId === "919812345678@c.us")!;
 
@@ -186,7 +207,7 @@ describe("claim and report", () => {
   });
 
   it("fails a permanent rejection immediately instead of spending retries on it", async () => {
-    await enqueueMonthlyBills({ cityId, billingMonth: month });
+    await queueTextRow();
     const claimed = await claimPending(10);
     const mine = claimed.find((m) => m.chatId === "919812345678@c.us")!;
 
@@ -198,7 +219,7 @@ describe("claim and report", () => {
   });
 
   it("requeues a retryable failure with a backoff instead of retrying immediately", async () => {
-    await enqueueMonthlyBills({ cityId, billingMonth: month });
+    await queueTextRow();
     const claimed = await claimPending(10);
     const mine = claimed.find((m) => m.chatId === "919812345678@c.us")!;
 
@@ -210,7 +231,7 @@ describe("claim and report", () => {
   });
 
   it("refunds the attempt when a message is released unsent — a stopped gateway must not burn retries", async () => {
-    await enqueueMonthlyBills({ cityId, billingMonth: month });
+    await queueTextRow();
     const claimed = await claimPending(10);
     const mine = claimed.find((m) => m.chatId === "919812345678@c.us")!;
 
@@ -230,12 +251,85 @@ describe("claim and report", () => {
   });
 
   it("does not hand the same message to a second claim while it is in flight", async () => {
-    await enqueueMonthlyBills({ cityId, billingMonth: month });
+    await queueTextRow();
 
     const first = await claimPending(10);
     const second = await claimPending(10);
 
     const firstIds = new Set(first.map((m) => m.id));
     expect(second.some((m) => firstIds.has(m.id))).toBe(false);
+  });
+});
+
+describe("the two senders never touch each other's rows", () => {
+  it("leaves a Zoepact bill message for the Zoepact sender, and a text row for the agent", async () => {
+    await enqueueMonthlyBills({ cityId, billingMonth: month }); // a Zoepact-family row
+    await queueTextRow(); //                                      a text-family row
+
+    const forAgent = (await claimPending(50)).filter((m) => m.chatId === "919812345678@c.us");
+    expect(forAgent).toHaveLength(1);
+    expect(forAgent[0].text).toContain("WhatsApp Test ok");
+
+    const forZoepact = (await claimForZoepact(50)).filter((row) => row.recipient === "919812345678");
+    expect(forZoepact).toHaveLength(1);
+    expect(forZoepact[0].template).toBe("monthly_bill_link_v1");
+  });
+
+  it("does not let the agent fail a Zoepact row it cannot render", async () => {
+    const result = await enqueueMonthlyBills({ cityId, billingMonth: month });
+    await claimPending(50);
+
+    const row = await db.notificationOutbox.findFirstOrThrow({ where: { batchId: result.batchId } });
+    expect(row.status).toBe("PENDING");
+    expect(row.attempts).toBe(0);
+  });
+});
+
+describe("payment reminders", () => {
+  it("plans a reminder only for an owing customer who has consent and a usable number", async () => {
+    const plan = await planPaymentReminders(cityId);
+    const mine = plan.candidates.filter((candidate) => Object.values(customers).includes(candidate.customerId));
+
+    expect(mine.map((candidate) => candidate.customerId)).toEqual([customers.ok]);
+    expect(mine[0]).toMatchObject({ recipient: "919812345678", month: 7, outstanding: 2340, billId: bills.ok });
+
+    const reasons = Object.fromEntries(plan.skipped.map((entry) => [entry.customerName, entry.reason]));
+    expect(reasons["WhatsApp Test noconsent"]).toBe("No WhatsApp consent recorded");
+    expect(reasons["WhatsApp Test nomobile"]).toBe("No mobile number");
+    expect(reasons["WhatsApp Test badmobile"]).toBe("Not a valid Indian mobile number");
+    // Nothing owed, so not even a skip: they are simply not on the list.
+    expect(reasons["WhatsApp Test zero"]).toBeUndefined();
+  });
+
+  it("queues once per customer per day, however many times it is pressed", async () => {
+    const now = new Date("2026-11-20T06:00:00Z");
+    const first = await enqueuePaymentReminders({ cityId, now });
+    const second = await enqueuePaymentReminders({ cityId, now });
+
+    expect(first.queued).toBe(1);
+    expect(second.queued).toBe(0);
+    expect(second.alreadyQueued).toBe(1);
+
+    const row = await db.notificationOutbox.findFirstOrThrow({ where: { batchId: first.batchId } });
+    expect(row.template).toBe("payment_reminder_hi_en_v1");
+    expect(row.variables).toEqual({ month: 7, outstanding: "2340.00" });
+
+    // The next day is a fresh reminder.
+    const nextDay = await enqueuePaymentReminders({ cityId, now: new Date("2026-11-21T06:00:00Z") });
+    expect(nextDay.queued).toBe(1);
+  });
+
+  it("stops reminding a customer once verified payments cover the balance", async () => {
+    // The bill already accounts for 780 of payments (its paymentAmount), so the
+    // 2,340 still owed is cleared by 2,340 MORE, i.e. 3,120 verified in all.
+    const payment = await db.payment.create({
+      data: { customerId: customers.ok, routeId, amount: 3120, mode: "CASH", status: "VERIFIED", paymentDate: new Date() },
+    });
+    try {
+      const plan = await planPaymentReminders(cityId);
+      expect(plan.candidates.some((candidate) => candidate.customerId === customers.ok)).toBe(false);
+    } finally {
+      await db.payment.delete({ where: { id: payment.id } });
+    }
   });
 });

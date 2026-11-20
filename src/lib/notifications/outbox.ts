@@ -4,7 +4,6 @@ import type { Prisma } from "@prisma/client";
 import { logAudit } from "@/lib/audit";
 import { assertNotificationsEnabled } from "@/lib/notifications/config";
 import { normalizeIndianMobile } from "@/lib/notifications/phone";
-import { buildUpiLink, type MonthlyBillVariables } from "@/lib/notifications/templates";
 import { prisma } from "@/lib/prisma";
 import { withDbTimeout } from "@/lib/db-timeout";
 
@@ -55,8 +54,7 @@ export async function enqueueMonthlyBills(input: {
 
   const { cityId, billingMonth, routeIds } = input;
 
-  const [bills, profile] = await Promise.all([
-    withDbTimeout(
+  const bills = await withDbTimeout(
       prisma.monthlyBill.findMany({
         where: {
           billingMonth,
@@ -79,11 +77,8 @@ export async function enqueueMonthlyBills(input: {
       }),
       "Loading bills to queue",
       15_000,
-    ),
-    prisma.businessProfile.findUnique({ where: { cityId } }),
-  ]);
+  );
 
-  const businessName = profile?.businessName ?? "Your dairy";
   const batchId = randomUUID();
   const skipped: SkippedCustomer[] = [];
   const rows: Prisma.NotificationOutboxCreateManyInput[] = [];
@@ -114,28 +109,24 @@ export async function enqueueMonthlyBills(input: {
       continue;
     }
 
-    const variables: MonthlyBillVariables = {
-      businessName,
+    // Bills go out as the approved "monthly_bill_link_v1" template: the customer
+    // gets the headline figure and a View bill button. The signed link is made at
+    // SEND time from billId (see zoepact-sender.ts), so it is as fresh as the
+    // message and nothing secret is stored here.
+    const variables = {
       customerName: customer.name,
-      customerCode: customer.code,
-      billingMonth: formatBillingMonth(billingMonth),
+      month: billingMonth.getUTCMonth() + 1,
       // Decimals are passed as strings, not numbers: these round-trip through a
       // JSONB column and back, and money should not take a detour through a
       // float on the way.
-      openingBalance: bill.openingBalance.toString(),
-      deliveryAmount: bill.deliveryAmount.toString(),
-      paymentAmount: bill.paymentAmount.toString(),
-      closingBalance: bill.closingBalance.toString(),
-      ...(profile?.upiId && closing > 0
-        ? { upiLink: buildUpiLink(profile.upiId, businessName, closing) }
-        : {}),
-      ...(profile?.footerNote ? { footerNote: profile.footerNote } : {}),
+      amountDue: bill.closingBalance.toString(),
+      billId: bill.id,
     };
 
     rows.push({
       customerId: bill.customerId,
       recipient: phone.msisdn,
-      template: "monthly_bill_v1",
+      template: "monthly_bill_link_v1",
       variables: variables as unknown as Prisma.InputJsonValue,
       // The bill's own id — so re-running this for the same month cannot
       // produce a second message, whoever clicks and however many times.
