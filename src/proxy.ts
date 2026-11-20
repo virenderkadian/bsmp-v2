@@ -20,8 +20,11 @@ import { type NextRequest, NextResponse } from "next/server";
 // shared secret, never Supabase cookies, so — exactly as with /api/driver — the
 // gate below must not intercept it or the agent can only ever receive a 307 to
 // /login and no message is ever sent.
+// /privacy is the BSMP Driver app's privacy policy, linked from the Google Play
+// listing — it must be readable by anyone, signed in or not.
 const PUBLIC_PATHS = [
   "/login",
+  "/privacy",
   "/forgot-password",
   "/reset-password",
   "/api/driver",
