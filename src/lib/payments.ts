@@ -243,6 +243,12 @@ export async function getPaymentsPayload(input?: {
           }
         : undefined;
 
+    // Searching a number also finds payments of EXACTLY that amount: "5000"
+    // finds ₹5,000.00 but not ₹50,000 or ₹5,001. A leading ₹ and thousands
+    // commas are ignored ("₹5,000" works).
+    const amountTerm = search.replace(/[₹,\s]/g, "");
+    const amountMatch = /^\d{1,10}(\.\d{1,2})?$/.test(amountTerm) ? new Prisma.Decimal(amountTerm) : null;
+
     const where: Prisma.PaymentWhereInput = {
       customer: { cityId },
       ...(customerId ? { customerId } : {}),
@@ -260,6 +266,7 @@ export async function getPaymentsPayload(input?: {
               { route: { name: { contains: search, mode: "insensitive" } } },
               { referenceNo: { contains: search, mode: "insensitive" } },
               { notes: { contains: search, mode: "insensitive" } },
+              ...(amountMatch ? [{ amount: amountMatch }] : []),
             ],
           }
         : {}),
