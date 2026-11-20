@@ -1,6 +1,7 @@
 import "server-only";
 import { Prisma } from "@prisma/client";
 import { renderTemplate } from "@/lib/notifications/templates";
+import { ZOEPACT_TEMPLATE_KEYS } from "@/lib/notifications/zoepact-templates";
 import { toWhatsAppChatId } from "@/lib/notifications/phone";
 import { prisma } from "@/lib/prisma";
 
@@ -39,7 +40,7 @@ type ClaimedRow = {
 // cause is mundane — the office PC was switched off partway through an
 // overnight stretch of a two-day run — so this is normal housekeeping, not
 // error recovery.
-async function reclaimExpired(): Promise<number> {
+export async function reclaimExpired(): Promise<number> {
   const cutoff = new Date(Date.now() - CLAIM_LEASE_MS);
 
   const result = await prisma.notificationOutbox.updateMany({
@@ -56,13 +57,22 @@ async function reclaimExpired(): Promise<number> {
 // same bill. FOR UPDATE SKIP LOCKED makes them divide the work instead of
 // duplicating it. Small batches keep the blast radius of a crash small: only
 // rows already claimed are at risk, not the whole queue.
-export async function claimPending(limit = 25): Promise<ClaimedMessage[]> {
+//
+// Two senders share this queue and must never touch each other's rows: the
+// office-PC agent renders TEXT templates, the Zoepact sender sends approved
+// template messages. `family` picks which — without it the agent would claim a
+// Zoepact row, fail to render it, and mark a perfectly good message FAILED.
+async function claimRows(limit: number, family: "text" | "zoepact"): Promise<ClaimedRow[]> {
   await reclaimExpired();
+
+  const zoepactKeys = Prisma.join(ZOEPACT_TEMPLATE_KEYS);
+  const familyFilter =
+    family === "zoepact" ? Prisma.sql`template IN (${zoepactKeys})` : Prisma.sql`template NOT IN (${zoepactKeys})`;
 
   // attempts is incremented at claim time rather than on failure. A row whose
   // agent dies mid-send still consumes an attempt, so a message that reliably
   // crashes the sender cannot be reclaimed and re-tried forever.
-  const rows = await prisma.$queryRaw<ClaimedRow[]>(Prisma.sql`
+  return prisma.$queryRaw<ClaimedRow[]>(Prisma.sql`
     UPDATE "NotificationOutbox"
     SET status = 'SENDING'::"NotificationStatus",
         "claimedAt" = NOW(),
@@ -75,12 +85,24 @@ export async function claimPending(limit = 25): Promise<ClaimedMessage[]> {
         AND channel = 'WHATSAPP'::"NotificationChannel"
         AND "notBefore" <= NOW()
         AND attempts < ${MAX_ATTEMPTS}
+        AND ${familyFilter}
       ORDER BY "createdAt" ASC
       LIMIT ${limit}
       FOR UPDATE SKIP LOCKED
     )
     RETURNING id, recipient, template, variables
   `);
+}
+
+// For the Zoepact sender: the raw rows, rendered into API calls by the caller.
+export async function claimForZoepact(limit = 20): Promise<ClaimedRow[]> {
+  return claimRows(limit, "zoepact");
+}
+
+export type { ClaimedRow };
+
+export async function claimPending(limit = 25): Promise<ClaimedMessage[]> {
+  const rows = await claimRows(limit, "text");
 
   const claimed: ClaimedMessage[] = [];
 
