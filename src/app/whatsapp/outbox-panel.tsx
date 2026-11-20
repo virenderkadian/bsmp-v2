@@ -53,6 +53,8 @@ const TEMPLATE_LABEL: Record<string, string> = {
   payment_reminder_hi_en_v1: "Payment reminder",
   rate_change_notice_v1: "Rate change notice",
   delivery_notice_v1: "Delivery notice",
+  delivery_completed_v1: "Delivery update",
+  payment_received_v1: "Payment receipt",
 };
 
 // Messages queued but not yet picked up for sending: the window to take someone

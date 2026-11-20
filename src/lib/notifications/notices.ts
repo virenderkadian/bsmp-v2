@@ -6,7 +6,7 @@ import { withDbTimeout } from "@/lib/db-timeout";
 import { assertNotificationsEnabled } from "@/lib/notifications/config";
 import { normalizeIndianMobile } from "@/lib/notifications/phone";
 import { zoepactVariableSchemas } from "@/lib/notifications/zoepact-templates";
-import { monthInputToDate } from "@/lib/monthly-route-sequence";
+import { getCustomerRoutes, NO_ROUTE } from "@/lib/notifications/customer-routes";
 import { prisma } from "@/lib/prisma";
 
 // Notices: a rate change or a delivery notice, sent to customers the office picks.
@@ -39,43 +39,22 @@ export type NoticeAudience = {
   noNumber: number;
 };
 
-function istMonth(now: Date): string {
-  return new Date(now.getTime() + 5.5 * 60 * 60 * 1000).toISOString().slice(0, 7);
-}
-
 // Active customers who can be messaged: consent on file and a valid Indian mobile.
 // Counted, not listed, for the ones who can't: at several hundred customers a
 // skipped list for a notice would bury the people being chosen.
 export async function planNoticeAudience(cityId: string, now = new Date()): Promise<NoticeAudience> {
-  const monthStart = monthInputToDate(istMonth(now));
-
-  const [customers, sequences] = await withDbTimeout(
+  const [customers, routes] = await withDbTimeout(
     Promise.all([
       prisma.customer.findMany({
         where: { cityId, isActive: true },
         select: { id: true, code: true, name: true, mobile: true, whatsappOptInAt: true },
         orderBy: { code: "asc" },
       }),
-      prisma.monthlyRouteCustomerSequence.findMany({
-        where: { route: { cityId }, sequenceMonth: monthStart, status: "ACTIVE" },
-        select: {
-          customerId: true,
-          routeId: true,
-          billsHere: true,
-          route: { select: { code: true, name: true, vehicle: { select: { id: true, code: true, name: true } } } },
-        },
-      }),
+      getCustomerRoutes(cityId, now),
     ]),
     "Loading notice audience",
     20_000,
   );
-
-  // One route per customer: the one that bills them, else any they run on.
-  const routeOf = new Map<string, (typeof sequences)[number]>();
-  for (const row of sequences) {
-    const current = routeOf.get(row.customerId);
-    if (!current || (row.billsHere && !current.billsHere)) routeOf.set(row.customerId, row);
-  }
 
   const candidates: NoticeCandidate[] = [];
   let noConsent = 0;
@@ -91,16 +70,12 @@ export async function planNoticeAudience(cityId: string, now = new Date()): Prom
       noNumber += 1;
       continue;
     }
-    const sequence = routeOf.get(customer.id);
     candidates.push({
       customerId: customer.id,
       customerCode: customer.code,
       customerName: customer.name,
       recipient: phone.msisdn,
-      routeId: sequence?.routeId ?? "",
-      routeLabel: sequence ? `${sequence.route.code} - ${sequence.route.name}` : "",
-      vehicleId: sequence?.route.vehicle.id ?? "",
-      vehicleLabel: sequence ? `${sequence.route.vehicle.code} - ${sequence.route.vehicle.name}` : "",
+      ...(routes.get(customer.id) ?? NO_ROUTE),
     });
   }
 

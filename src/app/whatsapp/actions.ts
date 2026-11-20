@@ -4,10 +4,12 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { getCurrentCityId } from "@/lib/current-city";
 import { getCurrentUser } from "@/lib/current-user";
-import { bulkOptIn, setCustomerConsent } from "@/lib/notifications/consent";
+import { bulkOptIn, bulkOptInUpdates, planUpdatesOptIn, setCustomerConsent, setUpdatesConsent, type UpdatesKind } from "@/lib/notifications/consent";
+import { enqueueDeliveryUpdates, planDeliveryUpdates, readableDay } from "@/lib/notifications/delivery-updates";
 import { enqueueNotice, isNoticeTemplate, planNoticeAudience } from "@/lib/notifications/notices";
+import { enqueuePaymentUpdates, modeLabel, planPaymentUpdates } from "@/lib/notifications/payment-updates";
 import { enqueuePaymentReminders, planPaymentReminders } from "@/lib/notifications/reminders";
-import { loadTemplates, submitOurTemplate, type TemplatesState } from "@/lib/notifications/template-admin";
+import { loadTemplates, saveWording, submitVersion, activateTemplateVersion, type TemplatesState } from "@/lib/notifications/template-admin";
 import { cancelMessages, cancelPending, enqueueMonthlyBills, planMonthlyBills, retryFailed, type SkippedCustomer } from "@/lib/notifications/outbox";
 import { monthInputToDate } from "@/lib/monthly-route-sequence";
 
@@ -222,10 +224,31 @@ export async function refreshTemplatesAction(): Promise<TemplatesState> {
   return loadTemplates();
 }
 
-export async function submitTemplateAction(key: string): Promise<TemplatesState> {
+// Sends one version (null = the built-in wording) to Meta for review.
+export async function submitTemplateAction(key: string, versionId: string | null): Promise<TemplatesState> {
   await requireSendPermission();
-  const cityId = await getCurrentCityId();
-  return submitOurTemplate({ key, cityId });
+  return submitVersion({ key, versionId, cityId: await getCurrentCityId() });
+}
+
+// Saves reworded text as the next version. It is not used until Meta approves it and it is switched on.
+export async function saveTemplateWordingAction(key: string, body: string, footer: string, buttonText: string): Promise<TemplatesState> {
+  await requireSendPermission();
+  const user = await getCurrentUser();
+  return saveWording({
+    key,
+    wording: { body, footer, buttonText },
+    cityId: await getCurrentCityId(),
+    actor: user ? { id: user.id, name: user.fullName } : null,
+  });
+}
+
+// Switches messages to an approved version (null = the built-in wording).
+export async function switchTemplateVersionAction(key: string, versionId: string | null): Promise<TemplatesState> {
+  await requireSendPermission();
+  const state = await activateTemplateVersion({ key, versionId, cityId: await getCurrentCityId() });
+  // The previews on the other tabs show the wording in use.
+  revalidatePath("/whatsapp");
+  return state;
 }
 
 // ---- Choosing who gets a message (admin only) ----
@@ -419,5 +442,208 @@ export async function queueNoticeAction(template: string, variables: unknown, cu
     return { status: "queued", message: parts.join(" "), rows: [], skipped: [] };
   } catch (error) {
     return { status: "error", message: error instanceof Error ? error.message : "Unable to queue the notice." };
+  }
+}
+
+// ---- Delivery completed (admin only) ----
+
+export type DeliveryPickerState =
+  | { status: "idle" }
+  | { status: "error"; message: string }
+  | { status: "ready" | "queued"; message: string; rows: RecipientRow[]; sample: { name: string; date: string; itemsText: string; amount: string } | null };
+
+export async function previewDeliveryUpdatesAction(day: string): Promise<DeliveryPickerState> {
+  try {
+    await requireSendPermission();
+    const audience = await planDeliveryUpdates(await getCurrentCityId(), day);
+    const left = [
+      audience.noConsent > 0 ? `${audience.noConsent} without WhatsApp consent` : "",
+      audience.noDeliveryOptIn > 0 ? `${audience.noDeliveryOptIn} who haven't opted in to delivery updates (set that on the Consent tab)` : "",
+      audience.noNumber > 0 ? `${audience.noNumber} without a usable number` : "",
+      audience.tooLong > 0 ? `${audience.tooLong} with too many products for one message` : "",
+    ].filter(Boolean);
+    const first = audience.candidates[0];
+    return {
+      status: "ready",
+      message:
+        audience.delivered === 0
+          ? "No deliveries are recorded for that date."
+          : `${audience.delivered} customer(s) were delivered; ${audience.candidates.length} can get a message${left.length > 0 ? `. Left out: ${left.join(", ")}` : ""}.`,
+      rows: audience.candidates.map((candidate) => ({
+        id: candidate.customerId,
+        code: candidate.customerCode,
+        name: candidate.customerName,
+        detail: money(candidate.amount),
+        amount: candidate.amount,
+        routeId: candidate.routeId,
+        routeLabel: candidate.routeLabel,
+        vehicleId: candidate.vehicleId,
+        vehicleLabel: candidate.vehicleLabel,
+      })),
+      sample: first
+        ? { name: first.customerName, date: readableDay(day), itemsText: first.itemsText, amount: first.amount.toFixed(2) }
+        : null,
+    };
+  } catch (error) {
+    return { status: "error", message: error instanceof Error ? error.message : "Unable to prepare delivery updates." };
+  }
+}
+
+export async function queueDeliveryUpdatesAction(day: string, customerIds: string[]): Promise<DeliveryPickerState> {
+  try {
+    await requireSendPermission();
+    const ids = idList.safeParse(customerIds);
+    if (!ids.success) return { status: "error", message: "Invalid selection." };
+    if (ids.data.length === 0) return { status: "error", message: "Select at least one customer." };
+
+    const result = await enqueueDeliveryUpdates({ cityId: await getCurrentCityId(), day, customerIds: ids.data });
+    revalidatePath("/whatsapp");
+    const parts = [`Queued ${result.queued} delivery update(s).`];
+    if (result.alreadyQueued > 0) parts.push(`${result.alreadyQueued} had already been queued for that date.`);
+    return { status: "queued", message: parts.join(" "), rows: [], sample: null };
+  } catch (error) {
+    return { status: "error", message: error instanceof Error ? error.message : "Unable to queue delivery updates." };
+  }
+}
+
+// ---- Extra opt-ins: delivery updates and payment updates (admin only) ----
+
+const KIND_LABEL: Record<UpdatesKind, string> = { delivery: "delivery updates", payment: "payment updates" };
+
+function asKind(value: string): UpdatesKind | null {
+  return value === "delivery" || value === "payment" ? value : null;
+}
+
+export async function toggleUpdatesConsent(
+  _prevState: WhatsAppActionState = idleState,
+  formData: FormData,
+): Promise<WhatsAppActionState> {
+  void _prevState;
+
+  const customerId = getValue(formData, "customerId");
+  const kind = asKind(getValue(formData, "kind"));
+  const optIn = getValue(formData, "optIn") === "true";
+  if (!customerId || !kind) return { status: "error", message: "Missing customer." };
+
+  try {
+    await requireSendPermission();
+    await setUpdatesConsent({ cityId: await getCurrentCityId(), customerId, kind, optIn });
+    revalidatePath("/whatsapp");
+    return { status: "success", message: `${optIn ? "Opted in to" : "Opted out of"} ${KIND_LABEL[kind]}.` };
+  } catch (error) {
+    return { status: "error", message: error instanceof Error ? error.message : "Unable to update consent." };
+  }
+}
+
+// Who COULD be opted in to this kind, so the office can choose by route or vehicle.
+export async function previewUpdatesOptInAction(kindValue: string): Promise<PickerState> {
+  const kind = asKind(kindValue);
+  if (!kind) return { status: "error", message: "Unknown kind." };
+  try {
+    await requireSendPermission();
+    const plan = await planUpdatesOptIn(await getCurrentCityId(), kind);
+    const left = [
+      plan.alreadyOptedIn > 0 ? `${plan.alreadyOptedIn} already opted in` : "",
+      plan.noWhatsAppConsent > 0 ? `${plan.noWhatsAppConsent} need WhatsApp consent first` : "",
+      plan.noNumber > 0 ? `${plan.noNumber} have no usable number` : "",
+    ].filter(Boolean);
+    return {
+      status: "ready",
+      message: `${plan.candidates.length} customer(s) can be opted in${left.length > 0 ? `. Not listed: ${left.join(", ")}` : ""}.`,
+      rows: plan.candidates.map((candidate) => ({
+        id: candidate.customerId,
+        code: candidate.customerCode,
+        name: candidate.customerName,
+        detail: candidate.mobile,
+        routeId: candidate.routeId,
+        routeLabel: candidate.routeLabel,
+        vehicleId: candidate.vehicleId,
+        vehicleLabel: candidate.vehicleLabel,
+      })),
+      skipped: [],
+    };
+  } catch (error) {
+    return { status: "error", message: error instanceof Error ? error.message : "Unable to prepare the list." };
+  }
+}
+
+// Records the opt-in for exactly the customers chosen. `confirmed` is the office's statement
+// that these customers agreed: without it nothing is recorded.
+export async function bulkOptInUpdatesAction(kindValue: string, customerIds: string[], confirmed: boolean): Promise<WhatsAppActionState> {
+  const kind = asKind(kindValue);
+  if (!kind) return { status: "error", message: "Unknown kind." };
+  try {
+    await requireSendPermission();
+    if (!confirmed) return { status: "error", message: `Confirm that these customers agreed to get ${KIND_LABEL[kind]}.` };
+    const ids = idList.safeParse(customerIds);
+    if (!ids.success || ids.data.length === 0) return { status: "error", message: "Select at least one customer." };
+
+    const count = await bulkOptInUpdates({ cityId: await getCurrentCityId(), kind, customerIds: ids.data });
+    revalidatePath("/whatsapp");
+    return {
+      status: "success",
+      message: count > 0 ? `Opted ${count} customer(s) in to ${KIND_LABEL[kind]}.` : "Nobody was opted in: those customers weren't eligible.",
+    };
+  } catch (error) {
+    return { status: "error", message: error instanceof Error ? error.message : "Unable to record the opt-in." };
+  }
+}
+
+// ---- Payment received (admin only) ----
+
+export type PaymentPickerState =
+  | { status: "idle" }
+  | { status: "error"; message: string }
+  | { status: "ready" | "queued"; message: string; rows: RecipientRow[]; sample: { name: string; date: string; amount: string; mode: string } | null };
+
+export async function previewPaymentUpdatesAction(from: string, to: string): Promise<PaymentPickerState> {
+  try {
+    await requireSendPermission();
+    const audience = await planPaymentUpdates(await getCurrentCityId(), from, to);
+    const left = [
+      audience.noConsent > 0 ? `${audience.noConsent} without WhatsApp consent` : "",
+      audience.noPaymentOptIn > 0 ? `${audience.noPaymentOptIn} whose customers haven't opted in to payment updates (set that on the Consent tab)` : "",
+      audience.noNumber > 0 ? `${audience.noNumber} without a usable number` : "",
+    ].filter(Boolean);
+    const first = audience.candidates[0];
+    return {
+      status: "ready",
+      message:
+        audience.verified === 0
+          ? "No verified payments in that date range."
+          : `${audience.verified} verified payment(s); ${audience.candidates.length} can get a receipt${left.length > 0 ? `. Left out: ${left.join(", ")}` : ""}${audience.truncated ? ". Only the most recent are shown; narrow the dates" : ""}.`,
+      // One row per PAYMENT (a customer can have several): the id is the payment's.
+      rows: audience.candidates.map((candidate) => ({
+        id: candidate.paymentId,
+        code: candidate.customerCode,
+        name: `${candidate.customerName} · ${modeLabel(candidate.mode)} · ${readableDay(candidate.day)}`,
+        detail: money(candidate.amount),
+        amount: candidate.amount,
+        routeId: candidate.routeId,
+        routeLabel: candidate.routeLabel,
+        vehicleId: candidate.vehicleId,
+        vehicleLabel: candidate.vehicleLabel,
+      })),
+      sample: first ? { name: first.customerName, date: readableDay(first.day), amount: first.amount.toFixed(2), mode: first.mode } : null,
+    };
+  } catch (error) {
+    return { status: "error", message: error instanceof Error ? error.message : "Unable to prepare payment receipts." };
+  }
+}
+
+export async function queuePaymentUpdatesAction(from: string, to: string, paymentIds: string[]): Promise<PaymentPickerState> {
+  try {
+    await requireSendPermission();
+    const ids = idList.safeParse(paymentIds);
+    if (!ids.success) return { status: "error", message: "Invalid selection." };
+    if (ids.data.length === 0) return { status: "error", message: "Select at least one payment." };
+
+    const result = await enqueuePaymentUpdates({ cityId: await getCurrentCityId(), from, to, paymentIds: ids.data });
+    revalidatePath("/whatsapp");
+    const parts = [`Queued ${result.queued} payment receipt(s).`];
+    if (result.alreadyQueued > 0) parts.push(`${result.alreadyQueued} had already been queued.`);
+    return { status: "queued", message: parts.join(" "), rows: [], sample: null };
+  } catch (error) {
+    return { status: "error", message: error instanceof Error ? error.message : "Unable to queue payment receipts." };
   }
 }

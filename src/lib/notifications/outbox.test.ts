@@ -1,7 +1,11 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { cancelMessages, enqueueMonthlyBills, getPendingMessages, planMonthlyBills } from "@/lib/notifications/outbox";
 import { claimForZoepact, claimPending, reportOutcomes } from "@/lib/notifications/dispatch";
+import { bulkOptInDeliveryUpdates, bulkOptInUpdates, getConsentSummary, planDeliveryOptIn, planUpdatesOptIn, setCustomerConsent, setDeliveryUpdatesConsent, setUpdatesConsent } from "@/lib/notifications/consent";
+import { enqueuePaymentUpdates, planPaymentUpdates } from "@/lib/notifications/payment-updates";
+import { runZoepactBatch } from "@/lib/notifications/zoepact-sender";
+import { enqueueDeliveryUpdates, planDeliveryUpdates } from "@/lib/notifications/delivery-updates";
 import { enqueueNotice, planNoticeAudience } from "@/lib/notifications/notices";
 import { enqueuePaymentReminders, planPaymentReminders } from "@/lib/notifications/reminders";
 
@@ -487,5 +491,401 @@ describe("notices", () => {
     const forZoepact = (await claimForZoepact(50)).filter((row) => row.recipient === "919812345678");
     expect(forZoepact).toHaveLength(1);
     expect(forZoepact[0].template).toBe("rate_change_notice_v1");
+  });
+});
+
+describe("delivery completed", () => {
+  const day = "2026-11-21";
+  let entryId: string;
+  let paneerId: string;
+
+  async function line(customerId: string, sequenceNo: number, options: { skipped?: boolean; milk?: number; paneer?: number }) {
+    const created = await db.dailyRouteEntryLine.create({ data: { entryId, customerId, sequenceNo, skipped: options.skipped ?? false } });
+    if (options.milk) await db.dailyRouteEntryLineProduct.create({ data: { lineId: created.id, productId, quantity: options.milk, rateSnapshot: 62 } });
+    if (options.paneer) await db.dailyRouteEntryLineProduct.create({ data: { lineId: created.id, productId: paneerId, quantity: options.paneer, rateSnapshot: 320 } });
+  }
+
+  beforeEach(async () => {
+    // Display orders are explicit: the message must list products in the shop's own order, not in whatever order the database returns them.
+    await db.product.update({ where: { id: productId }, data: { displayOrder: 1 } });
+    const paneer = await db.product.create({ data: { cityId, code: `WAQ-${suffix}-${Math.random().toString(36).slice(2, 6)}`, name: "WA Test Paneer", unit: "kg", defaultRate: 320, displayOrder: 2 } });
+    paneerId = paneer.id;
+    const entry = await db.dailyRouteEntry.create({ data: { routeId, entryDate: new Date(`${day}T00:00:00.000Z`) } });
+    entryId = entry.id;
+
+    // Delivery updates are a separate opt-in: only ok has agreed to them.
+    await db.customer.update({ where: { id: customers.ok }, data: { deliveryUpdatesOptInAt: new Date() } });
+    await line(customers.ok, 1, { milk: 2, paneer: 0.5 });
+    await line(customers.noconsent, 2, { milk: 1 });
+    await line(customers.nomobile, 3, { milk: 1 });
+    await line(customers.badmobile, 4, { milk: 1 });
+    await line(customers.zero, 5, { skipped: true }); // skipped: not delivered, so not on the list
+  });
+
+  afterEach(async () => {
+    await db.customer.updateMany({ where: { id: { in: Object.values(customers) } }, data: { deliveryUpdatesOptInAt: null } });
+    await db.dailyRouteEntryLineProduct.deleteMany({ where: { line: { entryId } } });
+    await db.dailyRouteEntryLine.deleteMany({ where: { entryId } });
+    await db.dailyRouteEntry.deleteMany({ where: { id: entryId } });
+    await db.product.deleteMany({ where: { id: paneerId } });
+  });
+
+  it("lists who was delivered what, with the price of each line and the day's total", async () => {
+    const plan = await planDeliveryUpdates(cityId, day);
+
+    expect(plan.candidates.map((candidate) => candidate.customerId)).toEqual([customers.ok]);
+    expect(plan.candidates[0]).toMatchObject({
+      itemsText: "WA Test Milk 2 ltr = ₹124; WA Test Paneer 0.5 kg = ₹160",
+      amount: 284,
+      recipient: "919812345678",
+      routeId,
+      routeLabel: `WAR-${suffix} - WA Test Route`,
+      vehicleId,
+    });
+    // Delivered that day: ok, noconsent, nomobile, badmobile. The skipped stop is not counted.
+    // noconsent has no WhatsApp consent; nomobile and badmobile have it but have not opted in to
+    // delivery updates, and that is the reason the office needs to see first.
+    expect(plan).toMatchObject({ delivered: 4, noConsent: 1, noDeliveryOptIn: 2, noNumber: 0, tooLong: 0 });
+  });
+
+  it("reports a customer who opted in but has no usable number as that, not as left out for consent", async () => {
+    await db.customer.updateMany({ where: { id: { in: [customers.nomobile, customers.badmobile] } }, data: { deliveryUpdatesOptInAt: new Date() } });
+    const plan = await planDeliveryUpdates(cityId, day);
+    expect(plan).toMatchObject({ noConsent: 1, noDeliveryOptIn: 0, noNumber: 2 });
+    expect(plan.candidates.map((candidate) => candidate.customerId)).toEqual([customers.ok]);
+  });
+
+  it("lists the products in the shop's own display order, whichever way the database returns them", async () => {
+    await db.product.update({ where: { id: paneerId }, data: { displayOrder: 0 } }); // now before the milk (1)
+    const plan = await planDeliveryUpdates(cityId, day);
+    expect(plan.candidates[0].itemsText).toBe("WA Test Paneer 0.5 kg = ₹160; WA Test Milk 2 ltr = ₹124");
+  });
+
+  it("finds nothing for a date with no deliveries, and refuses a bad date", async () => {
+    expect(await planDeliveryUpdates(cityId, "2026-11-22")).toMatchObject({ delivered: 0, candidates: [] });
+    await expect(planDeliveryUpdates(cityId, "21/11/2026")).rejects.toThrow();
+    await expect(planDeliveryUpdates(cityId, "2026-13-45")).rejects.toThrow();
+  });
+
+  it("queues the chosen customers with the figures as they were, and a readable date", async () => {
+    const result = await enqueueDeliveryUpdates({ cityId, day, customerIds: [customers.ok] });
+    expect(result.queued).toBe(1);
+
+    const rows = await db.notificationOutbox.findMany({ where: { customerId: { in: Object.values(customers) } } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ template: "delivery_completed_v1", recipient: "919812345678", status: "PENDING" });
+    expect(rows[0].variables).toEqual({ date: "21 November 2026", itemsText: "WA Test Milk 2 ltr = ₹124; WA Test Paneer 0.5 kg = ₹160", amount: "284.00" });
+  });
+
+  it("can only narrow: a customer without consent, a number or a delivery is ignored even if named", async () => {
+    const result = await enqueueDeliveryUpdates({
+      cityId, day, customerIds: [customers.noconsent, customers.nomobile, customers.badmobile, customers.zero],
+    });
+    expect(result.queued).toBe(0);
+    expect(await db.notificationOutbox.count({ where: { customerId: { in: Object.values(customers) } } })).toBe(0);
+  });
+
+  it("sends one message per customer per delivery date, however many times it is pressed", async () => {
+    const first = await enqueueDeliveryUpdates({ cityId, day, customerIds: [customers.ok] });
+    const again = await enqueueDeliveryUpdates({ cityId, day, customerIds: [customers.ok] });
+    expect(first.queued).toBe(1);
+    expect(again).toMatchObject({ queued: 0, alreadyQueued: 1 });
+  });
+
+  it("hands the queued update to the Zoepact sender, never the old text agent", async () => {
+    await enqueueDeliveryUpdates({ cityId, day, customerIds: [customers.ok] });
+
+    expect((await claimPending(50)).filter((message) => message.chatId === "919812345678@c.us")).toHaveLength(0);
+    const forZoepact = (await claimForZoepact(50)).filter((row) => row.recipient === "919812345678");
+    expect(forZoepact).toHaveLength(1);
+    expect(forZoepact[0].template).toBe("delivery_completed_v1");
+  });
+});
+
+describe("delivery updates consent", () => {
+  const day = "2026-11-21";
+  const everyone = () => Object.values(customers);
+
+  async function reset() {
+    await db.customer.updateMany({ where: { id: { in: everyone() } }, data: { deliveryUpdatesOptInAt: null } });
+    // The fixtures' general WhatsApp consent, which a test may have withdrawn.
+    for (const key of ["ok", "nomobile", "badmobile", "zero"]) {
+      await db.customer.update({ where: { id: customers[key] }, data: { whatsappOptInAt: new Date() } });
+    }
+    await db.customer.update({ where: { id: customers.noconsent }, data: { whatsappOptInAt: null } });
+  }
+
+  beforeEach(reset);
+  afterEach(reset);
+
+  it("lists only customers who could be opted in: WhatsApp consent, a usable number, not already opted in", async () => {
+    await db.customer.update({ where: { id: customers.zero }, data: { deliveryUpdatesOptInAt: new Date() } });
+    const plan = await planDeliveryOptIn(cityId);
+    const ours = plan.candidates.filter((candidate) => everyone().includes(candidate.customerId));
+
+    expect(ours.map((candidate) => candidate.customerId)).toEqual([customers.ok]);
+    expect(plan.alreadyOptedIn).toBeGreaterThanOrEqual(1); // zero
+    expect(plan.noWhatsAppConsent).toBeGreaterThanOrEqual(1); // noconsent
+    expect(plan.noNumber).toBeGreaterThanOrEqual(2); // nomobile, badmobile
+  });
+
+  it("will not opt in someone who has not agreed to WhatsApp at all", async () => {
+    await expect(setDeliveryUpdatesConsent({ cityId, customerId: customers.noconsent, optIn: true })).rejects.toThrow(/WhatsApp/);
+    const row = await db.customer.findUniqueOrThrow({ where: { id: customers.noconsent } });
+    expect(row.deliveryUpdatesOptInAt).toBeNull();
+  });
+
+  it("records a dated opt-in, and an opt-out clears it", async () => {
+    await setDeliveryUpdatesConsent({ cityId, customerId: customers.ok, optIn: true });
+    expect((await db.customer.findUniqueOrThrow({ where: { id: customers.ok } })).deliveryUpdatesOptInAt).toBeInstanceOf(Date);
+
+    await setDeliveryUpdatesConsent({ cityId, customerId: customers.ok, optIn: false });
+    expect((await db.customer.findUniqueOrThrow({ where: { id: customers.ok } })).deliveryUpdatesOptInAt).toBeNull();
+  });
+
+  it("withdrawing WhatsApp consent withdraws the delivery opt-in with it", async () => {
+    await setDeliveryUpdatesConsent({ cityId, customerId: customers.ok, optIn: true });
+    await setCustomerConsent({ cityId, customerId: customers.ok, optIn: false });
+
+    const row = await db.customer.findUniqueOrThrow({ where: { id: customers.ok } });
+    expect(row.whatsappOptInAt).toBeNull();
+    expect(row.deliveryUpdatesOptInAt).toBeNull();
+  });
+
+  it("opts in the chosen customers only, and can only narrow: an ineligible one named is ignored", async () => {
+    const count = await bulkOptInDeliveryUpdates({ cityId, customerIds: [customers.ok, customers.noconsent, customers.nomobile, customers.badmobile] });
+    expect(count).toBe(1);
+
+    const rows = await db.customer.findMany({ where: { id: { in: everyone() } }, select: { id: true, deliveryUpdatesOptInAt: true } });
+    expect(rows.filter((row) => row.deliveryUpdatesOptInAt).map((row) => row.id)).toEqual([customers.ok]);
+
+    // Asking again changes nothing: already opted in.
+    expect(await bulkOptInDeliveryUpdates({ cityId, customerIds: [customers.ok] })).toBe(0);
+    expect(await bulkOptInDeliveryUpdates({ cityId, customerIds: [] })).toBe(0);
+  });
+
+  it("counts the opt-ins in the consent summary", async () => {
+    const before = (await getConsentSummary(cityId)).deliveryUpdatesOptedIn;
+    await setDeliveryUpdatesConsent({ cityId, customerId: customers.ok, optIn: true });
+    expect((await getConsentSummary(cityId)).deliveryUpdatesOptedIn).toBe(before + 1);
+  });
+
+  it("keeps a customer off the delivery list until they opt in, and tells the office why", async () => {
+    const entry = await db.dailyRouteEntry.create({ data: { routeId, entryDate: new Date(`${day}T00:00:00.000Z`) } });
+    const created = await db.dailyRouteEntryLine.create({ data: { entryId: entry.id, customerId: customers.ok, sequenceNo: 1 } });
+    await db.dailyRouteEntryLineProduct.create({ data: { lineId: created.id, productId, quantity: 1, rateSnapshot: 62 } });
+    try {
+      // General WhatsApp consent only: not enough for delivery updates.
+      const before = await planDeliveryUpdates(cityId, day);
+      expect(before.candidates).toHaveLength(0);
+      expect(before).toMatchObject({ delivered: 1, noDeliveryOptIn: 1, noConsent: 0 });
+      expect((await enqueueDeliveryUpdates({ cityId, day, customerIds: [customers.ok] })).queued).toBe(0);
+
+      await setDeliveryUpdatesConsent({ cityId, customerId: customers.ok, optIn: true });
+      const after = await planDeliveryUpdates(cityId, day);
+      expect(after.candidates.map((candidate) => candidate.customerId)).toEqual([customers.ok]);
+      expect(after.noDeliveryOptIn).toBe(0);
+    } finally {
+      await db.dailyRouteEntryLineProduct.deleteMany({ where: { line: { entryId: entry.id } } });
+      await db.dailyRouteEntryLine.deleteMany({ where: { entryId: entry.id } });
+      await db.dailyRouteEntry.delete({ where: { id: entry.id } });
+    }
+  });
+});
+
+describe("payment updates consent", () => {
+  const everyone = () => Object.values(customers);
+
+  async function reset() {
+    await db.customer.updateMany({ where: { id: { in: everyone() } }, data: { deliveryUpdatesOptInAt: null, paymentUpdatesOptInAt: null } });
+    for (const key of ["ok", "nomobile", "badmobile", "zero"]) {
+      await db.customer.update({ where: { id: customers[key] }, data: { whatsappOptInAt: new Date() } });
+    }
+    await db.customer.update({ where: { id: customers.noconsent }, data: { whatsappOptInAt: null } });
+  }
+  beforeEach(reset);
+  afterEach(reset);
+
+  it("is its own opt-in: agreeing to delivery updates does not agree to payment updates, or the reverse", async () => {
+    await setUpdatesConsent({ cityId, customerId: customers.ok, kind: "delivery", optIn: true });
+    let row = await db.customer.findUniqueOrThrow({ where: { id: customers.ok } });
+    expect(row.deliveryUpdatesOptInAt).toBeInstanceOf(Date);
+    expect(row.paymentUpdatesOptInAt).toBeNull();
+
+    await setUpdatesConsent({ cityId, customerId: customers.ok, kind: "payment", optIn: true });
+    await setUpdatesConsent({ cityId, customerId: customers.ok, kind: "delivery", optIn: false });
+    row = await db.customer.findUniqueOrThrow({ where: { id: customers.ok } });
+    expect(row.deliveryUpdatesOptInAt).toBeNull();
+    expect(row.paymentUpdatesOptInAt).toBeInstanceOf(Date);
+  });
+
+  it("needs general WhatsApp consent first, and withdrawing it withdraws both extras", async () => {
+    await expect(setUpdatesConsent({ cityId, customerId: customers.noconsent, kind: "payment", optIn: true })).rejects.toThrow(/WhatsApp/);
+
+    await setUpdatesConsent({ cityId, customerId: customers.ok, kind: "delivery", optIn: true });
+    await setUpdatesConsent({ cityId, customerId: customers.ok, kind: "payment", optIn: true });
+    await setCustomerConsent({ cityId, customerId: customers.ok, optIn: false });
+    const row = await db.customer.findUniqueOrThrow({ where: { id: customers.ok } });
+    expect(row).toMatchObject({ whatsappOptInAt: null, deliveryUpdatesOptInAt: null, paymentUpdatesOptInAt: null });
+  });
+
+  it("lists who could be opted in to payment updates, and opts in only the eligible chosen", async () => {
+    // ok and zero both have WhatsApp consent and a usable number and have not agreed to payment
+    // updates yet; noconsent, nomobile and badmobile cannot be listed.
+    const plan = await planUpdatesOptIn(cityId, "payment");
+    expect(plan.candidates.filter((candidate) => everyone().includes(candidate.customerId)).map((candidate) => candidate.customerId).sort()).toEqual([customers.ok, customers.zero].sort());
+
+    const count = await bulkOptInUpdates({ cityId, kind: "payment", customerIds: [customers.ok, customers.noconsent, customers.nomobile, customers.badmobile] });
+    expect(count).toBe(1);
+    expect(await bulkOptInUpdates({ cityId, kind: "payment", customerIds: [customers.ok] })).toBe(0);
+    // The delivery list is unaffected.
+    expect((await planDeliveryOptIn(cityId)).candidates.some((candidate) => candidate.customerId === customers.ok)).toBe(true);
+  });
+
+  it("counts payment opt-ins in the consent summary, separately from delivery", async () => {
+    const before = await getConsentSummary(cityId);
+    await setUpdatesConsent({ cityId, customerId: customers.ok, kind: "payment", optIn: true });
+    const after = await getConsentSummary(cityId);
+    expect(after.paymentUpdatesOptedIn).toBe(before.paymentUpdatesOptedIn + 1);
+    expect(after.deliveryUpdatesOptedIn).toBe(before.deliveryUpdatesOptedIn);
+  });
+});
+
+describe("payment received", () => {
+  const from = "2026-11-18";
+  const to = "2026-11-21";
+  const made: string[] = [];
+
+  async function pay(customerKey: string, amount: number, status: "VERIFIED" | "PENDING" | "CANCELLED", options: { date?: string; mode?: "CASH" | "UPI"; routeLess?: boolean } = {}) {
+    const payment = await db.payment.create({
+      data: {
+        customerId: customers[customerKey],
+        routeId: options.routeLess ? null : routeId,
+        amount,
+        mode: options.mode ?? "CASH",
+        status,
+        paymentDate: new Date(`${options.date ?? "2026-11-20"}T00:00:00.000Z`),
+      },
+    });
+    made.push(payment.id);
+    return payment;
+  }
+
+  beforeEach(async () => {
+    // ok has agreed to both; noconsent has not agreed to WhatsApp at all; zero agreed to WhatsApp but not to payment updates.
+    await db.customer.updateMany({ where: { id: { in: Object.values(customers) } }, data: { paymentUpdatesOptInAt: null } });
+    await db.customer.update({ where: { id: customers.ok }, data: { paymentUpdatesOptInAt: new Date() } });
+  });
+
+  afterEach(async () => {
+    await db.payment.deleteMany({ where: { id: { in: made.splice(0) } } });
+    await db.customer.updateMany({ where: { id: { in: Object.values(customers) } }, data: { paymentUpdatesOptInAt: null } });
+  });
+
+  it("lists only VERIFIED payments, with the amount, date, mode, route and vehicle", async () => {
+    await pay("ok", 1500, "VERIFIED", { mode: "UPI" });
+    await pay("ok", 700, "PENDING");
+    await pay("ok", 900, "CANCELLED");
+
+    const plan = await planPaymentUpdates(cityId, from, to);
+    expect(plan.candidates).toHaveLength(1);
+    expect(plan.candidates[0]).toMatchObject({
+      customerId: customers.ok, amount: 1500, day: "2026-11-20", mode: "UPI", recipient: "919812345678",
+      routeId, routeLabel: `WAR-${suffix} - WA Test Route`, vehicleId,
+    });
+    expect(plan.verified).toBe(1);
+  });
+
+  it("leaves out payments by customers without consent, without the payment opt-in, or without a number, and says why", async () => {
+    await pay("ok", 100, "VERIFIED");
+    await pay("noconsent", 200, "VERIFIED"); //   no WhatsApp consent at all
+    await pay("zero", 300, "VERIFIED"); //        WhatsApp yes, payment updates no
+    await db.customer.update({ where: { id: customers.badmobile }, data: { paymentUpdatesOptInAt: new Date() } });
+    await pay("badmobile", 400, "VERIFIED"); //   opted in but the number is unusable
+
+    const plan = await planPaymentUpdates(cityId, from, to);
+    expect(plan.candidates.map((candidate) => candidate.customerId)).toEqual([customers.ok]);
+    expect(plan).toMatchObject({ verified: 4, noConsent: 1, noPaymentOptIn: 1, noNumber: 1 });
+  });
+
+  it("only looks inside the date range, and keeps a payment with no route", async () => {
+    await pay("ok", 100, "VERIFIED", { date: "2026-11-10" }); // before
+    await pay("ok", 200, "VERIFIED", { date: "2026-11-25" }); // after
+    await pay("ok", 300, "VERIFIED", { date: "2026-11-18" }); // first day, included
+    await pay("ok", 400, "VERIFIED", { date: "2026-11-21", routeLess: true }); // last day, no route
+
+    const plan = await planPaymentUpdates(cityId, from, to);
+    expect(plan.candidates.map((candidate) => candidate.amount).sort()).toEqual([300, 400]);
+    expect(plan.candidates.find((candidate) => candidate.amount === 400)).toMatchObject({ routeId: "", vehicleId: "" });
+  });
+
+  it("refuses a bad or over-long date range", async () => {
+    await expect(planPaymentUpdates(cityId, "21/11/2026", to)).rejects.toThrow();
+    await expect(planPaymentUpdates(cityId, to, from)).rejects.toThrow(/after/);
+    await expect(planPaymentUpdates(cityId, "2026-01-01", "2026-03-01")).rejects.toThrow(/at most/);
+  });
+
+  it("queues a receipt only for the payments chosen, and can only narrow", async () => {
+    const a = await pay("ok", 1500, "VERIFIED");
+    const b = await pay("ok", 250, "VERIFIED");
+    const pending = await pay("ok", 999, "PENDING");
+    const noConsent = await pay("noconsent", 100, "VERIFIED");
+
+    const result = await enqueuePaymentUpdates({ cityId, from, to, paymentIds: [a.id, pending.id, noConsent.id] });
+    expect(result.queued).toBe(1);
+
+    const rows = await db.notificationOutbox.findMany({ where: { customerId: { in: Object.values(customers) } } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ template: "payment_received_v1", recipient: "919812345678", status: "PENDING" });
+    expect(rows[0].variables).toEqual({ amount: "1500.00", date: "20 November 2026", mode: "CASH", paymentId: a.id });
+    expect(b.id).not.toBe(a.id);
+  });
+
+  it("sends one receipt per payment however often it is pressed, and one customer's two payments are two messages", async () => {
+    const a = await pay("ok", 1500, "VERIFIED");
+    const b = await pay("ok", 250, "VERIFIED");
+
+    expect((await enqueuePaymentUpdates({ cityId, from, to, paymentIds: [a.id] })).queued).toBe(1);
+    expect(await enqueuePaymentUpdates({ cityId, from, to, paymentIds: [a.id] })).toMatchObject({ queued: 0, alreadyQueued: 1 });
+    expect((await enqueuePaymentUpdates({ cityId, from, to, paymentIds: [a.id, b.id] })).queued).toBe(1);
+    expect(await db.notificationOutbox.count({ where: { customerId: customers.ok } })).toBe(2);
+  });
+
+  it("does not send a receipt for a payment cancelled after it was queued", async () => {
+    const kept = await pay("ok", 1500, "VERIFIED");
+    const cancelled = await pay("ok", 250, "VERIFIED");
+    await enqueuePaymentUpdates({ cityId, from, to, paymentIds: [kept.id, cancelled.id] });
+    await db.payment.update({ where: { id: cancelled.id }, data: { status: "CANCELLED" } });
+    // The sender only takes rows that are due. The batch below pretends it is 20 Nov, so make them due then.
+    await db.notificationOutbox.updateMany({ where: { customerId: customers.ok }, data: { notBefore: new Date("2026-11-19T00:00:00Z") } });
+
+    process.env.ZOEPACT_API_KEY = "test-key";
+    const sent: string[] = [];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith("/wallet")) return new Response(JSON.stringify({ success: true, data: { balance: 500 } }), { status: 200 });
+      if (url.endsWith("/templates/sync")) return new Response(JSON.stringify({ success: true, data: {} }), { status: 200 });
+      sent.push(String(init?.body));
+      return new Response(JSON.stringify({ success: true, data: { message_id: "wamid.TEST" } }), { status: 200 });
+    });
+    try {
+      // 11:00 IST: inside the sending hours.
+      const result = await runZoepactBatch(new Date("2026-11-20T05:30:00Z"));
+      expect(result.status).toBe("ran");
+    } finally {
+      fetchSpy.mockRestore();
+      delete process.env.ZOEPACT_API_KEY;
+    }
+
+    // Only the payment that is still verified was sent.
+    const templateCalls = sent.filter((body) => body.includes("bsmp_payment_received_v1"));
+    expect(templateCalls).toHaveLength(1);
+    expect(templateCalls[0]).toContain("1,500.00");
+
+    const rows = await db.notificationOutbox.findMany({ where: { customerId: customers.ok } });
+    const byPayment = new Map(rows.map((row) => [(row.variables as { paymentId: string }).paymentId, row]));
+    expect(byPayment.get(kept.id)).toMatchObject({ status: "SENT", providerRef: "wamid.TEST" });
+    expect(byPayment.get(cancelled.id)).toMatchObject({ status: "FAILED" });
+    expect(byPayment.get(cancelled.id)?.lastError).toMatch(/no longer verified/);
   });
 });

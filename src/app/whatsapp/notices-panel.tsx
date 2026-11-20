@@ -34,7 +34,7 @@ function fill(body: string, values: string[]): string {
 // the blanks is fixed and the office fills the blanks. The rate change takes any number
 // of products: they are joined into one line, because a WhatsApp template value can't
 // contain a line break.
-export function NoticesPanel({ canSend, products }: { canSend: boolean; products: NoticeProduct[] }) {
+export function NoticesPanel({ canSend, products, wording }: { canSend: boolean; products: NoticeProduct[]; wording: Record<string, { body: string; footer: string }> }) {
   const [kind, setKind] = useState<NoticeKind>("rate_change_notice_v1");
 
   // Rate change
@@ -68,6 +68,19 @@ export function NoticesPanel({ canSend, products }: { canSend: boolean; products
       ? rateChangeValues(variables as { effectiveDate: string; ratesTextHi: string; ratesTextEn: string })
       : deliveryNoticeValues(variables as { date: string; messageHi: string; messageEn: string });
   const ratesLength = kind === "rate_change_notice_v1" ? Math.max((variables as { ratesTextHi: string }).ratesTextHi.length, (variables as { ratesTextEn: string }).ratesTextEn.length) : 0;
+
+  // What still has to be filled in, in plain words, so the office isn't left guessing.
+  const missing: string[] =
+    kind === "rate_change_notice_v1"
+      ? [
+          !effectiveFrom ? "the date the new rates apply from" : "",
+          !rows.some((row) => row.name.trim() && row.oldRate !== "" && row.newRate !== "") ? "a product with its name, old rate and new rate" : "",
+        ].filter(Boolean)
+      : [
+          !noticeDate ? "the date" : "",
+          !messageHi.trim() ? "the message in Hindi" : "",
+          !messageEn.trim() ? "the message in English" : "",
+        ].filter(Boolean);
 
   const setRow = (key: number, patch: Partial<RateRow>) => setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
 
@@ -196,7 +209,11 @@ export function NoticesPanel({ canSend, products }: { canSend: boolean; products
             </div>
           )}
 
-          {problem ? <p className="text-sm text-text-muted">To continue: complete every field.</p> : null}
+          {problem ? (
+            <p className="text-sm text-text-muted">
+              {missing.length > 0 ? `To continue, add ${missing.join(", ")}` : `Check the text: each part must be one line, under ${MAX_NOTICE_TEXT} characters`}
+            </p>
+          ) : null}
 
           <div className="flex flex-wrap gap-2">
             <SecondaryButton type="button" onClick={chooseWho} disabled={!canSend || pending || problem !== null}>
@@ -216,10 +233,10 @@ export function NoticesPanel({ canSend, products }: { canSend: boolean; products
 
         <div className="rounded-lg border border-surface-border bg-surface p-4">
           <h2 className="text-sm font-semibold text-text-primary">What the customer receives</h2>
-          <div className="mt-3 max-h-[28rem] overflow-auto whitespace-pre-wrap rounded-lg bg-surface-muted p-3 text-sm leading-relaxed text-text-primary">
-            {fill(template.body, values)}
+          <div className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-surface-muted p-3 text-sm leading-relaxed text-text-primary">
+            {fill(wording[kind]?.body ?? template.body, values)}
             {"\n\n"}
-            {template.footer}
+            {wording[kind]?.footer ?? template.footer}
           </div>
           <p className="mt-2 text-xs text-text-secondary">Category: {template.category}. Meta decides the final category when it reviews the template.</p>
         </div>

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  paymentModeWords, paymentReceivedValues,
+  buildDeliveredItemsText, deliveryCompletedValues,
+  buttonLabelOf, SLOT_HELP, validateWording, versionName,
   buildRatesText, buildRatesTextHindi, deliveryNoticeValues, hindiUnit, isSingleLine, monthlyBillLinkValues, monthNames, paymentReminderValues,
   rateChangeValues, toSingleLine, ZOEPACT_TEMPLATES, zoepactVariableSchemas,
 } from "@/lib/notifications/zoepact-templates";
@@ -143,5 +146,120 @@ describe("rate change in Hindi and English", () => {
 
   it("keeps a Hindi name to one line", () => {
     expect(isSingleLine(buildRatesTextHindi([{ name: "x", nameHi: "भैंस\nका दूध", unit: "litre", oldRate: 1, newRate: 2 }]))).toBe(true);
+  });
+});
+
+describe("editing a template's wording", () => {
+  const key = "payment_reminder_hi_en_v1" as const;
+  const ok = { body: "Hello. Month {{1}}, amount {{2}}. Also {{3}} and {{4}}. Thanks", footer: "My Dairy" };
+
+  it("accepts the built-in wording of every template unchanged", () => {
+    for (const [templateKey, template] of Object.entries(ZOEPACT_TEMPLATES)) {
+      expect(
+        validateWording(templateKey as keyof typeof ZOEPACT_TEMPLATES, {
+          body: template.body, footer: template.footer, buttonText: "buttons" in template ? template.buttons[0].text : undefined,
+        }),
+        templateKey,
+      ).toEqual([]);
+    }
+  });
+
+  it("describes every blank of every template", () => {
+    for (const [templateKey, template] of Object.entries(ZOEPACT_TEMPLATES)) {
+      expect(SLOT_HELP[templateKey as keyof typeof SLOT_HELP], templateKey).toHaveLength(template.slots);
+    }
+  });
+
+  it("accepts reworded text that keeps every blank, in any order", () => {
+    expect(validateWording(key, ok)).toEqual([]);
+    expect(validateWording(key, { ...ok, body: "Dear customer. English: {{3}} {{4}}. Hindi: {{1}} {{2}}. Thank you" })).toEqual([]);
+  });
+
+  it("refuses a message that loses a blank, repeats one, or invents one", () => {
+    expect(validateWording(key, { ...ok, body: "Month {{1}}, amount {{2}}. Done" }).join(" ")).toMatch(/Missing \{\{3\}\}, \{\{4\}\}/);
+    expect(validateWording(key, { ...ok, body: "A {{1}} B {{1}} C {{2}} D {{3}} E {{4}} F" }).join(" ")).toMatch(/\{\{1\}\} is used 2 times/);
+    expect(validateWording(key, { ...ok, body: "A {{1}} B {{2}} C {{3}} D {{4}} E {{5}} F" }).join(" ")).toMatch(/\{\{5\}\} doesn't exist/);
+  });
+
+  it("refuses a message that starts or ends on a blank, or has two blanks touching", () => {
+    expect(validateWording(key, { ...ok, body: "{{1}} then {{2}} {{3}} {{4}} end" }).join(" ")).toMatch(/can't start/);
+    expect(validateWording(key, { ...ok, body: "start {{1}} {{2}} {{3}} {{4}}" }).join(" ")).toMatch(/can't end/);
+    expect(validateWording(key, { ...ok, body: "start {{1}}{{2}} mid {{3}} and {{4}} end" }).join(" ")).toMatch(/touch/);
+  });
+
+  it("refuses odd brackets, an empty message and an over-long one", () => {
+    expect(validateWording(key, { ...ok, body: "A {{1}} B {{2}} C {{3}} D {{4}} E {name}{{" }).join(" ")).toMatch(/Blanks must be written/);
+    expect(validateWording(key, { ...ok, body: "   " })).toEqual(["The message can't be empty."]);
+    expect(validateWording(key, { ...ok, body: `${ok.body} ${"x".repeat(1100)}` }).join(" ")).toMatch(/1,024/);
+  });
+
+  it("checks the footer and, for the bill, the button label", () => {
+    expect(validateWording(key, { ...ok, footer: "x".repeat(61) }).join(" ")).toMatch(/footer is 61/);
+    expect(validateWording(key, { ...ok, footer: "a\nb" }).join(" ")).toMatch(/one line/);
+
+    const bill = { body: ZOEPACT_TEMPLATES.monthly_bill_link_v1.body, footer: "Dairy" };
+    expect(buttonLabelOf("monthly_bill_link_v1")).toBe("View bill");
+    expect(buttonLabelOf(key)).toBeNull();
+    expect(validateWording("monthly_bill_link_v1", { ...bill, buttonText: "" }).join(" ")).toMatch(/needs a label/);
+    expect(validateWording("monthly_bill_link_v1", { ...bill, buttonText: "x".repeat(26) }).join(" ")).toMatch(/limit is 25/);
+    expect(validateWording("monthly_bill_link_v1", { ...bill, buttonText: "Bill dekhein" })).toEqual([]);
+  });
+
+  it("names a new version after the template, keeping the name Meta-safe", () => {
+    expect(versionName(key, 2)).toBe("bsmp_payment_reminder_v2");
+    expect(versionName("monthly_bill_link_v1", 3)).toBe("bsmp_monthly_bill_v3");
+    expect(versionName("rate_change_notice_v1", 2)).toMatch(/^[a-z0-9_]+$/);
+  });
+});
+
+describe("delivery completed", () => {
+  it("lists each product with its quantity and price on one line", () => {
+    expect(buildDeliveredItemsText([{ name: "Buffalo milk", quantity: 1, unit: "litre", amount: 90 }])).toBe("Buffalo milk 1 litre = ₹90");
+    const text = buildDeliveredItemsText([
+      { name: "Buffalo milk", quantity: 1.5, unit: "litre", amount: 135 },
+      { name: "Paneer", quantity: 0.25, unit: "kg", amount: 82.5 },
+      { name: "Eggs", quantity: 6, unit: "", amount: 42 },
+    ]);
+    expect(text).toBe("Buffalo milk 1.5 litre = ₹135; Paneer 0.25 kg = ₹82.50; Eggs 6 = ₹42");
+    expect(isSingleLine(text)).toBe(true);
+  });
+
+  it("fills the six slots: date, products, total, in Hindi then English", () => {
+    expect(deliveryCompletedValues({ date: "21 November 2026", itemsText: "Milk 2 ltr = ₹124", amount: "124" })).toEqual([
+      "21 November 2026", "Milk 2 ltr = ₹124", "124.00", "21 November 2026", "Milk 2 ltr = ₹124", "124.00",
+    ]);
+    expect(ZOEPACT_TEMPLATES.delivery_completed_v1.slots).toBe(6);
+  });
+
+  it("needs a date, the products and a total", () => {
+    const schema = zoepactVariableSchemas.delivery_completed_v1;
+    expect(schema.safeParse({ date: "21 Nov", itemsText: "Milk 1 ltr = ₹62", amount: "62.00" }).success).toBe(true);
+    expect(schema.safeParse({ date: "21 Nov", itemsText: "", amount: "62" }).success).toBe(false);
+    expect(schema.safeParse({ date: "21 Nov", itemsText: "a\nb", amount: "62" }).success).toBe(false);
+  });
+});
+
+describe("payment received", () => {
+  it("fills the six slots: amount, date and mode in Hindi, then the same in English", () => {
+    expect(paymentReceivedValues({ amount: "1500", date: "21 November 2026", mode: "CASH" })).toEqual([
+      "1,500.00", "21 November 2026", "नकद", "1,500.00", "21 November 2026", "cash",
+    ]);
+    expect(ZOEPACT_TEMPLATES.payment_received_v1.slots).toBe(6);
+  });
+
+  it("names every payment mode in words, and shows an unknown one as stored", () => {
+    expect(paymentModeWords("UPI")).toEqual({ hi: "UPI", en: "UPI" });
+    expect(paymentModeWords("BANK_TRANSFER")).toEqual({ hi: "बैंक ट्रांसफर", en: "bank transfer" });
+    expect(paymentModeWords("cheque")).toEqual({ hi: "चेक", en: "cheque" });
+    expect(paymentModeWords("WALLET")).toEqual({ hi: "WALLET", en: "WALLET" });
+  });
+
+  it("needs an amount, a date and a mode, and may carry the payment id", () => {
+    const schema = zoepactVariableSchemas.payment_received_v1;
+    const id = "3f2b8c1e-9d4a-4e7b-8a15-0c6d2f9e7b34";
+    expect(schema.safeParse({ amount: "100.00", date: "21 Nov", mode: "CASH", paymentId: id }).success).toBe(true);
+    expect(schema.safeParse({ amount: "100.00", date: "21 Nov", mode: "CASH" }).success).toBe(true);
+    expect(schema.safeParse({ amount: "100.00", date: "", mode: "CASH" }).success).toBe(false);
+    expect(schema.safeParse({ amount: "100.00", date: "21 Nov", mode: "CASH", paymentId: "nope" }).success).toBe(false);
   });
 });

@@ -119,6 +119,48 @@ export const ZOEPACT_TEMPLATES = {
       "We apologise for any inconvenience.",
     ].join("\n\n"),
   },
+
+  delivery_completed_v1: {
+    label: "Delivery completed",
+    description: "Tells a customer their milk delivery for a day is completed, with what was delivered, the price of each item and the day's total. Hindi and English in one message.",
+    zoepactName: "bsmp_delivery_completed_v1",
+    category: "utility",
+    language: "hi",
+    footer: FOOTER,
+    slots: 6,
+    body: [
+      "नमस्कार जी 🙏",
+      "{{1}} की आपकी दूध की डिलीवरी पूरी हो गई है:",
+      "{{2}}",
+      "कुल राशि: ₹ {{3}}",
+      "धन्यवाद 🙏",
+      "---",
+      "Dear Customer,",
+      "Your milk delivery on {{4}} is completed:",
+      "{{5}}",
+      "Total amount: ₹ {{6}}",
+      "Thank you for your support.",
+    ].join("\n\n"),
+  },
+
+  payment_received_v1: {
+    label: "Payment received",
+    description: "Confirms to a customer that a payment was received, with the amount, the date and how it was paid. Hindi and English in one message.",
+    zoepactName: "bsmp_payment_received_v1",
+    category: "utility",
+    language: "hi",
+    footer: FOOTER,
+    slots: 6,
+    body: [
+      "नमस्कार जी 🙏",
+      "आपका ₹ {{1}} का भुगतान ({{3}}) {{2}} को प्राप्त हो गया है।",
+      "धन्यवाद 🙏",
+      "---",
+      "Dear Customer,",
+      "We have received your payment of ₹ {{4}} ({{6}}) on {{5}}.",
+      "Thank you for your payment.",
+    ].join("\n\n"),
+  },
 } as const satisfies Record<string, ZoepactTemplateDefinition>;
 
 export type ZoepactTemplateKey = keyof typeof ZOEPACT_TEMPLATES;
@@ -181,6 +223,19 @@ export const zoepactVariableSchemas = {
     ratesTextHi: z.string().trim().min(1).max(MAX_NOTICE_TEXT).refine(isSingleLine, "Must be a single line"),
     ratesTextEn: z.string().trim().min(1).max(MAX_NOTICE_TEXT).refine(isSingleLine, "Must be a single line"),
   }),
+  payment_received_v1: z.object({
+    amount: money,
+    date: z.string().trim().min(1).max(40).refine(isSingleLine, "Must be a single line"),
+    // CASH, UPI, BANK_TRANSFER or CHEQUE, as stored; shown to the customer in words.
+    mode: z.string().trim().min(1).max(30).refine(isSingleLine, "Must be a single line"),
+    // Which payment this confirms, so the sender can stop it if the payment is cancelled before it is sent.
+    paymentId: z.string().uuid().optional(),
+  }),
+  delivery_completed_v1: z.object({
+    date: z.string().trim().min(1).max(40).refine(isSingleLine, "Must be a single line"),
+    itemsText: z.string().trim().min(1).max(MAX_NOTICE_TEXT).refine(isSingleLine, "Must be a single line"),
+    amount: money,
+  }),
   delivery_notice_v1: z.object({
     date: z.string().trim().min(1).max(40).refine(isSingleLine, "Must be a single line"),
     messageHi: z.string().trim().min(1).max(MAX_NOTICE_TEXT).refine(isSingleLine, "Must be a single line"),
@@ -217,7 +272,7 @@ export type RateChangeItem = {
 };
 
 // 60 -> "₹60", 62.5 -> "₹62.50": whole rupees stay plain, the rest keep paise.
-function rate(value: number | string): string {
+export function formatRupees(value: number | string): string {
   const amount = typeof value === "string" ? Number(value) : value;
   if (!Number.isFinite(amount)) return "₹0";
   return Number.isInteger(amount) ? `₹${amount}` : `₹${amount.toFixed(2)}`;
@@ -240,7 +295,7 @@ export function hindiUnit(unit: string): string {
 // English: "Milk (per litre): ₹60 → ₹62; Paneer (per kg): ₹320 → ₹340"
 export function buildRatesText(items: RateChangeItem[]): string {
   return items
-    .map((item) => `${toSingleLine(item.name)}${item.unit ? ` (per ${toSingleLine(item.unit)})` : ""}: ${rate(item.oldRate)} → ${rate(item.newRate)}`)
+    .map((item) => `${toSingleLine(item.name)}${item.unit ? ` (per ${toSingleLine(item.unit)})` : ""}: ${formatRupees(item.oldRate)} → ${formatRupees(item.newRate)}`)
     .join("; ");
 }
 
@@ -250,7 +305,7 @@ export function buildRatesTextHindi(items: RateChangeItem[]): string {
     .map((item) => {
       const name = toSingleLine(item.nameHi ?? "") || toSingleLine(item.name);
       const unit = toSingleLine(item.unitHi ?? "") || (item.unit ? hindiUnit(item.unit) : "");
-      return `${name}${unit ? ` (प्रति ${unit})` : ""}: ${rate(item.oldRate)} → ${rate(item.newRate)}`;
+      return `${name}${unit ? ` (प्रति ${unit})` : ""}: ${formatRupees(item.oldRate)} → ${formatRupees(item.newRate)}`;
     })
     .join("; ");
 }
@@ -265,4 +320,133 @@ export function rateChangeValues(params: RateChangeParams): string[] {
 
 export function deliveryNoticeValues(params: DeliveryNoticeParams): string[] {
   return [params.date, params.messageHi, params.date, params.messageEn];
+}
+
+// ---- Editing a template's wording ----
+
+// What each numbered blank means, so the editor can show it. The ORDER and MEANING of
+// the blanks is fixed by the code that fills them (the value builders above): a
+// reworded message may move them around, but must keep every one.
+export const SLOT_HELP: Record<ZoepactTemplateKey, string[]> = {
+  payment_reminder_hi_en_v1: ["Month, in Hindi", "Amount outstanding", "Month, in English", "Amount outstanding"],
+  monthly_bill_link_v1: ["Customer name", "Month, in Hindi", "Amount due", "Customer name", "Month, in English", "Amount due"],
+  rate_change_notice_v1: ["Date the new rates apply from", "Products and rates, in Hindi", "Date the new rates apply from", "Products and rates, in English"],
+  delivery_notice_v1: ["Date", "Message, in Hindi", "Date", "Message, in English"],
+  payment_received_v1: ["Amount received", "Date received", "How it was paid, in Hindi", "Amount received", "Date received", "How it was paid, in English"],
+  delivery_completed_v1: ["Delivery date", "Products delivered, with the price of each", "Total amount for the day", "Delivery date", "Products delivered, with the price of each", "Total amount for the day"],
+};
+
+// Whether the template has a button whose label can be edited (its link is fixed).
+export function buttonLabelOf(key: ZoepactTemplateKey): string | null {
+  const definition: ZoepactTemplateDefinition = ZOEPACT_TEMPLATES[key];
+  return definition.buttons?.[0]?.text ?? null;
+}
+
+export type WordingInput = { body: string; footer: string; buttonText?: string };
+
+// Meta's own rules plus ours, as plain messages for the person editing. Empty means
+// the wording can be submitted. Everything here is something Meta would reject, or
+// that would send a customer a message with a blank in it.
+export function validateWording(key: ZoepactTemplateKey, input: WordingInput): string[] {
+  const errors: string[] = [];
+  const definition: ZoepactTemplateDefinition = ZOEPACT_TEMPLATES[key];
+  const body = input.body.trim();
+
+  if (!body) {
+    errors.push("The message can't be empty.");
+    return errors;
+  }
+  if (body.length > 1024) errors.push(`The message is ${body.length} characters; WhatsApp allows 1,024.`);
+
+  // Only numbered blanks, written exactly {{1}}.
+  const stray = body.replace(/\{\{\d+\}\}/g, "");
+  if (stray.includes("{{") || stray.includes("}}")) {
+    errors.push("Blanks must be written like {{1}}, {{2}}. Remove any other { } brackets.");
+  }
+
+  const found = [...body.matchAll(/\{\{(\d+)\}\}/g)].map((match) => Number(match[1]));
+  const missing: number[] = [];
+  for (let slot = 1; slot <= definition.slots; slot += 1) {
+    const count = found.filter((number) => number === slot).length;
+    if (count === 0) missing.push(slot);
+    if (count > 1) errors.push(`{{${slot}}} is used ${count} times. Use each blank once.`);
+  }
+  if (missing.length > 0) errors.push(`Missing ${missing.map((slot) => `{{${slot}}}`).join(", ")}. Every blank must stay in the message.`);
+  const extra = [...new Set(found.filter((number) => number < 1 || number > definition.slots))];
+  if (extra.length > 0) errors.push(`${extra.map((slot) => `{{${slot}}}`).join(", ")} doesn't exist. This message has blanks {{1}} to {{${definition.slots}}}.`);
+
+  // Meta rejects a message that opens or closes with a blank, or two blanks touching.
+  if (/^\{\{\d+\}\}/.test(body)) errors.push("The message can't start with a blank. Put some words first.");
+  if (/\{\{\d+\}\}$/.test(body)) errors.push("The message can't end with a blank. Put some words after it.");
+  if (/\}\}\{\{/.test(body)) {
+    errors.push("Two blanks can't touch. Put a word or space between them.");
+  }
+
+  const footer = input.footer.trim();
+  if (footer.length > 60) errors.push(`The footer is ${footer.length} characters; the limit is 60.`);
+  if (/[\n\r]/.test(footer)) errors.push("The footer must be one line.");
+  if (/\{\{|\}\}/.test(footer)) errors.push("The footer can't contain blanks.");
+
+  const expectsButton = buttonLabelOf(key) !== null;
+  const buttonText = (input.buttonText ?? "").trim();
+  if (expectsButton) {
+    if (!buttonText) errors.push("The button needs a label.");
+    if (buttonText.length > 25) errors.push(`The button label is ${buttonText.length} characters; the limit is 25.`);
+    if (/[\n\r]/.test(buttonText)) errors.push("The button label must be one line.");
+  }
+
+  return errors;
+}
+
+// "bsmp_payment_reminder_v1" + version 2 -> "bsmp_payment_reminder_v2".
+export function versionName(key: ZoepactTemplateKey, version: number): string {
+  const base = ZOEPACT_TEMPLATES[key].zoepactName.replace(/_v\d+$/, "");
+  return `${base}_v${version}`;
+}
+
+// ---- Delivery completed ----
+
+export type DeliveredItem = { name: string; quantity: number; unit: string; amount: number };
+
+// "Buffalo milk 1 litre = ₹90; Paneer 0.5 kg = ₹170": what was delivered and what each
+// line came to, on ONE line (a template value can't contain a line break).
+export function buildDeliveredItemsText(items: DeliveredItem[]): string {
+  return items
+    .map((item) => {
+      const quantity = item.quantity.toLocaleString("en-IN", { maximumFractionDigits: 3 });
+      return `${toSingleLine(item.name)} ${quantity}${item.unit ? ` ${toSingleLine(item.unit)}` : ""} = ${formatRupees(item.amount)}`;
+    })
+    .join("; ");
+}
+
+export type DeliveryCompletedParams = { date: string; itemsText: string; amount: number | string };
+
+// The date, the products and the total each appear in both languages.
+export function deliveryCompletedValues(params: DeliveryCompletedParams): string[] {
+  const total = formatMoney(params.amount);
+  return [params.date, params.itemsText, total, params.date, params.itemsText, total];
+}
+
+// ---- Payment received ----
+
+const PAYMENT_MODE_WORDS: Record<string, { hi: string; en: string }> = {
+  CASH: { hi: "नकद", en: "cash" },
+  UPI: { hi: "UPI", en: "UPI" },
+  BANK_TRANSFER: { hi: "बैंक ट्रांसफर", en: "bank transfer" },
+  CHEQUE: { hi: "चेक", en: "cheque" },
+};
+
+// How a payment was made, in words, in each language. An unknown mode is shown as stored.
+export function paymentModeWords(mode: string): { hi: string; en: string } {
+  const clean = toSingleLine(mode);
+  return PAYMENT_MODE_WORDS[clean.toUpperCase()] ?? { hi: clean, en: clean };
+}
+
+export type PaymentReceivedParams = { amount: number | string; date: string; mode: string };
+
+// Amount, date and mode each appear in both languages: the Hindi blanks first, then English.
+export function paymentReceivedValues(params: PaymentReceivedParams): string[] {
+  const amount = formatMoney(params.amount);
+  const words = paymentModeWords(params.mode);
+  return [amount, params.date, words.hi, amount, params.date, words.en];
 }

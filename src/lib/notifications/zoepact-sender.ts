@@ -1,12 +1,13 @@
 import "server-only";
 import { signBillLink } from "@/lib/bill-link";
 import { isNotificationsEnabled } from "@/lib/notifications/config";
+import { loadActiveTemplates } from "@/lib/notifications/template-wording";
 import { claimForZoepact, reclaimExpired, reportOutcomes, type ClaimedRow, type DispatchOutcome } from "@/lib/notifications/dispatch";
 import {
   getWalletBalance, sendTemplate, type SendTemplateInput, type ZoepactResult,
 } from "@/lib/notifications/zoepact";
 import {
-  deliveryNoticeValues, isZoepactTemplateKey, monthlyBillLinkValues, paymentReminderValues, rateChangeValues,
+  deliveryCompletedValues, deliveryNoticeValues, isZoepactTemplateKey, monthlyBillLinkValues, paymentReceivedValues, paymentReminderValues, rateChangeValues,
   ZOEPACT_TEMPLATES, ZOEPACT_TEMPLATE_KEYS, zoepactVariableSchemas,
 } from "@/lib/notifications/zoepact-templates";
 import { prisma } from "@/lib/prisma";
@@ -23,25 +24,51 @@ const SEND_GAP_MS = 150;
 // balance fails per message, which would burn every row's retry budget.
 const WALLET_MIN = 10;
 
-// Customers are messaged in the daytime, India time: 09:00 to 20:00. A bill
-// arriving at 2am is the kind of contact that gets a number reported.
-const SEND_FROM_HOUR_IST = 9;
-const SEND_UNTIL_HOUR_IST = 20;
+// Customers are messaged in the daytime, India time. This is OUR choice, not a WhatsApp
+// rule: a bill or reminder arriving at 2am is the kind of contact that gets a number
+// reported. The hours default to 09:00-20:00 and can be changed without a code change by
+// setting NOTIFICATIONS_SEND_FROM_HOUR and NOTIFICATIONS_SEND_UNTIL_HOUR (0-24, IST,
+// the "until" hour itself is excluded).
+const DEFAULT_FROM_HOUR_IST = 9;
+const DEFAULT_UNTIL_HOUR_IST = 20;
 
-export function isInSendWindow(now: Date): boolean {
+function hourFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return fallback;
+  const value = Number(raw);
+  return Number.isInteger(value) && value >= 0 && value <= 24 ? value : fallback;
+}
+
+export function isInSendWindow(
+  now: Date,
+  hours: { from: number; until: number } = {
+    from: hourFromEnv("NOTIFICATIONS_SEND_FROM_HOUR", DEFAULT_FROM_HOUR_IST),
+    until: hourFromEnv("NOTIFICATIONS_SEND_UNTIL_HOUR", DEFAULT_UNTIL_HOUR_IST),
+  },
+): boolean {
   const hourIst = new Date(now.getTime() + 5.5 * 60 * 60 * 1000).getUTCHours();
-  return hourIst >= SEND_FROM_HOUR_IST && hourIst < SEND_UNTIL_HOUR_IST;
+  return hourIst >= hours.from && hourIst < hours.until;
 }
 
 type Built = { ok: true; input: Omit<SendTemplateInput, "phone"> } | { ok: false; error: string };
 
 // Turns a stored (template key, variables) pair into the exact API call. Pure
 // apart from the injected signer, so it is tested without a network or secret.
-export function buildZoepactSend(template: string, variables: unknown, sign: (billId: string) => string): Built {
+//
+// `inUse` is the template version messages are currently sent with (its name at Meta and
+// its language); without it the built-in one is used.
+export function buildZoepactSend(
+  template: string,
+  variables: unknown,
+  sign: (billId: string) => string,
+  inUse?: { zoepactName: string; language: string },
+): Built {
   if (!isZoepactTemplateKey(template)) {
     return { ok: false, error: `Not a Zoepact template: ${template}` };
   }
   const definition = ZOEPACT_TEMPLATES[template];
+  const templateName = inUse?.zoepactName ?? definition.zoepactName;
+  const language = inUse?.language ?? definition.language;
   const parsed = zoepactVariableSchemas[template].safeParse(variables);
   if (!parsed.success) {
     return { ok: false, error: `Invalid variables for ${template}: ${parsed.error.issues[0]?.message ?? "unknown"}` };
@@ -51,18 +78,28 @@ export function buildZoepactSend(template: string, variables: unknown, sign: (bi
     const v = parsed.data as { month: number; outstanding: number | string };
     return {
       ok: true,
-      input: { templateName: definition.zoepactName, language: definition.language, variables: paymentReminderValues({ month: v.month, outstanding: v.outstanding }) },
+      input: { templateName, language, variables: paymentReminderValues({ month: v.month, outstanding: v.outstanding }) },
     };
   }
 
   if (template === "rate_change_notice_v1") {
     const v = parsed.data as { effectiveDate: string; ratesTextHi: string; ratesTextEn: string };
-    return { ok: true, input: { templateName: definition.zoepactName, language: definition.language, variables: rateChangeValues(v) } };
+    return { ok: true, input: { templateName, language, variables: rateChangeValues(v) } };
+  }
+
+  if (template === "payment_received_v1") {
+    const v = parsed.data as { amount: number | string; date: string; mode: string };
+    return { ok: true, input: { templateName, language, variables: paymentReceivedValues(v) } };
+  }
+
+  if (template === "delivery_completed_v1") {
+    const v = parsed.data as { date: string; itemsText: string; amount: number | string };
+    return { ok: true, input: { templateName, language, variables: deliveryCompletedValues(v) } };
   }
 
   if (template === "delivery_notice_v1") {
     const v = parsed.data as { date: string; messageHi: string; messageEn: string };
-    return { ok: true, input: { templateName: definition.zoepactName, language: definition.language, variables: deliveryNoticeValues(v) } };
+    return { ok: true, input: { templateName, language, variables: deliveryNoticeValues(v) } };
   }
 
   const v = parsed.data as { customerName: string; month: number; amountDue: number | string; billId: string };
@@ -72,8 +109,8 @@ export function buildZoepactSend(template: string, variables: unknown, sign: (bi
   return {
     ok: true,
     input: {
-      templateName: definition.zoepactName,
-      language: definition.language,
+      templateName,
+      language,
       variables: values,
       buttonVariables: [{ index: 0, sub_type: "url", text: buttonToken }],
     },
@@ -141,7 +178,21 @@ export async function runZoepactBatch(now = new Date()): Promise<BatchResult> {
     return { status: "paused", ...none, message: `Wallet balance is ₹${wallet.data.balance}; top up to continue.` };
   }
 
+  // Which version of each template is in use: one small query per run.
+  const active = await loadActiveTemplates();
   const rows: ClaimedRow[] = await claimForZoepact(BATCH_SIZE);
+
+  // A payment receipt must not go out for a payment that has been cancelled (or put back to
+  // pending) since it was queued: check each one just before sending.
+  const receiptIds = rows
+    .filter((row) => row.template === "payment_received_v1")
+    .map((row) => (row.variables as { paymentId?: string } | null)?.paymentId)
+    .filter((id): id is string => typeof id === "string");
+  const stillVerified = new Set(
+    receiptIds.length > 0
+      ? (await prisma.payment.findMany({ where: { id: { in: receiptIds }, status: "VERIFIED" }, select: { id: true } })).map((payment) => payment.id)
+      : [],
+  );
   const outcomes: DispatchOutcome[] = [];
   let configFailure: string | null = null;
 
@@ -152,7 +203,15 @@ export async function runZoepactBatch(now = new Date()): Promise<BatchResult> {
       continue;
     }
 
-    const built = buildZoepactSend(row.template, row.variables, (billId) => signBillLink(billId));
+    if (row.template === "payment_received_v1") {
+      const paymentId = (row.variables as { paymentId?: string } | null)?.paymentId;
+      if (paymentId && !stillVerified.has(paymentId)) {
+        outcomes.push({ id: row.id, ok: false, error: "The payment is no longer verified, so no receipt was sent.", permanent: true });
+        continue;
+      }
+    }
+
+    const built = buildZoepactSend(row.template, row.variables, (billId) => signBillLink(billId), isZoepactTemplateKey(row.template) ? active[row.template] : undefined);
     if (!built.ok) {
       outcomes.push({ id: row.id, ok: false, error: built.error, permanent: true });
       continue;

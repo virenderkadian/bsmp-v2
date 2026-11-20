@@ -10,17 +10,16 @@ const money = (value: string) =>
   `₹${Number(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 // What the customer reads, filled from the real template wording so this can't drift.
-function preview(month: number, amount: string): string {
+function preview(body: string, month: number, amount: string): string {
   const { hi, en } = monthNames(month);
-  return ZOEPACT_TEMPLATES.payment_reminder_hi_en_v1.body
-    .replace("{{1}}", hi).replace("{{2}}", amount).replace("{{3}}", en).replace("{{4}}", amount);
+  return body.replace("{{1}}", hi).replace("{{2}}", amount).replace("{{3}}", en).replace("{{4}}", amount);
 }
 
 // Reminders go to customers whose LATEST issued bill is unpaid — the same list the
 // driver app's Dues screen shows. The office sees everyone eligible, unticks anyone
 // who shouldn't get one, and only then queues. Pressing it twice in a day cannot
 // message anyone twice.
-export function RemindersPanel({ canSend }: { canSend: boolean }) {
+export function RemindersPanel({ canSend, wording }: { canSend: boolean; wording: Record<string, { body: string; footer: string }> }) {
   const [state, setState] = useState<PickerState>({ status: "idle" });
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [pending, startTransition] = useTransition();
@@ -86,8 +85,8 @@ export function RemindersPanel({ canSend }: { canSend: boolean }) {
           </div>
           <div className="rounded-lg border border-surface-border bg-surface p-4">
             <h3 className="text-sm font-semibold text-text-primary">What the customer receives</h3>
-            <div className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-muted p-3 text-sm leading-relaxed text-text-primary">
-              {preview(new Date().getMonth() === 0 ? 12 : new Date().getMonth(), "2,040.00")}
+            <div className="mt-2 max-h-96 overflow-auto whitespace-pre-wrap rounded-md bg-surface-muted p-3 text-sm leading-relaxed text-text-primary">
+              {preview(wording.payment_reminder_hi_en_v1?.body ?? ZOEPACT_TEMPLATES.payment_reminder_hi_en_v1.body, new Date().getMonth() === 0 ? 12 : new Date().getMonth(), "2,040.00")}
             </div>
             <p className="mt-2 text-xs text-text-secondary">
               Example figures. Each reminder uses that customer&apos;s own month and amount.

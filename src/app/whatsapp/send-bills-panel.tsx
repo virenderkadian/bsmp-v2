@@ -11,15 +11,16 @@ import type { ConsentSummary } from "@/lib/notifications/consent";
 import type { SendableMonth } from "@/lib/notifications/outbox";
 import { ZOEPACT_TEMPLATES } from "@/lib/notifications/zoepact-templates";
 
-// Filled from the real template wording rather than hand-written, so the preview
-// can never drift from what customers actually receive.
-const PREVIEW = [
-  ZOEPACT_TEMPLATES.monthly_bill_link_v1.body
+// Filled from the wording actually in use, so the preview can never drift from what
+// customers receive (including after the message has been reworded).
+function previewOf(wording: Record<string, { body: string; footer: string; buttonText?: string | null }>): string {
+  const template = wording.monthly_bill_link_v1 ?? ZOEPACT_TEMPLATES.monthly_bill_link_v1;
+  const body = template.body
     .replace("{{1}}", "Ramesh Kumar").replace("{{2}}", "अगस्त").replace("{{3}}", "2,340.00")
-    .replace("{{4}}", "Ramesh Kumar").replace("{{5}}", "August").replace("{{6}}", "2,340.00"),
-  ZOEPACT_TEMPLATES.monthly_bill_link_v1.footer,
-  "[ View bill ]",
-].join("\n\n");
+    .replace("{{4}}", "Ramesh Kumar").replace("{{5}}", "August").replace("{{6}}", "2,340.00");
+  const button = "buttonText" in template && template.buttonText ? template.buttonText : "View bill";
+  return [body, template.footer, `[ ${button} ]`].join("\n\n");
+}
 
 // Same steps as the Reminders tab: see the eligible customers for the month, untick
 // anyone who shouldn't get a message, then queue exactly the ticked ones.
@@ -27,10 +28,12 @@ export function SendBillsPanel({
   canSend,
   months,
   consentSummary,
+  wording,
 }: {
   canSend: boolean;
   months: SendableMonth[];
   consentSummary: ConsentSummary;
+  wording: Record<string, { body: string; footer: string; buttonText?: string | null }>;
 }) {
   const [selectedMonth, setSelectedMonth] = useState(months[0]?.value ?? "");
   const [state, setState] = useState<PickerState>({ status: "idle" });
@@ -130,8 +133,8 @@ export function SendBillsPanel({
 
         <div className="rounded-lg border border-surface-border bg-surface p-4">
           <h2 className="text-sm font-semibold text-text-primary">What the customer receives</h2>
-          <div className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-muted p-3 text-sm leading-relaxed text-text-primary">
-            {PREVIEW}
+          <div className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded-md bg-surface-muted p-3 text-sm leading-relaxed text-text-primary">
+            {previewOf(wording)}
           </div>
           <p className="mt-2 text-xs text-text-secondary">
             Example figures. Real messages use each customer&apos;s own name and amount. The View bill page

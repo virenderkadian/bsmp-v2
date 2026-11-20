@@ -1,7 +1,8 @@
 "use client";
 
 import { useActionState, useMemo, useState } from "react";
-import { bulkOptInCustomers, toggleConsent, type WhatsAppActionState } from "@/app/whatsapp/actions";
+import { bulkOptInCustomers, toggleConsent, toggleUpdatesConsent, type WhatsAppActionState } from "@/app/whatsapp/actions";
+import { UpdatesOptInCard } from "@/app/whatsapp/updates-optin-card";
 import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { SearchInput } from "@/components/admin/search-input";
 import { SummaryStatBar } from "@/components/admin/summary-stat-bar";
@@ -32,6 +33,7 @@ export function ConsentPanel({
   customers: ConsentCustomer[];
 }) {
   const [toggleState, toggleAction] = useActionState(toggleConsent, initialState);
+  const [updatesState, updatesAction] = useActionState(toggleUpdatesConsent, initialState);
   const [bulkState, bulkAction, bulkPending] = useActionState(bulkOptInCustomers, initialState);
   const [query, setQuery] = useState("");
   const [showBulk, setShowBulk] = useState(false);
@@ -60,6 +62,8 @@ export function ConsentPanel({
             value: String(summary.unreachable),
             tone: summary.unreachable > 0 ? "danger" : "default",
           },
+          { key: "delivery", label: "Delivery updates", value: String(summary.deliveryUpdatesOptedIn), tone: "success" },
+          { key: "payment", label: "Payment updates", value: String(summary.paymentUpdatesOptedIn), tone: "success" },
           { key: "total", label: "Active customers", value: String(summary.total) },
         ]}
       />
@@ -104,7 +108,7 @@ export function ConsentPanel({
           </div>
         ) : null}
 
-        {[toggleState, bulkState].map((state, index) =>
+        {[toggleState, bulkState, updatesState].map((state, index) =>
           state.status !== "idle" && state.message ? (
             <p
               key={index}
@@ -118,6 +122,9 @@ export function ConsentPanel({
         )}
       </div>
 
+      <UpdatesOptInCard canSend={canSend} kind="delivery" />
+      <UpdatesOptInCard canSend={canSend} kind="payment" />
+
       <SearchInput
         value={query}
         onChange={(event) => setQuery(event.target.value)}
@@ -128,6 +135,8 @@ export function ConsentPanel({
         <ul className="divide-y divide-surface-border">
           {filtered.map((customer) => {
             const optedInOn = formatDate(customer.optedInAt);
+            const deliveryOn = formatDate(customer.deliveryOptedInAt);
+            const paymentOn = formatDate(customer.paymentOptedInAt);
 
             return (
               <li key={customer.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
@@ -145,16 +154,40 @@ export function ConsentPanel({
                     )}
                     {customer.mobile ? ` · ${customer.mobile}` : ""}
                   </p>
+                  {customer.optedInAt && !customer.unreachableReason ? (
+                    <p className="mt-0.5 text-xs text-text-muted">
+                      {deliveryOn ? `Delivery updates: opted in ${deliveryOn}` : "Delivery updates: not opted in"}
+                      {" · "}
+                      {paymentOn ? `Payment updates: opted in ${paymentOn}` : "Payment updates: not opted in"}
+                    </p>
+                  ) : null}
                 </div>
 
                 {canSend && !customer.unreachableReason ? (
-                  <form action={toggleAction}>
-                    <input type="hidden" name="customerId" value={customer.id} />
-                    <input type="hidden" name="optIn" value={customer.optedInAt ? "false" : "true"} />
-                    <SecondaryButton type="submit">
-                      {customer.optedInAt ? "Opt out" : "Opt in"}
-                    </SecondaryButton>
-                  </form>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {customer.optedInAt
+                      ? (["delivery", "payment"] as const).map((kind) => {
+                          const on = kind === "delivery" ? customer.deliveryOptedInAt : customer.paymentOptedInAt;
+                          return (
+                            <form key={kind} action={updatesAction}>
+                              <input type="hidden" name="customerId" value={customer.id} />
+                              <input type="hidden" name="kind" value={kind} />
+                              <input type="hidden" name="optIn" value={on ? "false" : "true"} />
+                              <SecondaryButton type="submit">
+                                {on ? `Stop ${kind} updates` : `Allow ${kind} updates`}
+                              </SecondaryButton>
+                            </form>
+                          );
+                        })
+                      : null}
+                    <form action={toggleAction}>
+                      <input type="hidden" name="customerId" value={customer.id} />
+                      <input type="hidden" name="optIn" value={customer.optedInAt ? "false" : "true"} />
+                      <SecondaryButton type="submit">
+                        {customer.optedInAt ? "Opt out" : "Opt in"}
+                      </SecondaryButton>
+                    </form>
+                  </div>
                 ) : null}
               </li>
             );
