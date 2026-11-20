@@ -22,9 +22,17 @@ import { type NextRequest, NextResponse } from "next/server";
 // /login and no message is ever sent.
 // /privacy is the BSMP Driver app's privacy policy, linked from the Google Play
 // listing — it must be readable by anyone, signed in or not.
+// /b/ is the page behind a WhatsApp "View bill" button (see src/lib/bill-link.ts):
+// it opens one customer's bill with no login, protected by a signed expiring
+// token in the URL. Trailing slash on purpose — this is matched with startsWith,
+// and a bare "/b" would also open every route that happens to begin with b.
+// /api/cron is for Vercel Cron: it authenticates with its own Bearer CRON_SECRET
+// (see src/app/api/cron/notifications/route.ts), never Supabase cookies.
 const PUBLIC_PATHS = [
   "/login",
   "/privacy",
+  "/b/",
+  "/api/cron/",
   "/forgot-password",
   "/reset-password",
   "/api/driver",
