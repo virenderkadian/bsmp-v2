@@ -8,13 +8,14 @@ import { FormInput } from "@/components/admin/form-input";
 import { SelectInput } from "@/components/admin/select-input";
 import type { NoticeProduct } from "@/lib/notifications/notices";
 import {
-  buildRatesText, deliveryNoticeValues, MAX_NOTICE_TEXT, rateChangeValues, toSingleLine, ZOEPACT_TEMPLATES,
-  zoepactVariableSchemas,
+  buildRatesText, buildRatesTextHindi, deliveryNoticeValues, hindiUnit, MAX_NOTICE_TEXT, rateChangeValues, toSingleLine,
+  ZOEPACT_TEMPLATES, zoepactVariableSchemas,
 } from "@/lib/notifications/zoepact-templates";
 
 type NoticeKind = "rate_change_notice_v1" | "delivery_notice_v1";
 
-type RateRow = { key: number; productId: string; name: string; unit: string; oldRate: string; newRate: string };
+type RateRow = { key: number; productId: string; name: string; nameHi: string; unit: string; unitHi: string; oldRate: string; newRate: string };
+const blankRow = (key: number): RateRow => ({ key, productId: "", name: "", nameHi: "", unit: "", unitHi: "", oldRate: "", newRate: "" });
 
 const OTHER = "__other";
 
@@ -38,7 +39,7 @@ export function NoticesPanel({ canSend, products }: { canSend: boolean; products
 
   // Rate change
   const [effectiveFrom, setEffectiveFrom] = useState("");
-  const [rows, setRows] = useState<RateRow[]>([{ key: 1, productId: "", name: "", unit: "", oldRate: "", newRate: "" }]);
+  const [rows, setRows] = useState<RateRow[]>([blankRow(1)]);
   // Delivery notice
   const [noticeDate, setNoticeDate] = useState("");
   const [messageHi, setMessageHi] = useState("");
@@ -52,11 +53,10 @@ export function NoticesPanel({ canSend, products }: { canSend: boolean; products
 
   const variables = useMemo(() => {
     if (kind === "rate_change_notice_v1") {
-      const complete = rows.filter((row) => row.name.trim() && row.oldRate !== "" && row.newRate !== "");
-      return {
-        effectiveDate: readableDate(effectiveFrom),
-        ratesText: buildRatesText(complete.map((row) => ({ name: row.name, unit: row.unit, oldRate: Number(row.oldRate), newRate: Number(row.newRate) }))),
-      };
+      const items = rows
+        .filter((row) => row.name.trim() && row.oldRate !== "" && row.newRate !== "")
+        .map((row) => ({ name: row.name, nameHi: row.nameHi, unit: row.unit, unitHi: row.unitHi, oldRate: Number(row.oldRate), newRate: Number(row.newRate) }));
+      return { effectiveDate: readableDate(effectiveFrom), ratesTextHi: buildRatesTextHindi(items), ratesTextEn: buildRatesText(items) };
     }
     return { date: readableDate(noticeDate), messageHi: toSingleLine(messageHi), messageEn: toSingleLine(messageEn) };
   }, [kind, effectiveFrom, rows, noticeDate, messageHi, messageEn]);
@@ -65,20 +65,20 @@ export function NoticesPanel({ canSend, products }: { canSend: boolean; products
   const problem = check.success ? null : check.error.issues[0]?.message ?? "Fill in every field";
   const values =
     kind === "rate_change_notice_v1"
-      ? rateChangeValues(variables as { effectiveDate: string; ratesText: string })
+      ? rateChangeValues(variables as { effectiveDate: string; ratesTextHi: string; ratesTextEn: string })
       : deliveryNoticeValues(variables as { date: string; messageHi: string; messageEn: string });
-  const ratesLength = kind === "rate_change_notice_v1" ? (variables as { ratesText: string }).ratesText.length : 0;
+  const ratesLength = kind === "rate_change_notice_v1" ? Math.max((variables as { ratesTextHi: string }).ratesTextHi.length, (variables as { ratesTextEn: string }).ratesTextEn.length) : 0;
 
   const setRow = (key: number, patch: Partial<RateRow>) => setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
 
   const pickProduct = (key: number, productId: string) => {
     const product = products.find((entry) => entry.id === productId);
     setRow(key, product
-      ? { productId, name: product.name, unit: product.unit, oldRate: String(Number(product.defaultRate)) }
-      : { productId, name: "", unit: "", oldRate: "" });
+      ? { productId, name: product.name, nameHi: "", unit: product.unit, unitHi: "", oldRate: String(Number(product.defaultRate)) }
+      : { productId, name: "", nameHi: "", unit: "", unitHi: "", oldRate: "" });
   };
 
-  const addRow = () => setRows((current) => [...current, { key: Math.max(0, ...current.map((row) => row.key)) + 1, productId: "", name: "", unit: "", oldRate: "", newRate: "" }]);
+  const addRow = () => setRows((current) => [...current, blankRow(Math.max(0, ...current.map((row) => row.key)) + 1)]);
   const removeRow = (key: number) => setRows((current) => (current.length > 1 ? current.filter((row) => row.key !== key) : current));
 
   const changeKind = (next: NoticeKind) => {
@@ -151,12 +151,24 @@ export function NoticesPanel({ canSend, products }: { canSend: boolean; products
                     </div>
                     {row.productId ? (
                       <div className="grid gap-2 sm:grid-cols-2">
-                        <FormInput label="Name shown to customers" value={row.name} onChange={(event) => setRow(row.key, { name: event.target.value })} />
+                        <FormInput label="Name in English" value={row.name} onChange={(event) => setRow(row.key, { name: event.target.value })} />
                         <FormInput
-                          label="Unit shown (leave empty to hide)"
+                          label="Name in Hindi"
+                          value={row.nameHi}
+                          onChange={(event) => setRow(row.key, { nameHi: event.target.value })}
+                          placeholder={row.name ? `Empty: shows "${row.name}"` : "भैंस का दूध"}
+                        />
+                        <FormInput
+                          label="Unit in English (empty to hide)"
                           value={row.unit}
                           onChange={(event) => setRow(row.key, { unit: event.target.value })}
                           placeholder="litre, kg"
+                        />
+                        <FormInput
+                          label="Unit in Hindi"
+                          value={row.unitHi}
+                          onChange={(event) => setRow(row.key, { unitHi: event.target.value })}
+                          placeholder={row.unit ? hindiUnit(row.unit) : "लीटर, किलो"}
                         />
                       </div>
                     ) : null}
@@ -172,7 +184,7 @@ export function NoticesPanel({ canSend, products }: { canSend: boolean; products
                 Add another product
               </SecondaryButton>
               <p className="text-xs text-text-secondary">
-                The products go out on one line ({ratesLength} of {MAX_NOTICE_TEXT} characters used).
+                Each language\u2019s products go out on one line ({ratesLength} of {MAX_NOTICE_TEXT} characters used).
               </p>
             </div>
           ) : (

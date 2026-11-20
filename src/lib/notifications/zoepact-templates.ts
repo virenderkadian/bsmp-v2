@@ -176,7 +176,10 @@ export const zoepactVariableSchemas = {
   }),
   rate_change_notice_v1: z.object({
     effectiveDate: z.string().trim().min(1).max(40).refine(isSingleLine, "Must be a single line"),
-    ratesText: z.string().trim().min(1).max(MAX_NOTICE_TEXT).refine(isSingleLine, "Must be a single line"),
+    // The same products twice: names and units in Hindi for the Hindi half of the
+    // message, in English for the English half.
+    ratesTextHi: z.string().trim().min(1).max(MAX_NOTICE_TEXT).refine(isSingleLine, "Must be a single line"),
+    ratesTextEn: z.string().trim().min(1).max(MAX_NOTICE_TEXT).refine(isSingleLine, "Must be a single line"),
   }),
   delivery_notice_v1: z.object({
     date: z.string().trim().min(1).max(40).refine(isSingleLine, "Must be a single line"),
@@ -202,7 +205,16 @@ export function toSingleLine(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-export type RateChangeItem = { name: string; unit?: string; oldRate: number | string; newRate: number | string };
+export type RateChangeItem = {
+  name: string;
+  // The Hindi name for the Hindi half; falls back to `name` when left empty.
+  nameHi?: string;
+  unit?: string;
+  // The Hindi unit; falls back to a translation of `unit` for the common ones.
+  unitHi?: string;
+  oldRate: number | string;
+  newRate: number | string;
+};
 
 // 60 -> "₹60", 62.5 -> "₹62.50": whole rupees stay plain, the rest keep paise.
 function rate(value: number | string): string {
@@ -211,19 +223,44 @@ function rate(value: number | string): string {
   return Number.isInteger(amount) ? `₹${amount}` : `₹${amount.toFixed(2)}`;
 }
 
-// "Milk (per litre): ₹60 → ₹62; Paneer (per kg): ₹320 → ₹340"
+const HINDI_UNITS: Record<string, string> = {
+  litre: "लीटर", liter: "लीटर", ltr: "लीटर", l: "लीटर",
+  kg: "किलो", kilo: "किलो", kilogram: "किलो",
+  gm: "ग्राम", gram: "ग्राम", g: "ग्राम",
+  piece: "पीस", pieces: "पीस", pc: "पीस", pcs: "पीस", nos: "पीस",
+  packet: "पैकेट", pack: "पैकेट", dozen: "दर्जन",
+};
+
+// "litre" -> "लीटर"; anything not in the list is returned as typed.
+export function hindiUnit(unit: string): string {
+  const clean = toSingleLine(unit);
+  return HINDI_UNITS[clean.toLowerCase()] ?? clean;
+}
+
+// English: "Milk (per litre): ₹60 → ₹62; Paneer (per kg): ₹320 → ₹340"
 export function buildRatesText(items: RateChangeItem[]): string {
   return items
     .map((item) => `${toSingleLine(item.name)}${item.unit ? ` (per ${toSingleLine(item.unit)})` : ""}: ${rate(item.oldRate)} → ${rate(item.newRate)}`)
     .join("; ");
 }
 
-export type RateChangeParams = { effectiveDate: string; ratesText: string };
+// Hindi: "दूध (प्रति लीटर): ₹60 → ₹62; पनीर (प्रति किलो): ₹320 → ₹340"
+export function buildRatesTextHindi(items: RateChangeItem[]): string {
+  return items
+    .map((item) => {
+      const name = toSingleLine(item.nameHi ?? "") || toSingleLine(item.name);
+      const unit = toSingleLine(item.unitHi ?? "") || (item.unit ? hindiUnit(item.unit) : "");
+      return `${name}${unit ? ` (प्रति ${unit})` : ""}: ${rate(item.oldRate)} → ${rate(item.newRate)}`;
+    })
+    .join("; ");
+}
+
+export type RateChangeParams = { effectiveDate: string; ratesTextHi: string; ratesTextEn: string };
 export type DeliveryNoticeParams = { date: string; messageHi: string; messageEn: string };
 
-// The date and the rates appear in both languages, so the slots repeat them.
+// The date appears in both languages; the product list is the Hindi one first, then the English one.
 export function rateChangeValues(params: RateChangeParams): string[] {
-  return [params.effectiveDate, params.ratesText, params.effectiveDate, params.ratesText];
+  return [params.effectiveDate, params.ratesTextHi, params.effectiveDate, params.ratesTextEn];
 }
 
 export function deliveryNoticeValues(params: DeliveryNoticeParams): string[] {

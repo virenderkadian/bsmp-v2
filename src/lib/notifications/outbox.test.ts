@@ -423,7 +423,7 @@ describe("removing people from the queue", () => {
 });
 
 describe("notices", () => {
-  const rate = { effectiveDate: "1 December 2026", ratesText: "Milk (per litre): ₹60 → ₹62; Paneer (per kg): ₹320 → ₹340" };
+  const rate = { effectiveDate: "1 December 2026", ratesTextHi: "दूध (प्रति लीटर): ₹60 → ₹62; पनीर (प्रति किलो): ₹320 → ₹340", ratesTextEn: "Milk (per litre): ₹60 → ₹62; Paneer (per kg): ₹320 → ₹340" };
   const mine = () => db.notificationOutbox.findMany({ where: { customerId: { in: Object.values(customers) } } });
 
   it("lets anyone with consent and a usable number receive a notice, whether or not they owe", async () => {
@@ -464,7 +464,7 @@ describe("notices", () => {
     expect(again.alreadyQueued).toBe(1);
 
     const changed = await enqueueNotice({
-      cityId, template: "rate_change_notice_v1", variables: { ...rate, ratesText: "Milk (per litre): ₹60 → ₹63" }, customerIds: [customers.ok],
+      cityId, template: "rate_change_notice_v1", variables: { ...rate, ratesTextEn: "Milk (per litre): ₹60 → ₹63" }, customerIds: [customers.ok],
     });
     expect(changed.queued).toBe(1);
     expect(await mine()).toHaveLength(2);
@@ -472,7 +472,7 @@ describe("notices", () => {
 
   it("refuses a notice WhatsApp would reject, before anything is queued", async () => {
     await expect(
-      enqueueNotice({ cityId, template: "rate_change_notice_v1", variables: { ...rate, ratesText: "line one\nline two" }, customerIds: [customers.ok] }),
+      enqueueNotice({ cityId, template: "rate_change_notice_v1", variables: { ...rate, ratesTextEn: "line one\nline two" }, customerIds: [customers.ok] }),
     ).rejects.toThrow();
     await expect(
       enqueueNotice({ cityId, template: "delivery_notice_v1", variables: { date: "", messageHi: "x", messageEn: "y" }, customerIds: [customers.ok] }),

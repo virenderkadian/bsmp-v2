@@ -56,7 +56,7 @@ export function buildZoepactSend(template: string, variables: unknown, sign: (bi
   }
 
   if (template === "rate_change_notice_v1") {
-    const v = parsed.data as { effectiveDate: string; ratesText: string };
+    const v = parsed.data as { effectiveDate: string; ratesTextHi: string; ratesTextEn: string };
     return { ok: true, input: { templateName: definition.zoepactName, language: definition.language, variables: rateChangeValues(v) } };
   }
 
