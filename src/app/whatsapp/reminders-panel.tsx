@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 import { previewRemindersAction, queueRemindersAction, type ReminderState } from "@/app/whatsapp/actions";
+import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { ZOEPACT_TEMPLATES, monthNames } from "@/lib/notifications/zoepact-templates";
 
 const money = (value: string) =>
@@ -38,28 +39,18 @@ export function RemindersPanel({ canSend }: { canSend: boolean }) {
           between 9am and 8pm, in small batches.
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={check}
-            disabled={pending || !canSend}
-            className="rounded-md border border-surface-border px-3 py-1.5 text-sm font-medium text-text-primary hover:bg-surface-muted disabled:opacity-50"
-          >
+          <SecondaryButton type="button" onClick={check} disabled={pending || !canSend}>
             {pending ? "Checking…" : "Check who would get one"}
-          </button>
+          </SecondaryButton>
           {ready && ready.eligible > 0 ? (
-            <button
-              type="button"
-              onClick={queue}
-              disabled={pending || !canSend}
-              className="rounded-md bg-brand px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
-            >
+            <PrimaryButton type="button" onClick={queue} disabled={pending || !canSend}>
               Queue {ready.eligible} reminder{ready.eligible === 1 ? "" : "s"}
-            </button>
+            </PrimaryButton>
           ) : null}
         </div>
         {!canSend ? <p className="mt-2 text-sm text-text-secondary">Only an admin can queue customer messages.</p> : null}
-        {state.status === "error" ? <p className="mt-2 text-sm text-rose-700">{state.message}</p> : null}
-        {state.status === "queued" ? <p className="mt-2 text-sm text-emerald-700">{state.message}</p> : null}
+        {state.status === "error" ? <p className="mt-2 text-sm text-status-danger-text">{state.message}</p> : null}
+        {state.status === "queued" ? <p className="mt-2 text-sm text-status-success-text">{state.message}</p> : null}
         {ready ? (
           <p className="mt-2 text-sm text-text-primary">
             {ready.message} {ready.eligible > 0 ? `Total outstanding: ${money(ready.totalOutstanding)}.` : ""}
@@ -75,7 +66,7 @@ export function RemindersPanel({ canSend }: { canSend: boolean }) {
               {ready.sample.map((row) => (
                 <li key={row.code} className="flex items-baseline justify-between gap-3 py-1.5">
                   <span className="text-text-primary">{row.code} · {row.name}</span>
-                  <span className="shrink-0 font-medium text-rose-700">{money(row.outstanding)}</span>
+                  <span className="shrink-0 font-medium tabular-nums text-status-danger-text">{money(row.outstanding)}</span>
                 </li>
               ))}
             </ul>
@@ -83,9 +74,9 @@ export function RemindersPanel({ canSend }: { canSend: boolean }) {
           {first ? (
             <div className="rounded-lg border border-surface-border bg-surface p-4">
               <h3 className="text-sm font-semibold text-text-primary">What {first.name} receives</h3>
-              <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-surface-muted p-3 text-xs text-text-primary">
+              <div className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-muted p-3 text-sm leading-relaxed text-text-primary">
                 {preview(first.month, first.outstanding)}
-              </pre>
+              </div>
             </div>
           ) : null}
         </div>
