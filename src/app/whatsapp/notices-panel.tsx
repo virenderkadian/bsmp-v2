@@ -149,10 +149,15 @@ export function NoticesPanel({ canSend, products }: { canSend: boolean; products
                         </SecondaryButton>
                       ) : null}
                     </div>
-                    {row.productId === OTHER ? (
+                    {row.productId ? (
                       <div className="grid gap-2 sm:grid-cols-2">
-                        <FormInput label="Product name" value={row.name} onChange={(event) => setRow(row.key, { name: event.target.value })} />
-                        <FormInput label="Unit (litre, kg)" value={row.unit} onChange={(event) => setRow(row.key, { unit: event.target.value })} />
+                        <FormInput label="Name shown to customers" value={row.name} onChange={(event) => setRow(row.key, { name: event.target.value })} />
+                        <FormInput
+                          label="Unit shown (leave empty to hide)"
+                          value={row.unit}
+                          onChange={(event) => setRow(row.key, { unit: event.target.value })}
+                          placeholder="litre, kg"
+                        />
                       </div>
                     ) : null}
                     <div className="grid gap-2 sm:grid-cols-2">
