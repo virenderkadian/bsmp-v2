@@ -1,5 +1,6 @@
 import * as Location from "expo-location";
 import { Alert, Linking, Platform } from "react-native";
+import { clearLocationSnooze, getCheckSavedLocation, isLocationSnoozed, snoozeLocationCheck } from "@/location-prefs";
 
 // 8s was too long in practice: on a round the driver stares at an unresponsive
 // screen while it runs. Location is a bonus, not a requirement — the delivery
@@ -8,14 +9,22 @@ import { Alert, Linking, Platform } from "react-native";
 // Deliberately NOT served from getLastKnownPositionAsync: a cached fix taken a
 // minute earlier can be hundreds of metres back down the road on a moving
 // vehicle, and this value gets written to the customer's saved address.
-const FIX_TIMEOUT_MS = 4000;
+const FIX_TIMEOUT_MS = 5000;
+
+// A phone reports how far off a fix may be (`accuracy`, metres). A fix worse
+// than these is mostly noise: the old check ignored it, so a phone reading
+// "±40m" kept looking 12m+ away from a correct address and asked every time.
+// Saving a customer's FIRST location tolerates a little more than comparing
+// against an existing one, because without it there is nothing saved at all.
+const MAX_ACCURACY_TO_SAVE_M = 40;
+const MAX_ACCURACY_TO_COMPARE_M = 25;
 
 // Best-effort GPS fix for backfilling a customer's location on delivery (see
 // saveDriverLine on the backend). Never throws and never blocks a save for
 // long: denied permission, a timeout, or any device error all resolve to
 // null so the delivery still gets recorded — capturing the address is a
 // bonus, not a requirement.
-export async function tryGetCurrentLocation(): Promise<{ latitude: number; longitude: number } | null> {
+export async function tryGetCurrentLocation(): Promise<{ latitude: number; longitude: number; accuracy: number | null } | null> {
   try {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== "granted") {
@@ -23,13 +32,13 @@ export async function tryGetCurrentLocation(): Promise<{ latitude: number; longi
     }
 
     const fix = await Promise.race([
-      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), FIX_TIMEOUT_MS)),
     ]);
     if (!fix) {
       return null;
     }
-    return { latitude: fix.coords.latitude, longitude: fix.coords.longitude };
+    return { latitude: fix.coords.latitude, longitude: fix.coords.longitude, accuracy: fix.coords.accuracy ?? null };
   } catch {
     return null;
   }
@@ -53,8 +62,10 @@ export async function ensureForegroundLocationPermission(): Promise<boolean> {
 // (LOCATION_DRIFT_THRESHOLD_METERS) — used here only to decide whether to
 // bother the driver with a prompt; the backend re-verifies independently
 // before actually overwriting anything, so this copy drifting slightly out
-// of sync would only affect prompt frequency, never correctness.
-const LOCATION_DRIFT_THRESHOLD_METERS = 12;
+// of sync would only affect prompt frequency, never correctness. Keep the
+// client's prompt distance at or above the server's, or an accepted prompt
+// would be refused there.
+const LOCATION_DRIFT_THRESHOLD_METERS = 35;
 
 function haversineDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const EARTH_RADIUS_METERS = 6371000;
@@ -80,27 +91,46 @@ export type LocationSaveFields = {
   confirmLocationUpdate?: boolean;
 };
 
-// Resolves what to send along with a delivery save: always attempts a fresh
-// GPS fix (skip entirely if the caller already knows this is a skip), then
-// either backfills silently (customer has no saved location yet) or — if the
-// new fix is more than ~12m from what's saved — prompts the driver before
-// agreeing to move it. Never throws; a failed fix or a "keep saved" answer
-// both just mean nothing location-related gets sent.
+// Resolves what to send along with a delivery save. Never throws; a failed or
+// poor fix, a switched-off check, a snooze or a "keep saved" answer all just
+// mean nothing location-related gets sent.
+//
+//  - No saved location yet: backfill silently from a fix that is accurate enough.
+//  - A saved location: only if the check is on, this customer isn't snoozed, and
+//    the fix is accurate (<=25m) AND clearly further from the saved point than
+//    both the usual drift (35m) and twice its own error — then ask. "Keep saved"
+//    snoozes that customer for a week.
 export async function resolveLocationForSave(
+  customerId: string,
   savedLatitude: string | null,
   savedLongitude: string | null,
 ): Promise<LocationSaveFields> {
+  const hasSaved = !!savedLatitude && !!savedLongitude;
+
+  // Decide before touching GPS, so a check that can't matter costs no wait.
+  if (hasSaved) {
+    if (!(await getCheckSavedLocation())) return {};
+    if (await isLocationSnoozed(customerId, savedLatitude, savedLongitude)) return {};
+  }
+
   const fix = await tryGetCurrentLocation();
   if (!fix) {
     return {};
   }
+  const accuracy = fix.accuracy;
+  const location = { latitude: fix.latitude, longitude: fix.longitude };
 
-  if (!savedLatitude || !savedLongitude) {
-    return { location: fix };
+  if (!hasSaved) {
+    // Unknown accuracy (null) is let through, as before; a clearly poor fix is not.
+    if (accuracy !== null && accuracy > MAX_ACCURACY_TO_SAVE_M) return {};
+    return { location };
   }
 
+  if (accuracy === null || accuracy > MAX_ACCURACY_TO_COMPARE_M) {
+    return {};
+  }
   const distance = haversineDistanceMeters(Number(savedLatitude), Number(savedLongitude), fix.latitude, fix.longitude);
-  if (distance <= LOCATION_DRIFT_THRESHOLD_METERS) {
+  if (distance <= Math.max(LOCATION_DRIFT_THRESHOLD_METERS, accuracy * 2)) {
     return {};
   }
 
@@ -108,7 +138,12 @@ export async function resolveLocationForSave(
     "Update saved location?",
     `Your location is about ${Math.round(distance)}m from this customer's saved address. Update it?`,
   );
-  return confirmed ? { location: fix, confirmLocationUpdate: true } : {};
+  if (confirmed) {
+    await clearLocationSnooze(customerId);
+    return { location, confirmLocationUpdate: true };
+  }
+  await snoozeLocationCheck(customerId, savedLatitude, savedLongitude);
+  return {};
 }
 
 // Turn-by-turn directions to a saved customer location.

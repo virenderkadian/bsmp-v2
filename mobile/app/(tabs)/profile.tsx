@@ -1,8 +1,10 @@
 import Constants from "expo-constants";
-import { Alert, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useEffect, useState } from "react";
+import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { TAB_BAR_HEIGHT } from "@/components/ActiveRoutePill";
 import { useRouter } from "expo-router";
+import { getCheckSavedLocation, setCheckSavedLocation } from "@/location-prefs";
 import { useSession } from "@/session";
 import { THEME_IDS, THEME_META, type ThemeId } from "@/theme";
 import { useTheme, type Appearance } from "@/theme-preference";
@@ -76,6 +78,8 @@ export default function ProfileScreen() {
   const { vehicle, admin, signOut } = useSession();
   const { appearance, setAppearance, themeId, setThemeId } = useTheme();
   const version = Constants.expoConfig?.version ?? "1.0.0";
+  const [checkLocation, setCheckLocation] = useState(true);
+  useEffect(() => { void getCheckSavedLocation().then(setCheckLocation); }, []);
 
   const soon = () => Alert.alert("Coming soon", "This will be added in a later update.");
   const confirmLogout = () =>
@@ -138,6 +142,23 @@ export default function ProfileScreen() {
               last={index === THEME_IDS.length - 1}
             />
           ))}
+        </Card>
+
+        <Eyebrow>Location</Eyebrow>
+        <Card style={{ marginBottom: 16 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.ink, fontSize: 15, fontWeight: "600" }}>Check saved locations</Text>
+              <Text style={{ color: colors.inkSoft, fontSize: 12.5, marginTop: 3 }}>
+                Ask before changing a customer's saved location when you deliver. Off: it never asks. A customer with no saved location is still filled in on their first delivery.
+              </Text>
+            </View>
+            <Switch
+              value={checkLocation}
+              onValueChange={(value) => { setCheckLocation(value); void setCheckSavedLocation(value); }}
+              trackColor={{ true: colors.brand }}
+            />
+          </View>
         </Card>
 
         <Card style={{ paddingVertical: 2, marginBottom: 16 }}>

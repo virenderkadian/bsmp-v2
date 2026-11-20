@@ -391,9 +391,9 @@ export default function RunScreen() {
       // GPS works fully offline — only the actual network save is
       // connectivity-sensitive, so location resolution always runs first.
       // Backfills silently if the customer has no saved location yet; if they
-      // do and this fix is >12m off, prompts the driver before agreeing to
+      // do and this fix is clearly off (see resolveLocationForSave), prompts the driver before agreeing to
       // move it. Skipped visits never touch location at all.
-      const locationFields = skipped ? {} : await resolveLocationForSave(customer.latitude, customer.longitude);
+      const locationFields = skipped ? {} : await resolveLocationForSave(customer.customerId, customer.latitude, customer.longitude);
       setSavingStage("saving");
       const request: DriverSaveLineRequest = {
         date: runDate,

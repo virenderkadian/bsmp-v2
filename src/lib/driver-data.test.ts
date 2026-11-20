@@ -249,7 +249,7 @@ describe("saveDriverLine location backfill (dev DB)", () => {
     const result = await saveDriverLine(vehicleId, cityId, routeId, customerId, "2027-01-27", {
       skipped: false,
       products: [{ productId, quantity: 1, rateSnapshot: 50 }],
-      location: { latitude: 12.9, longitude: 77.5 }, // clearly >12m from the saved point
+      location: { latitude: 12.9, longitude: 77.5 }, // clearly beyond the drift threshold from the saved point
       confirmLocationUpdate: true,
     });
     expect(result.ok).toBe(true);

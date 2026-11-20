@@ -49,7 +49,7 @@ function toDay(dateInput: string): Date {
 // How far a new GPS fix must be from a customer's already-saved location
 // before it's treated as a real move (vs. ordinary fix jitter) worth asking
 // the driver about. Re-verified here in saveDriverLine — see there.
-const LOCATION_DRIFT_THRESHOLD_METERS = 12;
+const LOCATION_DRIFT_THRESHOLD_METERS = 35;
 
 // Great-circle distance between two lat/lng points, in meters. Duplicated in
 // mobile/src/location.ts rather than imported: this project deliberately
