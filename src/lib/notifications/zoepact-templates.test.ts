@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  monthlyBillLinkValues, monthNames, paymentReminderValues, ZOEPACT_TEMPLATES,
+  buildRatesText, deliveryNoticeValues, isSingleLine, monthlyBillLinkValues, monthNames, paymentReminderValues,
+  rateChangeValues, toSingleLine, ZOEPACT_TEMPLATES, zoepactVariableSchemas,
 } from "@/lib/notifications/zoepact-templates";
 
 const slotsIn = (text: string) => [...text.matchAll(/\{\{(\d+)\}\}/g)].map((match) => Number(match[1]));
@@ -47,5 +48,64 @@ describe("zoepact templates", () => {
     }
     expect(monthNames(0).en).toBe("January");
     expect(monthNames(13).en).toBe("December");
+  });
+});
+
+describe("rate change notice", () => {
+  it("puts any number of products on one line, whole rupees plain and paise kept", () => {
+    expect(buildRatesText([{ name: "Milk", unit: "litre", oldRate: 60, newRate: 62 }])).toBe("Milk (per litre): ₹60 → ₹62");
+    expect(
+      buildRatesText([
+        { name: "Full cream milk", unit: "litre", oldRate: "60.00", newRate: "62.50" },
+        { name: "Paneer", unit: "kg", oldRate: 320, newRate: 340 },
+        { name: "Ghee", oldRate: 650, newRate: 680 },
+      ]),
+    ).toBe("Full cream milk (per litre): ₹60 → ₹62.50; Paneer (per kg): ₹320 → ₹340; Ghee: ₹650 → ₹680");
+  });
+
+  it("never lets a product name break the single-line rule", () => {
+    const text = buildRatesText([{ name: "Toned\nmilk\t  ", unit: "litre", oldRate: 50, newRate: 52 }]);
+    expect(isSingleLine(text)).toBe(true);
+    expect(text).toBe("Toned milk (per litre): ₹50 → ₹52");
+  });
+
+  it("fills the four slots, repeating the date and the rates for the English half", () => {
+    expect(rateChangeValues({ effectiveDate: "1 December 2026", ratesText: "Milk: ₹60 → ₹62" })).toEqual([
+      "1 December 2026", "Milk: ₹60 → ₹62", "1 December 2026", "Milk: ₹60 → ₹62",
+    ]);
+    expect(ZOEPACT_TEMPLATES.rate_change_notice_v1.slots).toBe(4);
+  });
+
+  it("accepts a normal notice and refuses a multi-line, empty or oversized one", () => {
+    const schema = zoepactVariableSchemas.rate_change_notice_v1;
+    expect(schema.safeParse({ effectiveDate: "1 December 2026", ratesText: "Milk: ₹60 → ₹62" }).success).toBe(true);
+    expect(schema.safeParse({ effectiveDate: "1 Dec", ratesText: "Milk: ₹60\nPaneer: ₹320" }).success).toBe(false);
+    expect(schema.safeParse({ effectiveDate: "", ratesText: "x" }).success).toBe(false);
+    expect(schema.safeParse({ effectiveDate: "1 Dec", ratesText: "x".repeat(401) }).success).toBe(false);
+  });
+});
+
+describe("delivery notice", () => {
+  it("fills the four slots: date, Hindi message, date, English message", () => {
+    expect(deliveryNoticeValues({ date: "14 November 2026", messageHi: "सुबह 8 बजे के बाद", messageEn: "after 8 am" })).toEqual([
+      "14 November 2026", "सुबह 8 बजे के बाद", "14 November 2026", "after 8 am",
+    ]);
+  });
+
+  it("requires both messages and keeps each to one line", () => {
+    const schema = zoepactVariableSchemas.delivery_notice_v1;
+    expect(schema.safeParse({ date: "14 Nov", messageHi: "छुट्टी", messageEn: "Holiday" }).success).toBe(true);
+    expect(schema.safeParse({ date: "14 Nov", messageHi: "", messageEn: "Holiday" }).success).toBe(false);
+    expect(schema.safeParse({ date: "14 Nov", messageHi: "छुट्टी", messageEn: "line one\nline two" }).success).toBe(false);
+  });
+});
+
+describe("single-line rule", () => {
+  it("rejects what WhatsApp rejects and tidies pasted text", () => {
+    expect(isSingleLine("a b")).toBe(true);
+    expect(isSingleLine("a\nb")).toBe(false);
+    expect(isSingleLine("a\tb")).toBe(false);
+    expect(isSingleLine("a     b")).toBe(false);
+    expect(toSingleLine("  a \n\n b\t c  ")).toBe("a b c");
   });
 });

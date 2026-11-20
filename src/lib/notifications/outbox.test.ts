@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { cancelMessages, enqueueMonthlyBills, getPendingMessages, planMonthlyBills } from "@/lib/notifications/outbox";
 import { claimForZoepact, claimPending, reportOutcomes } from "@/lib/notifications/dispatch";
+import { enqueueNotice, planNoticeAudience } from "@/lib/notifications/notices";
 import { enqueuePaymentReminders, planPaymentReminders } from "@/lib/notifications/reminders";
 
 // Exercises the real queue against the real dev database, because the parts
@@ -13,6 +14,7 @@ const db = new PrismaClient();
 
 let cityId: string;
 let routeId: string;
+let vehicleId: string;
 let productId: string;
 const customers: Record<string, string> = {};
 const bills: Record<string, string> = {};
@@ -60,6 +62,7 @@ beforeAll(async () => {
   const vehicle = await db.vehicle.create({
     data: { cityId, code: `WAV-${suffix}`, name: "WA Test Vehicle" },
   });
+  vehicleId = vehicle.id;
 
   const [route, product] = await Promise.all([
     db.route.create({
@@ -291,7 +294,10 @@ describe("payment reminders", () => {
     const mine = plan.candidates.filter((candidate) => Object.values(customers).includes(candidate.customerId));
 
     expect(mine.map((candidate) => candidate.customerId)).toEqual([customers.ok]);
-    expect(mine[0]).toMatchObject({ recipient: "919812345678", month: 7, outstanding: 2340, billId: bills.ok });
+    expect(mine[0]).toMatchObject({
+      recipient: "919812345678", month: 7, outstanding: 2340, billId: bills.ok,
+      routeId, routeLabel: `WAR-${suffix} - WA Test Route`, vehicleId, vehicleLabel: `WAV-${suffix} - WA Test Vehicle`,
+    });
 
     const reasons = Object.fromEntries(plan.skipped.map((entry) => [entry.customerName, entry.reason]));
     expect(reasons["WhatsApp Test noconsent"]).toBe("No WhatsApp consent recorded");
@@ -339,7 +345,10 @@ describe("choosing who gets a message", () => {
     const plan = await planMonthlyBills({ cityId, billingMonth: month });
 
     expect(plan.candidates.map((candidate) => candidate.customerId)).toEqual([customers.ok]);
-    expect(plan.candidates[0]).toMatchObject({ recipient: "919812345678", billId: bills.ok, amountDue: "2340" });
+    expect(plan.candidates[0]).toMatchObject({
+      recipient: "919812345678", billId: bills.ok, amountDue: "2340",
+      routeId, routeLabel: `WAR-${suffix} - WA Test Route`, vehicleId, vehicleLabel: `WAV-${suffix} - WA Test Vehicle`,
+    });
     expect(plan.skipped).toHaveLength(4);
     expect(await db.notificationOutbox.count({ where: { customerId: { in: Object.values(customers) } } })).toBe(0);
   });
@@ -410,5 +419,73 @@ describe("removing people from the queue", () => {
       await db.auditLog.deleteMany({ where: { cityId: other.id } });
       await db.city.delete({ where: { id: other.id } });
     }
+  });
+});
+
+describe("notices", () => {
+  const rate = { effectiveDate: "1 December 2026", ratesText: "Milk (per litre): ₹60 → ₹62; Paneer (per kg): ₹320 → ₹340" };
+  const mine = () => db.notificationOutbox.findMany({ where: { customerId: { in: Object.values(customers) } } });
+
+  it("lets anyone with consent and a usable number receive a notice, whether or not they owe", async () => {
+    const audience = await planNoticeAudience(cityId);
+    const ours = audience.candidates.filter((candidate) => Object.values(customers).includes(candidate.customerId));
+
+    // ok and zero have consent and a valid number; the zero-balance customer is fine for a notice.
+    expect(ours.map((candidate) => candidate.customerId).sort()).toEqual([customers.ok, customers.zero].sort());
+    expect(audience.noConsent).toBeGreaterThanOrEqual(1);
+    expect(audience.noNumber).toBeGreaterThanOrEqual(2);
+  });
+
+  it("queues the notice only to the customers chosen, with the values stored for the sender", async () => {
+    const result = await enqueueNotice({ cityId, template: "rate_change_notice_v1", variables: rate, customerIds: [customers.ok] });
+    expect(result.queued).toBe(1);
+
+    const rows = await mine();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ customerId: customers.ok, template: "rate_change_notice_v1", recipient: "919812345678", status: "PENDING" });
+    expect(rows[0].variables).toEqual(rate);
+  });
+
+  it("can only narrow: a customer without consent or a number is ignored even if named", async () => {
+    const result = await enqueueNotice({
+      cityId, template: "delivery_notice_v1",
+      variables: { date: "14 November 2026", messageHi: "आज अवकाश", messageEn: "Holiday today" },
+      customerIds: [customers.noconsent, customers.nomobile, customers.badmobile],
+    });
+    expect(result.queued).toBe(0);
+    expect(await mine()).toHaveLength(0);
+  });
+
+  it("sends the same notice to the same customer once, and a changed notice again", async () => {
+    const first = await enqueueNotice({ cityId, template: "rate_change_notice_v1", variables: rate, customerIds: [customers.ok] });
+    const again = await enqueueNotice({ cityId, template: "rate_change_notice_v1", variables: rate, customerIds: [customers.ok] });
+    expect(first.queued).toBe(1);
+    expect(again.queued).toBe(0);
+    expect(again.alreadyQueued).toBe(1);
+
+    const changed = await enqueueNotice({
+      cityId, template: "rate_change_notice_v1", variables: { ...rate, ratesText: "Milk (per litre): ₹60 → ₹63" }, customerIds: [customers.ok],
+    });
+    expect(changed.queued).toBe(1);
+    expect(await mine()).toHaveLength(2);
+  });
+
+  it("refuses a notice WhatsApp would reject, before anything is queued", async () => {
+    await expect(
+      enqueueNotice({ cityId, template: "rate_change_notice_v1", variables: { ...rate, ratesText: "line one\nline two" }, customerIds: [customers.ok] }),
+    ).rejects.toThrow();
+    await expect(
+      enqueueNotice({ cityId, template: "delivery_notice_v1", variables: { date: "", messageHi: "x", messageEn: "y" }, customerIds: [customers.ok] }),
+    ).rejects.toThrow();
+    expect(await mine()).toHaveLength(0);
+  });
+
+  it("hands a queued notice to the Zoepact sender, never the old text agent", async () => {
+    await enqueueNotice({ cityId, template: "rate_change_notice_v1", variables: rate, customerIds: [customers.ok] });
+
+    expect((await claimPending(50)).filter((message) => message.chatId === "919812345678@c.us")).toHaveLength(0);
+    const forZoepact = (await claimForZoepact(50)).filter((row) => row.recipient === "919812345678");
+    expect(forZoepact).toHaveLength(1);
+    expect(forZoepact[0].template).toBe("rate_change_notice_v1");
   });
 });

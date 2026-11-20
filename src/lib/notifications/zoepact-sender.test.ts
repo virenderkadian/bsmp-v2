@@ -48,6 +48,33 @@ describe("buildZoepactSend", () => {
   });
 });
 
+describe("buildZoepactSend: notices", () => {
+  it("builds a rate change from the date and the one-line product list", () => {
+    const built = buildZoepactSend("rate_change_notice_v1", { effectiveDate: "1 December 2026", ratesText: "Milk (per litre): ₹60 → ₹62; Paneer (per kg): ₹320 → ₹340" }, sign);
+    expect(built).toEqual({
+      ok: true,
+      input: {
+        templateName: "bsmp_rate_change_v1",
+        language: "hi",
+        variables: [
+          "1 December 2026", "Milk (per litre): ₹60 → ₹62; Paneer (per kg): ₹320 → ₹340",
+          "1 December 2026", "Milk (per litre): ₹60 → ₹62; Paneer (per kg): ₹320 → ₹340",
+        ],
+      },
+    });
+  });
+
+  it("builds a delivery notice with a Hindi and an English message", () => {
+    const built = buildZoepactSend("delivery_notice_v1", { date: "14 November 2026", messageHi: "आज अवकाश रहेगा", messageEn: "no delivery today" }, sign);
+    expect(built).toMatchObject({ ok: true, input: { templateName: "bsmp_delivery_notice_v1", variables: ["14 November 2026", "आज अवकाश रहेगा", "14 November 2026", "no delivery today"] } });
+  });
+
+  it("refuses a stored notice that WhatsApp would reject", () => {
+    expect(buildZoepactSend("rate_change_notice_v1", { effectiveDate: "1 Dec", ratesText: "a\nb" }, sign)).toMatchObject({ ok: false });
+    expect(buildZoepactSend("delivery_notice_v1", { date: "1 Dec", messageHi: "", messageEn: "x" }, sign)).toMatchObject({ ok: false });
+  });
+});
+
 describe("outcomeFor", () => {
   const fail = (kind: "config" | "invalid" | "transient" | "ambiguous") => ({ ok: false as const, kind, message: "m" });
 

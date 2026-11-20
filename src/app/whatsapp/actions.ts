@@ -5,6 +5,7 @@ import { z } from "zod";
 import { getCurrentCityId } from "@/lib/current-city";
 import { getCurrentUser } from "@/lib/current-user";
 import { bulkOptIn, setCustomerConsent } from "@/lib/notifications/consent";
+import { enqueueNotice, isNoticeTemplate, planNoticeAudience } from "@/lib/notifications/notices";
 import { enqueuePaymentReminders, planPaymentReminders } from "@/lib/notifications/reminders";
 import { loadTemplates, submitOurTemplate, type TemplatesState } from "@/lib/notifications/template-admin";
 import { cancelMessages, cancelPending, enqueueMonthlyBills, planMonthlyBills, retryFailed, type SkippedCustomer } from "@/lib/notifications/outbox";
@@ -235,7 +236,19 @@ export async function submitTemplateAction(key: string): Promise<TemplatesState>
 
 const idList = z.array(z.string().uuid()).max(5000);
 
-export type RecipientRow = { id: string; code: string; name: string; detail: string };
+export type RecipientRow = {
+  id: string;
+  code: string;
+  name: string;
+  // What is shown on the right (formatted money) and the same figure as a number, for filtering.
+  detail: string;
+  // Absent for notices, which have no per-customer amount (so no amount filter).
+  amount?: number;
+  routeId: string;
+  routeLabel: string;
+  vehicleId: string;
+  vehicleLabel: string;
+};
 
 export type PickerState =
   | { status: "idle" }
@@ -264,6 +277,11 @@ export async function previewRemindersAction(): Promise<PickerState> {
         code: candidate.customerCode,
         name: candidate.customerName,
         detail: money(candidate.outstanding),
+        amount: candidate.outstanding,
+        routeId: candidate.routeId,
+        routeLabel: candidate.routeLabel,
+        vehicleId: candidate.vehicleId,
+        vehicleLabel: candidate.vehicleLabel,
       })),
       skipped: plan.skipped,
       totalOutstanding: plan.totalOutstanding.toFixed(2),
@@ -303,6 +321,11 @@ export async function previewBillsAction(billingMonth: string): Promise<PickerSt
         code: candidate.customerCode,
         name: candidate.customerName,
         detail: money(candidate.amountDue),
+        amount: Number(candidate.amountDue),
+        routeId: candidate.routeId,
+        routeLabel: candidate.routeLabel,
+        vehicleId: candidate.vehicleId,
+        vehicleLabel: candidate.vehicleLabel,
       })),
       skipped: plan.skipped,
     };
@@ -348,5 +371,53 @@ export async function removeFromQueueAction(ids: string[]): Promise<WhatsAppActi
     };
   } catch (error) {
     return { status: "error", message: error instanceof Error ? error.message : "Unable to remove messages." };
+  }
+}
+
+// ---- Notices: rate change and delivery notice (admin only) ----
+
+export async function previewNoticeAudienceAction(): Promise<PickerState> {
+  try {
+    await requireSendPermission();
+    const audience = await planNoticeAudience(await getCurrentCityId());
+    const left = [
+      audience.noConsent > 0 ? `${audience.noConsent} without WhatsApp consent` : "",
+      audience.noNumber > 0 ? `${audience.noNumber} without a usable number` : "",
+    ].filter(Boolean);
+    return {
+      status: "ready",
+      message: `${audience.candidates.length} customer(s) can receive a notice${left.length > 0 ? `; left out: ${left.join(", ")}` : ""}.`,
+      rows: audience.candidates.map((candidate) => ({
+        id: candidate.customerId,
+        code: candidate.customerCode,
+        name: candidate.customerName,
+        detail: "",
+        routeId: candidate.routeId,
+        routeLabel: candidate.routeLabel,
+        vehicleId: candidate.vehicleId,
+        vehicleLabel: candidate.vehicleLabel,
+      })),
+      skipped: [],
+    };
+  } catch (error) {
+    return { status: "error", message: error instanceof Error ? error.message : "Unable to prepare the notice." };
+  }
+}
+
+export async function queueNoticeAction(template: string, variables: unknown, customerIds: string[]): Promise<PickerState> {
+  try {
+    await requireSendPermission();
+    if (!isNoticeTemplate(template)) return { status: "error", message: "Unknown notice type." };
+    const ids = idList.safeParse(customerIds);
+    if (!ids.success) return { status: "error", message: "Invalid selection." };
+    if (ids.data.length === 0) return { status: "error", message: "Select at least one customer." };
+
+    const result = await enqueueNotice({ cityId: await getCurrentCityId(), template, variables, customerIds: ids.data });
+    revalidatePath("/whatsapp");
+    const parts = [`Queued ${result.queued} notice(s).`];
+    if (result.alreadyQueued > 0) parts.push(`${result.alreadyQueued} had already been sent this notice.`);
+    return { status: "queued", message: parts.join(" "), rows: [], skipped: [] };
+  } catch (error) {
+    return { status: "error", message: error instanceof Error ? error.message : "Unable to queue the notice." };
   }
 }

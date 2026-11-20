@@ -124,6 +124,10 @@ export async function sendTemplate(input: SendTemplateInput): Promise<ZoepactRes
   if (input.variables.some((value) => value.trim() === "")) {
     return { ok: false, kind: "invalid", message: "A template value is empty." };
   }
+  // Meta rejects a value with a line break, a tab or a long run of spaces.
+  if (input.variables.some((value) => /[\n\r\t]/.test(value) || / {5,}/.test(value))) {
+    return { ok: false, kind: "invalid", message: "A template value must be a single line." };
+  }
 
   const result = await request("POST", "/messages/template", {
     phone: input.phone,

@@ -4,6 +4,7 @@ import { getCurrentCityId } from "@/lib/current-city";
 import { getCurrentUser } from "@/lib/current-user";
 import { isNotificationsEnabled } from "@/lib/notifications/config";
 import { getConsentCustomers, getConsentSummary } from "@/lib/notifications/consent";
+import { getNoticeProducts } from "@/lib/notifications/notices";
 import { getFailedMessages, getPendingMessages, getRecentBatches, getSendableMonths } from "@/lib/notifications/outbox";
 
 // Single home for everything sent to customers over WhatsApp — bills today,
@@ -34,11 +35,12 @@ export default async function WhatsAppPage() {
 
   const cityId = await getCurrentCityId();
 
-  const [months, batches, failed, waiting, consentSummary, consentCustomers] = await Promise.all([
+  const [months, batches, failed, waiting, products, consentSummary, consentCustomers] = await Promise.all([
     getSendableMonths(cityId),
     getRecentBatches(cityId),
     getFailedMessages(cityId),
     getPendingMessages(cityId),
+    getNoticeProducts(cityId),
     getConsentSummary(cityId),
     getConsentCustomers(cityId),
   ]);
@@ -50,6 +52,7 @@ export default async function WhatsAppPage() {
       batches={batches}
       failed={failed}
       waiting={waiting}
+      products={products}
       consentSummary={consentSummary}
       consentCustomers={consentCustomers}
     />

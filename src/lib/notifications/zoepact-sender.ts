@@ -6,8 +6,8 @@ import {
   getWalletBalance, sendTemplate, type SendTemplateInput, type ZoepactResult,
 } from "@/lib/notifications/zoepact";
 import {
-  isZoepactTemplateKey, monthlyBillLinkValues, paymentReminderValues, ZOEPACT_TEMPLATES, ZOEPACT_TEMPLATE_KEYS,
-  zoepactVariableSchemas,
+  deliveryNoticeValues, isZoepactTemplateKey, monthlyBillLinkValues, paymentReminderValues, rateChangeValues,
+  ZOEPACT_TEMPLATES, ZOEPACT_TEMPLATE_KEYS, zoepactVariableSchemas,
 } from "@/lib/notifications/zoepact-templates";
 import { prisma } from "@/lib/prisma";
 
@@ -53,6 +53,16 @@ export function buildZoepactSend(template: string, variables: unknown, sign: (bi
       ok: true,
       input: { templateName: definition.zoepactName, language: definition.language, variables: paymentReminderValues({ month: v.month, outstanding: v.outstanding }) },
     };
+  }
+
+  if (template === "rate_change_notice_v1") {
+    const v = parsed.data as { effectiveDate: string; ratesText: string };
+    return { ok: true, input: { templateName: definition.zoepactName, language: definition.language, variables: rateChangeValues(v) } };
+  }
+
+  if (template === "delivery_notice_v1") {
+    const v = parsed.data as { date: string; messageHi: string; messageEn: string };
+    return { ok: true, input: { templateName: definition.zoepactName, language: definition.language, variables: deliveryNoticeValues(v) } };
   }
 
   const v = parsed.data as { customerName: string; month: number; amountDue: number | string; billId: string };

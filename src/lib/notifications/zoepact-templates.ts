@@ -27,6 +27,10 @@ export type ZoepactTemplateDefinition = {
 
 const FOOTER = "BHRAMSHAKTI MILK PRODUCT";
 
+// Longest a notice's variable text may be. The whole message must stay under
+// WhatsApp's 1,024-character body limit once the fixed wording is added.
+export const MAX_NOTICE_TEXT = 400;
+
 export const ZOEPACT_TEMPLATES = {
   payment_reminder_hi_en_v1: {
     label: "Payment reminder",
@@ -73,6 +77,46 @@ export const ZOEPACT_TEMPLATES = {
       "आपका {{2}} माह का दूध बिल तैयार है। कुल देय राशि: ₹ {{3}}",
       "---",
       "Dear {{4}}, your {{5}} milk bill is ready. Total amount due: ₹ {{6}}. Thank you.",
+    ].join("\n\n"),
+  },
+
+  rate_change_notice_v1: {
+    label: "Rate change notice",
+    description: "Tells customers the rates of one or more products are changing, and from when. Hindi and English in one message.",
+    zoepactName: "bsmp_rate_change_v1",
+    category: "utility",
+    language: "hi",
+    footer: FOOTER,
+    slots: 4,
+    body: [
+      "नमस्कार जी 🙏",
+      "{{1}} से हमारे उत्पादों के दामों में बदलाव किया जा रहा है:",
+      "{{2}}",
+      "आपके सहयोग के लिए धन्यवाद 🙏",
+      "---",
+      "Dear Customer,",
+      "From {{3}}, our rates will change as follows:",
+      "{{4}}",
+      "Thank you for your continued support.",
+    ].join("\n\n"),
+  },
+
+  delivery_notice_v1: {
+    label: "Delivery timing or holiday notice",
+    description: "Tells customers about a change to milk delivery on a given day, such as a holiday or a late round. Hindi and English in one message.",
+    zoepactName: "bsmp_delivery_notice_v1",
+    category: "utility",
+    language: "hi",
+    footer: FOOTER,
+    slots: 4,
+    body: [
+      "नमस्कार जी 🙏",
+      "{{1}} को दूध की डिलीवरी के बारे में सूचना: {{2}}",
+      "असुविधा के लिए हमें खेद है 🙏",
+      "---",
+      "Dear Customer,",
+      "Notice about milk delivery on {{3}}: {{4}}",
+      "We apologise for any inconvenience.",
     ].join("\n\n"),
   },
 } as const satisfies Record<string, ZoepactTemplateDefinition>;
@@ -130,6 +174,58 @@ export const zoepactVariableSchemas = {
     amountDue: money,
     billId: z.string().uuid(),
   }),
+  rate_change_notice_v1: z.object({
+    effectiveDate: z.string().trim().min(1).max(40).refine(isSingleLine, "Must be a single line"),
+    ratesText: z.string().trim().min(1).max(MAX_NOTICE_TEXT).refine(isSingleLine, "Must be a single line"),
+  }),
+  delivery_notice_v1: z.object({
+    date: z.string().trim().min(1).max(40).refine(isSingleLine, "Must be a single line"),
+    messageHi: z.string().trim().min(1).max(MAX_NOTICE_TEXT).refine(isSingleLine, "Must be a single line"),
+    messageEn: z.string().trim().min(1).max(MAX_NOTICE_TEXT).refine(isSingleLine, "Must be a single line"),
+  }),
 } as const satisfies Record<ZoepactTemplateKey, z.ZodType>;
 
 export const ZOEPACT_TEMPLATE_KEYS = Object.keys(ZOEPACT_TEMPLATES) as ZoepactTemplateKey[];
+
+// ---- Notices: rate changes and delivery notices ----
+
+// A WhatsApp template value must be ONE line: Meta rejects line breaks, tabs and
+// long runs of spaces inside a variable. That is why several products travel as one
+// line joined with "; " rather than one line each — which also lets a single approved
+// template carry any number of products.
+export function isSingleLine(value: string): boolean {
+  return !/[\n\r\t]/.test(value) && !/ {5,}/.test(value);
+}
+
+// Collapses pasted text (line breaks, tabs, runs of spaces) into one tidy line.
+export function toSingleLine(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+export type RateChangeItem = { name: string; unit?: string; oldRate: number | string; newRate: number | string };
+
+// 60 -> "₹60", 62.5 -> "₹62.50": whole rupees stay plain, the rest keep paise.
+function rate(value: number | string): string {
+  const amount = typeof value === "string" ? Number(value) : value;
+  if (!Number.isFinite(amount)) return "₹0";
+  return Number.isInteger(amount) ? `₹${amount}` : `₹${amount.toFixed(2)}`;
+}
+
+// "Milk (per litre): ₹60 → ₹62; Paneer (per kg): ₹320 → ₹340"
+export function buildRatesText(items: RateChangeItem[]): string {
+  return items
+    .map((item) => `${toSingleLine(item.name)}${item.unit ? ` (per ${toSingleLine(item.unit)})` : ""}: ${rate(item.oldRate)} → ${rate(item.newRate)}`)
+    .join("; ");
+}
+
+export type RateChangeParams = { effectiveDate: string; ratesText: string };
+export type DeliveryNoticeParams = { date: string; messageHi: string; messageEn: string };
+
+// The date and the rates appear in both languages, so the slots repeat them.
+export function rateChangeValues(params: RateChangeParams): string[] {
+  return [params.effectiveDate, params.ratesText, params.effectiveDate, params.ratesText];
+}
+
+export function deliveryNoticeValues(params: DeliveryNoticeParams): string[] {
+  return [params.date, params.messageHi, params.date, params.messageEn];
+}

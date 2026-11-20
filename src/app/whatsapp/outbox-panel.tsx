@@ -51,6 +51,8 @@ const TEMPLATE_LABEL: Record<string, string> = {
   monthly_bill_v1: "Monthly bill",
   monthly_bill_link_v1: "Monthly bill",
   payment_reminder_hi_en_v1: "Payment reminder",
+  rate_change_notice_v1: "Rate change notice",
+  delivery_notice_v1: "Delivery notice",
 };
 
 // Messages queued but not yet picked up for sending: the window to take someone

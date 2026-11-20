@@ -52,6 +52,10 @@ describe("zoepact client", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch");
     expect((await sendTemplate({ ...base, phone: "+91 98765" })).ok).toBe(false);
     expect((await sendTemplate({ ...base, variables: ["अक्टूबर", " "] })).ok).toBe(false);
+    // WhatsApp rejects a value with a line break, a tab or a long run of spaces.
+    expect((await sendTemplate({ ...base, variables: ["Milk: ₹60\nPaneer: ₹320", "2"] })).ok).toBe(false);
+    expect((await sendTemplate({ ...base, variables: ["a\tb", "2"] })).ok).toBe(false);
+    expect((await sendTemplate({ ...base, variables: ["a     b", "2"] })).ok).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
