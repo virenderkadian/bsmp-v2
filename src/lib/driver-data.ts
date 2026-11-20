@@ -1,3 +1,4 @@
+import { customersOwing, type CustomerPayments, type IssuedBill } from "@/lib/customer-dues";
 import { prisma } from "@/lib/prisma";
 import { updateRecentOrderCache } from "@/lib/daily-entry-guard";
 import { classifyRecentOrder, type RecentEntry, type RecentOrderSuggestion } from "@/lib/driver-suggestion";
@@ -609,95 +610,92 @@ export async function getDriverDues(vehicleId: string, cityId: string): Promise<
   const profile = await prisma.businessProfile.findUnique({ where: { cityId }, select: { businessName: true, upiId: true } });
   const upi = profile?.upiId ? { upiId: profile.upiId, payeeName: profile.businessName } : null;
 
-  const bills = await prisma.monthlyBill.findMany({
-    where: {
-      route: { vehicleId, cityId, isActive: true },
-      status: "GENERATED",
-      closingBalance: { gt: 0 },
-    },
-    select: {
-      id: true,
-      customerId: true,
-      billingMonth: true,
-      closingBalance: true,
-      route: { select: { id: true, code: true, name: true } },
-      customer: { select: { code: true, name: true, mobile: true } },
-    },
-    orderBy: { billingMonth: "asc" },
+  // Who might owe: customers with an unpaid issued bill on one of this
+  // vehicle's routes. Whether they really do is decided below from their
+  // LATEST bill (see customer-dues.ts) — not from every unpaid month.
+  const candidateRows = await prisma.monthlyBill.findMany({
+    where: { route: { vehicleId, cityId, isActive: true }, status: "GENERATED", closingBalance: { gt: 0 } },
+    select: { customerId: true },
+    distinct: ["customerId"],
   });
+  if (candidateRows.length === 0) {
+    return { routes: [], grandTotalOutstanding: "0.00", customerCount: 0, upi };
+  }
+  const customerIds = candidateRows.map((row) => row.customerId);
 
-  if (bills.length === 0) {
+  const [issuedBills, verifiedByCustomer, customers] = await Promise.all([
+    prisma.monthlyBill.findMany({
+      where: { customerId: { in: customerIds }, status: { in: ["GENERATED", "LOCKED"] }, route: { cityId } },
+      select: {
+        id: true, customerId: true, routeId: true, billingMonth: true, status: true, paymentAmount: true, closingBalance: true,
+        route: { select: { code: true, name: true, vehicleId: true, isActive: true } },
+      },
+    }),
+    prisma.payment.groupBy({
+      by: ["customerId"],
+      where: { customerId: { in: customerIds }, status: "VERIFIED", route: { cityId } },
+      _sum: { amount: true },
+    }),
+    prisma.customer.findMany({ where: { id: { in: customerIds }, cityId }, select: { id: true, code: true, name: true, mobile: true } }),
+  ]);
+
+  const issued: IssuedBill[] = issuedBills.map((bill) => ({
+    billId: bill.id,
+    customerId: bill.customerId,
+    routeId: bill.routeId,
+    month: bill.billingMonth.toISOString().slice(0, 7),
+    status: bill.status as "GENERATED" | "LOCKED",
+    paymentAmount: Number(bill.paymentAmount),
+    closingBalance: Number(bill.closingBalance),
+  }));
+  const lockedPaid = new Map<string, number>();
+  for (const bill of issued) {
+    if (bill.status === "LOCKED") {
+      lockedPaid.set(bill.customerId, (lockedPaid.get(bill.customerId) ?? 0) + bill.paymentAmount);
+    }
+  }
+  const payments = new Map<string, CustomerPayments>(
+    verifiedByCustomer.map((row) => [row.customerId, { totalVerified: Number(row._sum.amount ?? 0), lockedPaid: lockedPaid.get(row.customerId) ?? 0 }]),
+  );
+  const routeById = new Map(issuedBills.map((bill) => [bill.routeId, bill.route]));
+  const customerById = new Map(customers.map((customer) => [customer.id, customer]));
+
+  // Only this vehicle's customers: the latest bill must sit on one of its
+  // active routes. One entry per customer — under their billing route.
+  const owing = [...customersOwing(issued, payments).entries()].filter(([, due]) => {
+    const route = routeById.get(due.bill.routeId);
+    return route?.vehicleId === vehicleId && route.isActive;
+  });
+  if (owing.length === 0) {
     return { routes: [], grandTotalOutstanding: "0.00", customerCount: 0, upi };
   }
 
-  // This month's delivery-sequence position, so each route's list can read
-  // in the same order the driver actually walks it. A customer can have an
-  // unpaid bill without still being on the route (moved off since) — sorted
-  // to the end of their route in that case rather than dropped, since the
-  // money is still owed regardless of today's assignment.
-  const routeIds = [...new Set(bills.map((bill) => bill.route.id))];
+  // This month's delivery-sequence position, so each route's list reads in the
+  // order the driver walks it. A customer can owe without still being on the
+  // route (moved off since) — sorted to the end rather than dropped.
+  const routeIds = [...new Set(owing.map(([, due]) => due.bill.routeId))];
   const sequences = await prisma.monthlyRouteCustomerSequence.findMany({
     where: { routeId: { in: routeIds }, sequenceMonth, status: "ACTIVE" },
     select: { routeId: true, customerId: true, sequenceNo: true },
   });
   const sequenceByKey = new Map(sequences.map((seq) => [`${seq.routeId}:${seq.customerId}`, seq.sequenceNo]));
 
-  type CustomerAccumulator = {
-    customerCode: string;
-    customerName: string;
-    mobile: string | null;
-    bills: Array<{ billId: string; month: string; outstanding: number }>;
-  };
-  type RouteAccumulator = {
-    routeCode: string;
-    routeName: string;
-    customers: Map<string, CustomerAccumulator>;
-  };
-  const routeAccumulators = new Map<string, RouteAccumulator>();
-
-  for (const bill of bills) {
-    const routeAcc = routeAccumulators.get(bill.route.id) ?? {
-      routeCode: bill.route.code,
-      routeName: bill.route.name,
-      customers: new Map<string, CustomerAccumulator>(),
-    };
-    routeAccumulators.set(bill.route.id, routeAcc);
-
-    const customerAcc = routeAcc.customers.get(bill.customerId) ?? {
-      customerCode: bill.customer.code,
-      customerName: bill.customer.name,
-      mobile: bill.customer.mobile,
-      bills: [],
-    };
-    customerAcc.bills.push({
-      billId: bill.id,
-      month: bill.billingMonth.toISOString().slice(0, 7),
-      outstanding: Number(bill.closingBalance),
-    });
-    routeAcc.customers.set(bill.customerId, customerAcc);
-  }
-
   let grandTotal = 0;
-  let customerCount = 0;
-  const routes: DriverDuesRoute[] = [...routeAccumulators.entries()]
-    .map(([routeId, routeAcc]) => {
-      let routeTotal = 0;
-      const customers: DriverDuesCustomer[] = [...routeAcc.customers.entries()]
-        .map(([customerId, customerAcc]) => {
-          const total = customerAcc.bills.reduce((sum, bill) => sum + bill.outstanding, 0);
-          routeTotal += total;
-          customerCount += 1;
+  const routes: DriverDuesRoute[] = routeIds
+    .map((routeId) => {
+      const route = routeById.get(routeId)!;
+      const customersHere: DriverDuesCustomer[] = owing
+        .filter(([, due]) => due.bill.routeId === routeId)
+        .map(([customerId, due]) => {
+          const customer = customerById.get(customerId);
           return {
             customerId,
-            customerCode: customerAcc.customerCode,
-            customerName: customerAcc.customerName,
-            mobile: customerAcc.mobile,
+            customerCode: customer?.code ?? "",
+            customerName: customer?.name ?? "",
+            mobile: customer?.mobile ?? null,
             sequenceNo: sequenceByKey.get(`${routeId}:${customerId}`) ?? null,
-            totalOutstanding: total.toFixed(2),
-            bills: customerAcc.bills
-              .slice()
-              .sort((a, b) => (a.month < b.month ? -1 : a.month > b.month ? 1 : 0))
-              .map((bill) => ({ billId: bill.billId, month: bill.month, outstanding: bill.outstanding.toFixed(2) })),
+            totalOutstanding: due.outstanding.toFixed(2),
+            bills: [{ billId: due.bill.billId, month: due.bill.month, outstanding: due.outstanding.toFixed(2) }],
           };
         })
         .sort((a, b) => {
@@ -706,18 +704,13 @@ export async function getDriverDues(vehicleId: string, cityId: string): Promise<
           if (b.sequenceNo !== null) return 1;
           return a.customerName.localeCompare(b.customerName, undefined, { numeric: true });
         });
+      const routeTotal = customersHere.reduce((sum, customer) => sum + Number(customer.totalOutstanding), 0);
       grandTotal += routeTotal;
-      return {
-        routeId,
-        routeCode: routeAcc.routeCode,
-        routeName: routeAcc.routeName,
-        customers,
-        totalOutstanding: routeTotal.toFixed(2),
-      };
+      return { routeId, routeCode: route.code, routeName: route.name, customers: customersHere, totalOutstanding: routeTotal.toFixed(2) };
     })
     .sort((a, b) => a.routeCode.localeCompare(b.routeCode));
 
-  return { routes, grandTotalOutstanding: grandTotal.toFixed(2), customerCount, upi };
+  return { routes, grandTotalOutstanding: grandTotal.toFixed(2), customerCount: owing.length, upi };
 }
 
 export type GetDriverBillDetailResult =
