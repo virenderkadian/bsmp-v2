@@ -803,9 +803,19 @@ function CustomerSummaryTab({
                   ...route.rows.map((row) => ({
                     key: row.key,
                     cells: [
-                      row.sequenceNo,
+                      row.source === "OUTSTANDING" ? "–" : row.sequenceNo,
                       <div key="customer" className="min-w-[200px] truncate">
                         <span className="font-medium text-text-primary">{row.customerName}</span>
+                        {/* A balance carried from an earlier month with no bill
+                            this month — listed on the route of their last bill. */}
+                        {row.source === "OUTSTANDING" ? (
+                          <span
+                            className="ml-2 whitespace-nowrap rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800"
+                            title={row.lastBilledMonth ? `Last billed ${row.lastBilledMonth}` : undefined}
+                          >
+                            Not billed this month
+                          </span>
+                        ) : null}
                         {/* Removed from the sequence mid-month but still has
                             deliveries, so they're still billed for them. Shown
                             here so that can't happen invisibly. */}
@@ -830,7 +840,11 @@ function CustomerSummaryTab({
                         {formatMoney(row.pendingAmount)}
                       </span>,
                       <div key="actions" className="flex items-center justify-end gap-1.5">
-                        {row.billId && row.status ? (
+                        {row.source === "OUTSTANDING" ? (
+                          <span className="text-xs text-text-muted" title="This customer has no bill this month">
+                            Last bill: {row.status ? statuses.find((entry) => entry.value === row.status)?.label ?? row.status : "–"}
+                          </span>
+                        ) : row.billId && row.status ? (
                           <>
                             <BillStatusButton
                               billId={row.billId}

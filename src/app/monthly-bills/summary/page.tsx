@@ -236,6 +236,9 @@ export default async function MonthlyBillSummaryPage({
                             {row.customerMobile ? (
                               <span className="text-xs text-slate-600 print:text-[9px]"> · {row.customerMobile}</span>
                             ) : null}
+                            {row.source === "OUTSTANDING" ? (
+                              <span className="text-xs text-slate-600 print:text-[9px]"> · not billed this month</span>
+                            ) : null}
                             {row.source === "DAILY_ENTRY" ? (
                               <span className="text-xs text-slate-600 print:text-[9px]"> · live fallback</span>
                             ) : null}

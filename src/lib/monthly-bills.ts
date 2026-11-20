@@ -1,6 +1,7 @@
 import type { BillingStatus, MonthlyBill, PaymentMode } from "@prisma/client";
 import { getCurrentCityId } from "@/lib/current-city";
 import { getCityCustomerLedger, receivedAgainstOpenBill } from "@/lib/bill-ledger";
+import { outstandingOnBill } from "@/lib/customer-dues";
 import { mergeCalendarDays, resolveBillingRoutes, selectBillingRows } from "@/lib/monthly-bills-math";
 import { withDbTimeout } from "@/lib/db-timeout";
 import { prisma } from "@/lib/prisma";
@@ -189,7 +190,11 @@ export type MonthlyBillSummaryCustomerRow = {
   openingBalance: string;
   paymentAmount: string;
   pendingAmount: string;
-  source: "BILL" | "DAILY_ENTRY";
+  // OUTSTANDING: a customer with a balance but no bill this month, listed under
+  // the route of their last bill (see below) rather than dropped from the screen.
+  source: "BILL" | "DAILY_ENTRY" | "OUTSTANDING";
+  // The month of that last bill, for an OUTSTANDING row.
+  lastBilledMonth?: string;
   billId: string | null;
   status: BillingStatus | null;
   // False when the customer has deliveries this month but no sequence row —
@@ -746,7 +751,7 @@ export async function getMonthlyBillSummary(input?: {
           billingMonth: { lt: start },
         },
         orderBy: { billingMonth: "desc" },
-        select: { customerId: true, closingBalance: true, billingMonth: true },
+        select: { customerId: true, closingBalance: true, billingMonth: true, routeId: true, status: true, paymentAmount: true },
       }),
       // Collection ledger (verified total minus what's frozen into locked
       // bills), so the preview's Received/Pending matches what Generate would
@@ -781,12 +786,14 @@ export async function getMonthlyBillSummary(input?: {
     const billMap = new Map(bills.map((bill) => [bill.customerId, bill]));
     const priorClosingMap = new Map<string, number>();
     const priorMonthMap = new Map<string, string>();
+    const priorBillMap = new Map<string, (typeof priorBills)[number]>();
     for (const priorBill of priorBills) {
       // Ordered newest-first, so the first entry seen per customer is the
       // latest prior bill's closing balance.
       if (!priorClosingMap.has(priorBill.customerId)) {
         priorClosingMap.set(priorBill.customerId, Number(priorBill.closingBalance));
         priorMonthMap.set(priorBill.customerId, priorBill.billingMonth.toISOString().slice(0, 7));
+        priorBillMap.set(priorBill.customerId, priorBill);
       }
     }
     // Keyed by customer alone, so a customer delivered on both a morning and
@@ -924,6 +931,115 @@ export async function getMonthlyBillSummary(input?: {
       rowsByRoute.set(line.routeId, routeRows);
     });
 
+    // Customers carrying a balance who have NO bill this month — off every
+    // sequence, no deliveries — so no route table would list them, though the
+    // balance is real and still collectable. Each is listed under the route of
+    // their LAST bill (their billing route), labelled "not billed this month",
+    // with received and pending carrying their own amounts and delivery empty;
+    // the same placement the driver app's dues screen uses (customer-dues.ts).
+    // Only if that route isn't in view (removed, or filtered out) do they fall
+    // back to the separate list below, which only exists unfiltered.
+    const inThisMonth = new Set<string>([
+      ...monthSequenceRows.map((row) => row.customerId),
+      ...dailyMap.keys(),
+      ...billMap.keys(),
+    ]);
+    const owedAfterPriorBill = (customerId: string): number => {
+      const prior = priorBillMap.get(customerId);
+      if (!prior) {
+        return 0;
+      }
+      const ledger = customerLedger.get(customerId);
+      const payments = { totalVerified: ledger?.totalVerified ?? 0, lockedPaid: ledger?.lockedPaid ?? 0 };
+      if (prior.status === "GENERATED" || prior.status === "LOCKED") {
+        return outstandingOnBill(
+          {
+            billId: "",
+            customerId,
+            routeId: prior.routeId,
+            month: prior.billingMonth.toISOString().slice(0, 7),
+            status: prior.status,
+            paymentAmount: Number(prior.paymentAmount),
+            closingBalance: Number(prior.closingBalance),
+          },
+          payments,
+        );
+      }
+      // An unissued prior bill (draft/cancelled): same arithmetic as the preview rows.
+      return Number(prior.closingBalance) - receivedAgainstOpenBill(ledger);
+    };
+    const outstandingCandidates = [...priorClosingMap.keys()].filter(
+      (customerId) => !inThisMonth.has(customerId) && Math.round(owedAfterPriorBill(customerId) * 100) !== 0,
+    );
+    // The bill map above only covers the routes in view, so confirm against the
+    // whole city before calling anyone "not billed this month".
+    const billedElsewhere =
+      outstandingCandidates.length > 0
+        ? new Set(
+            (
+              await withDbTimeout(
+                prisma.monthlyBill.findMany({
+                  where: { billingMonth: start, customerId: { in: outstandingCandidates }, route: { cityId } },
+                  select: { customerId: true },
+                }),
+                "Monthly bill summary billed-elsewhere request",
+              )
+            ).map((bill) => bill.customerId),
+          )
+        : new Set<string>();
+    const outstandingIds = outstandingCandidates.filter((customerId) => !billedElsewhere.has(customerId));
+    const outstandingCustomers =
+      outstandingIds.length > 0
+        ? await withDbTimeout(
+            prisma.customer.findMany({
+              where: { id: { in: outstandingIds } },
+              select: { id: true, code: true, name: true, area: true, mobile: true },
+            }),
+            "Monthly bill summary outstanding request",
+          )
+        : [];
+
+    const unplaced: MonthlyBillOutstandingRow[] = [];
+    for (const customer of outstandingCustomers) {
+      const prior = priorBillMap.get(customer.id);
+      const owed = owedAfterPriorBill(customer.id);
+      const lastBilledMonth = priorMonthMap.get(customer.id) ?? "";
+      if (prior && routeIds.includes(prior.routeId)) {
+        const closing = Number(prior.closingBalance);
+        const routeRows = rowsByRoute.get(prior.routeId) ?? [];
+        routeRows.push({
+          key: `outstanding-${customer.id}`,
+          sequenceNo: 0,
+          customerId: customer.id,
+          customerCode: customer.code,
+          customerName: customer.name,
+          customerArea: customer.area,
+          customerMobile: customer.mobile,
+          productQuantities: Object.fromEntries(products.map((product) => [product.id, toQuantity(0)])),
+          deliveryAmount: toMoney(0),
+          openingBalance: toMoney(closing),
+          paymentAmount: toMoney(closing - owed),
+          pendingAmount: toMoney(owed),
+          source: "OUTSTANDING",
+          lastBilledMonth,
+          billId: null,
+          status: prior.status,
+          inSequence: true,
+        });
+        rowsByRoute.set(prior.routeId, routeRows);
+      } else if (!selectedRouteId) {
+        unplaced.push({
+          customerId: customer.id,
+          customerCode: customer.code,
+          customerName: customer.name,
+          customerMobile: customer.mobile,
+          lastBilledMonth,
+          outstandingAmount: toMoney(owed),
+        });
+      }
+    }
+    const outstanding = unplaced.sort((left, right) => Number(right.outstandingAmount) - Number(left.outstandingAmount));
+
     function buildTotals(rows: MonthlyBillSummaryCustomerRow[]): MonthlyBillSummaryTotals {
       const productQuantities = Object.fromEntries(
         products.map((product) => [
@@ -963,52 +1079,6 @@ export async function getMonthlyBillSummary(input?: {
     const allRows = summaryRoutes.flatMap((route) => route.rows);
     const selectedRoute = routes.find((route) => route.id === selectedRouteId);
 
-    // Customers carrying a balance who have no bill this month at all — off
-    // every route, no deliveries — so none of the route tables above would
-    // list them. The balance is real and still collectable; without this it
-    // just stops being visible after the last month they were served.
-    //
-    // Only meaningful when looking at every route: filtered to one route, "not
-    // on any route" isn't a question this view can answer.
-    const billedThisMonth = new Set(allRows.map((row) => row.customerId));
-    const outstandingIds = selectedRouteId
-      ? []
-      : [...priorClosingMap.entries()]
-          .filter(([customerId, closing]) => {
-            if (billedThisMonth.has(customerId)) {
-              return false;
-            }
-            // Same arithmetic the preview rows use: carried balance less
-            // whatever they've since paid that isn't frozen into a locked bill.
-            const settled = closing - receivedAgainstOpenBill(customerLedger.get(customerId));
-            return Math.round(settled * 100) !== 0;
-          })
-          .map(([customerId]) => customerId);
-
-    const outstandingCustomers =
-      outstandingIds.length > 0
-        ? await withDbTimeout(
-            prisma.customer.findMany({
-              where: { id: { in: outstandingIds } },
-              select: { id: true, code: true, name: true, mobile: true },
-            }),
-            "Monthly bill summary outstanding request",
-          )
-        : [];
-
-    const outstanding: MonthlyBillOutstandingRow[] = outstandingCustomers
-      .map((customer) => ({
-        customerId: customer.id,
-        customerCode: customer.code,
-        customerName: customer.name,
-        customerMobile: customer.mobile,
-        lastBilledMonth: priorMonthMap.get(customer.id) ?? "",
-        outstandingAmount: toMoney(
-          (priorClosingMap.get(customer.id) ?? 0) -
-            receivedAgainstOpenBill(customerLedger.get(customer.id)),
-        ),
-      }))
-      .sort((left, right) => Number(right.outstandingAmount) - Number(left.outstandingAmount));
 
     // Oldest generation time among the rows actually being shown from stored
     // bills. Oldest rather than newest: it's the point beyond which SOME figure
