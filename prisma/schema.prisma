@@ -213,6 +213,13 @@ model Customer {
   // Business Messaging Policy and India's DPDP Act both care *when* it was given,
   // and a bare `true` answers neither question.
   whatsappOptInAt  DateTime?
+  // A SEPARATE, dated consent for "your delivery is completed" messages. A customer can be
+  // happy to get a monthly bill and not a message every delivery day, and a daily message
+  // is the kind people block. Delivery updates need BOTH this and whatsappOptInAt.
+  deliveryUpdatesOptInAt DateTime?
+  // The same, for "we received your payment" confirmations. Its own consent because a customer
+  // may want a bill but not a message after every payment. Needs whatsappOptInAt as well.
+  paymentUpdatesOptInAt DateTime?
   createdAt        DateTime                       @default(now())
   updatedAt        DateTime                       @updatedAt
   city             City                           @relation(fields: [cityId], references: [id])
@@ -736,4 +743,35 @@ model CitySetting {
   city      City     @relation(fields: [cityId], references: [id])
 
   @@unique([cityId, key])
+}
+
+// Edited wording for a WhatsApp template. The built-in wording (src/lib/notifications/
+// zoepact-templates.ts) is "version 1" and is NOT stored here; a row exists only for a
+// version somebody wrote in the app. Each version is its own template at Meta under its
+// own name — an approved template is never edited in place, so changing the words means
+// submitting a new one and switching to it once Meta approves it.
+//
+// Global, not per city: one WhatsApp number and one Zoepact account serve every city, so
+// there is deliberately no cityId (and the city-isolation backstop does not apply).
+model WhatsAppTemplateVersion {
+  id            String   @id @default(uuid()) @db.Uuid
+  // A key of ZOEPACT_TEMPLATES, e.g. "payment_reminder_hi_en_v1".
+  templateKey   String
+  // 2 and up (the built-in wording is 1).
+  version       Int
+  // The name registered at Zoepact/Meta, unique across all versions.
+  zoepactName   String   @unique
+  body          String
+  footer        String
+  // The label of the template's button, for the one that has a button.
+  buttonText    String?
+  // The version messages are sent with. At most one per templateKey (a partial unique
+  // index in the migration enforces it); none active means the built-in wording.
+  isActive      Boolean  @default(false)
+  createdById   String?
+  createdByName String?
+  createdAt     DateTime @default(now())
+
+  @@unique([templateKey, version])
+  @@index([templateKey])
 }
