@@ -46,6 +46,10 @@ export type BillCandidate = {
   recipient: string;
   billId: string;
   amountDue: string;
+  routeId: string;
+  routeLabel: string;
+  vehicleId: string;
+  vehicleLabel: string;
 };
 
 export type BillPlan = { candidates: BillCandidate[]; skipped: SkippedCustomer[] };
@@ -75,8 +79,10 @@ export async function planMonthlyBills(input: {
       select: {
         id: true,
         customerId: true,
+        routeId: true,
         deliveryAmount: true,
         closingBalance: true,
+        route: { select: { code: true, name: true, vehicle: { select: { id: true, code: true, name: true } } } },
         customer: {
           select: { code: true, name: true, mobile: true, whatsappOptInAt: true },
         },
@@ -124,6 +130,10 @@ export async function planMonthlyBills(input: {
       // JSONB column and back, and money should not take a detour through a
       // float on the way.
       amountDue: bill.closingBalance.toString(),
+      routeId: bill.routeId,
+      routeLabel: `${bill.route.code} - ${bill.route.name}`,
+      vehicleId: bill.route.vehicle.id,
+      vehicleLabel: `${bill.route.vehicle.code} - ${bill.route.vehicle.name}`,
     });
   }
 

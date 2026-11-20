@@ -28,6 +28,12 @@ export type ReminderCandidate = {
   month: number; // the month of the bill the balance is on, 1-12
   outstanding: number;
   billId: string;
+  // The route of the latest bill (the customer's billing route) and its vehicle,
+  // so the office can pick or leave out whole routes and vehicles.
+  routeId: string;
+  routeLabel: string;
+  vehicleId: string;
+  vehicleLabel: string;
 };
 
 export type ReminderPlan = {
@@ -65,7 +71,7 @@ export async function planPaymentReminders(cityId: string): Promise<ReminderPlan
         where: { customerId: { in: customerIds }, status: { in: ["GENERATED", "LOCKED"] }, route: { cityId } },
         select: {
           id: true, customerId: true, routeId: true, billingMonth: true, status: true, paymentAmount: true, closingBalance: true,
-          route: { select: { isActive: true } },
+          route: { select: { isActive: true, code: true, name: true, vehicle: { select: { id: true, code: true, name: true } } } },
         },
       }),
       prisma.payment.groupBy({
@@ -101,6 +107,7 @@ export async function planPaymentReminders(cityId: string): Promise<ReminderPlan
     verified.map((row) => [row.customerId, { totalVerified: Number(row._sum.amount ?? 0), lockedPaid: lockedPaid.get(row.customerId) ?? 0 }]),
   );
   const routeActive = new Map(issuedBills.map((bill) => [bill.routeId, bill.route.isActive]));
+  const routeInfo = new Map(issuedBills.map((bill) => [bill.routeId, bill.route]));
   const customerById = new Map(customers.map((customer) => [customer.id, customer]));
 
   const candidates: ReminderCandidate[] = [];
@@ -129,6 +136,7 @@ export async function planPaymentReminders(cityId: string): Promise<ReminderPlan
       continue;
     }
 
+    const route = routeInfo.get(due.bill.routeId);
     totalOutstanding += due.outstanding;
     candidates.push({
       customerId,
@@ -138,6 +146,10 @@ export async function planPaymentReminders(cityId: string): Promise<ReminderPlan
       month: Number(due.bill.month.slice(5, 7)),
       outstanding: due.outstanding,
       billId: due.bill.billId,
+      routeId: due.bill.routeId,
+      routeLabel: route ? `${route.code} - ${route.name}` : "",
+      vehicleId: route?.vehicle.id ?? "",
+      vehicleLabel: route ? `${route.vehicle.code} - ${route.vehicle.name}` : "",
     });
   }
 
