@@ -1,16 +1,15 @@
 "use client";
 
-import { useActionState, useState } from "react";
-import { queueMonthlyBills, type WhatsAppActionState } from "@/app/whatsapp/actions";
-import { PrimaryButton } from "@/components/admin/buttons";
+import { useState, useTransition } from "react";
+import { previewBillsAction, queueBillsAction, type PickerState } from "@/app/whatsapp/actions";
+import { RecipientPicker } from "@/app/whatsapp/recipient-picker";
+import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { EmptyState } from "@/components/admin/empty-state";
 import { SelectInput } from "@/components/admin/select-input";
 import { SummaryStatBar } from "@/components/admin/summary-stat-bar";
 import type { ConsentSummary } from "@/lib/notifications/consent";
-import { ZOEPACT_TEMPLATES } from "@/lib/notifications/zoepact-templates";
 import type { SendableMonth } from "@/lib/notifications/outbox";
-
-const initialState: WhatsAppActionState = { status: "idle" };
+import { ZOEPACT_TEMPLATES } from "@/lib/notifications/zoepact-templates";
 
 // Filled from the real template wording rather than hand-written, so the preview
 // can never drift from what customers actually receive.
@@ -22,6 +21,8 @@ const PREVIEW = [
   "[ View bill ]",
 ].join("\n\n");
 
+// Same steps as the Reminders tab: see the eligible customers for the month, untick
+// anyone who shouldn't get a message, then queue exactly the ticked ones.
 export function SendBillsPanel({
   canSend,
   months,
@@ -31,8 +32,10 @@ export function SendBillsPanel({
   months: SendableMonth[];
   consentSummary: ConsentSummary;
 }) {
-  const [state, formAction, pending] = useActionState(queueMonthlyBills, initialState);
   const [selectedMonth, setSelectedMonth] = useState(months[0]?.value ?? "");
+  const [state, setState] = useState<PickerState>({ status: "idle" });
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [pending, startTransition] = useTransition();
 
   if (months.length === 0) {
     return (
@@ -40,7 +43,29 @@ export function SendBillsPanel({
     );
   }
 
-  const month = months.find((entry) => entry.value === selectedMonth);
+  const check = () =>
+    startTransition(async () => {
+      const next = await previewBillsAction(selectedMonth);
+      setState(next);
+      setSelected(new Set(next.status === "ready" ? next.rows.map((row) => row.id) : []));
+    });
+
+  const queue = () =>
+    startTransition(async () => {
+      const next = await queueBillsAction(selectedMonth, [...selected]);
+      setState(next);
+      if (next.status === "queued") setSelected(new Set());
+    });
+
+  const changeMonth = (value: string) => {
+    setSelectedMonth(value);
+    // A list built for one month must not be queued under another.
+    setState({ status: "idle" });
+    setSelected(new Set());
+  };
+
+  const ready = state.status === "ready" ? state : null;
+  const skipped = state.status === "ready" || state.status === "queued" ? state.skipped : [];
 
   return (
     <div className="space-y-4">
@@ -58,12 +83,12 @@ export function SendBillsPanel({
       />
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <form action={formAction} className="space-y-4 rounded-lg border border-surface-border bg-surface p-4">
+        <div className="space-y-4 rounded-lg border border-surface-border bg-surface p-4">
           <div>
             <h2 className="text-sm font-semibold text-text-primary">Queue this month&apos;s bills</h2>
             <p className="mt-1 text-sm text-text-secondary">
-              Messages are queued here and sent through WhatsApp in small batches between 9am and 8pm.
-              Nothing is sent from this screen directly. Each message has a View bill button that opens the
+              Check who is eligible, untick anyone who shouldn&apos;t get a message, then queue the rest. Messages are sent
+              through WhatsApp in small batches between 9am and 8pm. Each has a View bill button that opens the
               customer&apos;s bill.
             </p>
           </div>
@@ -72,7 +97,7 @@ export function SendBillsPanel({
             label="Billing month"
             name="billingMonth"
             value={selectedMonth}
-            onChange={(event) => setSelectedMonth(event.target.value)}
+            onChange={(event) => changeMonth(event.target.value)}
             options={months.map((entry) => ({
               value: entry.value,
               label: `${entry.label} — ${entry.billCount} bill${entry.billCount === 1 ? "" : "s"}`,
@@ -80,32 +105,34 @@ export function SendBillsPanel({
           />
 
           {consentSummary.optedIn === 0 ? (
-            <p className="text-sm text-amber-700">
+            <p className="text-sm text-status-warning-text">
               No customer has WhatsApp consent recorded yet. Open the Consent tab first — nothing will
               queue until at least one customer has opted in.
             </p>
           ) : null}
 
-          <PrimaryButton type="submit" disabled={!canSend || pending || consentSummary.optedIn === 0}>
-            {pending ? "Queueing…" : `Queue ${month?.billCount ?? 0} bill message(s)`}
-          </PrimaryButton>
+          <div className="flex flex-wrap gap-2">
+            <SecondaryButton type="button" onClick={check} disabled={!canSend || pending || consentSummary.optedIn === 0}>
+              {pending ? "Working…" : ready ? "Check again" : "Check who is eligible"}
+            </SecondaryButton>
+            {ready && ready.rows.length > 0 ? (
+              <PrimaryButton type="button" onClick={queue} disabled={!canSend || pending || selected.size === 0}>
+                Queue {selected.size} bill message{selected.size === 1 ? "" : "s"}
+              </PrimaryButton>
+            ) : null}
+          </div>
 
-          {!canSend ? (
-            <p className="text-sm text-text-secondary">Only an admin can queue customer messages.</p>
-          ) : null}
-
-          {state.status !== "idle" && state.message ? (
-            <p className={state.status === "error" ? "text-sm text-rose-700" : "text-sm text-emerald-700"}>
-              {state.message}
-            </p>
-          ) : null}
-        </form>
+          {!canSend ? <p className="text-sm text-text-secondary">Only an admin can queue customer messages.</p> : null}
+          {state.status === "error" ? <p className="text-sm text-status-danger-text">{state.message}</p> : null}
+          {state.status === "queued" ? <p className="text-sm text-status-success-text">{state.message}</p> : null}
+          {ready ? <p className="text-sm text-text-primary">{ready.message}</p> : null}
+        </div>
 
         <div className="rounded-lg border border-surface-border bg-surface p-4">
           <h2 className="text-sm font-semibold text-text-primary">What the customer receives</h2>
-          <pre className="mt-3 overflow-x-auto whitespace-pre-wrap rounded-md bg-surface-muted p-3 font-mono text-xs leading-relaxed text-text-primary">
+          <div className="mt-3 max-h-80 overflow-auto whitespace-pre-wrap rounded-lg bg-surface-muted p-3 text-sm leading-relaxed text-text-primary">
             {PREVIEW}
-          </pre>
+          </div>
           <p className="mt-2 text-xs text-text-secondary">
             Example figures. Real messages use each customer&apos;s own name and amount. The View bill page
             shows the full bill, and a Pay with UPI button when a UPI ID is set and something is owed.
@@ -113,16 +140,25 @@ export function SendBillsPanel({
         </div>
       </div>
 
-      {state.skipped && state.skipped.length > 0 ? (
+      {ready && ready.rows.length > 0 ? (
         <div className="rounded-lg border border-surface-border bg-surface p-4">
-          <h2 className="text-sm font-semibold text-text-primary">
-            Skipped ({state.skipped.length})
-          </h2>
-          <p className="mt-1 text-sm text-text-secondary">
-            These customers were not queued. Nothing was sent to them.
-          </p>
-          <ul className="mt-3 divide-y divide-surface-border text-sm">
-            {state.skipped.map((entry) => (
+          <h3 className="mb-3 text-sm font-semibold text-text-primary">Who gets a bill message</h3>
+          <RecipientPicker
+            rows={ready.rows}
+            selected={selected}
+            onChange={setSelected}
+            disabled={pending || !canSend}
+            detailHeading="Amount due"
+          />
+        </div>
+      ) : null}
+
+      {skipped.length > 0 ? (
+        <div className="rounded-lg border border-surface-border bg-surface p-4">
+          <h2 className="text-sm font-semibold text-text-primary">Skipped ({skipped.length})</h2>
+          <p className="mt-1 text-sm text-text-secondary">These customers were not queued. Nothing was sent to them.</p>
+          <ul className="mt-3 max-h-64 divide-y divide-surface-border overflow-auto text-sm">
+            {skipped.map((entry) => (
               <li key={entry.customerCode} className="flex items-baseline justify-between gap-4 py-2">
                 <span className="text-text-primary">
                   {entry.customerCode} · {entry.customerName}

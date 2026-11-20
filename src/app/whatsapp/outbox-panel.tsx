@@ -1,10 +1,11 @@
 "use client";
 
-import { useActionState } from "react";
-import { cancelBatch, retryFailedMessages, type WhatsAppActionState } from "@/app/whatsapp/actions";
-import { SecondaryButton } from "@/components/admin/buttons";
+import { useActionState, useState, useTransition } from "react";
+import { cancelBatch, removeFromQueueAction, retryFailedMessages, type WhatsAppActionState } from "@/app/whatsapp/actions";
+import { RecipientPicker } from "@/app/whatsapp/recipient-picker";
+import { PrimaryButton, SecondaryButton } from "@/components/admin/buttons";
 import { EmptyState } from "@/components/admin/empty-state";
-import type { BatchProgress, FailedMessage } from "@/lib/notifications/outbox";
+import type { BatchProgress, FailedMessage, PendingMessage } from "@/lib/notifications/outbox";
 import { cn } from "@/lib/utils";
 
 const initialState: WhatsAppActionState = { status: "idle" };
@@ -46,29 +47,89 @@ function ProgressBar({ batch }: { batch: BatchProgress }) {
   );
 }
 
+const TEMPLATE_LABEL: Record<string, string> = {
+  monthly_bill_v1: "Monthly bill",
+  monthly_bill_link_v1: "Monthly bill",
+  payment_reminder_hi_en_v1: "Payment reminder",
+};
+
+// Messages queued but not yet picked up for sending: the window to take someone
+// off. Untick to keep, leave ticked to remove, and "Remove" cancels the ticked
+// ones. A message the sender has already picked up can't be recalled, and the
+// result says so rather than pretending.
+function WaitingQueue({ canSend, waiting }: { canSend: boolean; waiting: PendingMessage[] }) {
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [result, setResult] = useState<WhatsAppActionState>(initialState);
+  const [pending, startTransition] = useTransition();
+
+  if (waiting.length === 0) return null;
+
+  const remove = () =>
+    startTransition(async () => {
+      setResult(await removeFromQueueAction([...selected]));
+      setSelected(new Set());
+    });
+
+  return (
+    <div className="rounded-lg border border-surface-border bg-surface p-4">
+      <h2 className="text-sm font-semibold text-text-primary">Waiting to send ({waiting.length})</h2>
+      <p className="mt-0.5 text-sm text-text-secondary">
+        Tick anyone you want to take off the queue, then press Remove. Messages already picked up for sending can&apos;t be recalled.
+      </p>
+      <div className="mt-3">
+        <RecipientPicker
+          rows={waiting.map((message) => ({
+            id: message.id,
+            code: message.customerCode,
+            name: message.customerName,
+            detail: TEMPLATE_LABEL[message.template] ?? message.template,
+          }))}
+          selected={selected}
+          onChange={setSelected}
+          disabled={pending || !canSend}
+        />
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-3">
+        <PrimaryButton type="button" onClick={remove} disabled={!canSend || pending || selected.size === 0}>
+          {pending ? "Removing…" : `Remove ${selected.size} from queue`}
+        </PrimaryButton>
+        {result.status !== "idle" && result.message ? (
+          <p className={result.status === "error" ? "text-sm text-status-danger-text" : "text-sm text-status-success-text"}>
+            {result.message}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function OutboxPanel({
   canSend,
   batches,
   failed,
+  waiting,
 }: {
   canSend: boolean;
   batches: BatchProgress[];
   failed: FailedMessage[];
+  waiting: PendingMessage[];
 }) {
   const [retryState, retryAction, retrying] = useActionState(retryFailedMessages, initialState);
   const [cancelState, cancelAction, cancelling] = useActionState(cancelBatch, initialState);
 
   if (batches.length === 0) {
-    return <EmptyState message="Nothing has been queued yet. Use the Send bills tab to start." />;
+    return <EmptyState message="Nothing has been queued yet. Use the Send bills or Reminders tab to start." />;
   }
 
   return (
     <div className="space-y-4">
+      <WaitingQueue canSend={canSend} waiting={waiting} />
+
       {[retryState, cancelState].map((state, index) =>
         state.status !== "idle" && state.message ? (
           <p
             key={index}
-            className={state.status === "error" ? "text-sm text-rose-700" : "text-sm text-emerald-700"}
+            className={state.status === "error" ? "text-sm text-status-danger-text" : "text-sm text-status-success-text"}
           >
             {state.message}
           </p>
@@ -84,7 +145,7 @@ export function OutboxPanel({
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="text-sm font-semibold text-text-primary">
-                    {batch.template === "monthly_bill_v1" ? "Monthly bills" : batch.template}
+                    {TEMPLATE_LABEL[batch.template] ? `${TEMPLATE_LABEL[batch.template]}s` : batch.template}
                   </p>
                   <p className="mt-0.5 text-xs text-text-secondary">
                     Queued {formatDateTime(batch.createdAt)}

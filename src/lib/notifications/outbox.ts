@@ -39,49 +39,56 @@ function formatBillingMonth(month: Date): string {
   return month.toLocaleDateString("en-IN", { month: "long", year: "numeric", timeZone: "UTC" });
 }
 
-// Queues one monthly bill message per eligible customer for the given month.
+export type BillCandidate = {
+  customerId: string;
+  customerCode: string;
+  customerName: string;
+  recipient: string;
+  billId: string;
+  amountDue: string;
+};
+
+export type BillPlan = { candidates: BillCandidate[]; skipped: SkippedCustomer[] };
+
+// Who WOULD get a bill message for the month — read-only, so the office can see
+// and edit the list before anything is queued.
 //
 // Eligibility is deliberately strict and every exclusion is reported rather
 // than silently dropped: at ~2000 customers a quiet skip is invisible, and the
 // customers most likely to be excluded (no number on file, never asked for
 // consent) are exactly the ones someone needs to chase.
-export async function enqueueMonthlyBills(input: {
+export async function planMonthlyBills(input: {
   cityId: string;
   billingMonth: Date;
   routeIds?: string[];
-}): Promise<EnqueueResult> {
-  assertNotificationsEnabled();
-
+}): Promise<BillPlan> {
   const { cityId, billingMonth, routeIds } = input;
 
   const bills = await withDbTimeout(
-      prisma.monthlyBill.findMany({
-        where: {
-          billingMonth,
-          status: SENDABLE_BILL_STATUSES,
-          route: { cityId },
-          ...(routeIds && routeIds.length > 0 ? { routeId: { in: routeIds } } : {}),
+    prisma.monthlyBill.findMany({
+      where: {
+        billingMonth,
+        status: SENDABLE_BILL_STATUSES,
+        route: { cityId },
+        ...(routeIds && routeIds.length > 0 ? { routeId: { in: routeIds } } : {}),
+      },
+      select: {
+        id: true,
+        customerId: true,
+        deliveryAmount: true,
+        closingBalance: true,
+        customer: {
+          select: { code: true, name: true, mobile: true, whatsappOptInAt: true },
         },
-        select: {
-          id: true,
-          customerId: true,
-          openingBalance: true,
-          deliveryAmount: true,
-          paymentAmount: true,
-          closingBalance: true,
-          customer: {
-            select: { code: true, name: true, mobile: true, whatsappOptInAt: true },
-          },
-        },
-        orderBy: [{ customer: { code: "asc" } }],
-      }),
-      "Loading bills to queue",
-      15_000,
+      },
+      orderBy: [{ customer: { code: "asc" } }],
+    }),
+    "Loading bills to queue",
+    15_000,
   );
 
-  const batchId = randomUUID();
   const skipped: SkippedCustomer[] = [];
-  const rows: Prisma.NotificationOutboxCreateManyInput[] = [];
+  const candidates: BillCandidate[] = [];
 
   for (const bill of bills) {
     const { customer } = bill;
@@ -102,38 +109,65 @@ export async function enqueueMonthlyBills(input: {
     // A customer with no deliveries and nothing owed has no bill worth reading.
     // Messaging them anyway is the kind of pointless contact that earns a block,
     // and blocks are the strongest ban signal there is.
-    const delivered = Number(bill.deliveryAmount);
-    const closing = Number(bill.closingBalance);
-    if (delivered === 0 && closing === 0) {
+    if (Number(bill.deliveryAmount) === 0 && Number(bill.closingBalance) === 0) {
       skip("Nothing delivered and nothing outstanding");
       continue;
     }
 
-    // Bills go out as the approved "monthly_bill_link_v1" template: the customer
-    // gets the headline figure and a View bill button. The signed link is made at
-    // SEND time from billId (see zoepact-sender.ts), so it is as fresh as the
-    // message and nothing secret is stored here.
-    const variables = {
+    candidates.push({
+      customerId: bill.customerId,
+      customerCode: customer.code,
       customerName: customer.name,
-      month: billingMonth.getUTCMonth() + 1,
+      recipient: phone.msisdn,
+      billId: bill.id,
       // Decimals are passed as strings, not numbers: these round-trip through a
       // JSONB column and back, and money should not take a detour through a
       // float on the way.
       amountDue: bill.closingBalance.toString(),
-      billId: bill.id,
-    };
-
-    rows.push({
-      customerId: bill.customerId,
-      recipient: phone.msisdn,
-      template: "monthly_bill_link_v1",
-      variables: variables as unknown as Prisma.InputJsonValue,
-      // The bill's own id — so re-running this for the same month cannot
-      // produce a second message, whoever clicks and however many times.
-      dedupeKey: bill.id,
-      batchId,
     });
   }
+
+  return { candidates, skipped };
+}
+
+// Queues one monthly bill message per eligible customer for the given month.
+// `customerIds`, when given, narrows it to exactly those customers — the picker
+// on the screen. It can only NARROW: anyone not on the eligible list is ignored,
+// so a tampered request cannot message a customer the rules exclude.
+export async function enqueueMonthlyBills(input: {
+  cityId: string;
+  billingMonth: Date;
+  routeIds?: string[];
+  customerIds?: string[];
+}): Promise<EnqueueResult> {
+  assertNotificationsEnabled();
+
+  const { cityId, billingMonth, customerIds } = input;
+  const plan = await planMonthlyBills(input);
+  const chosen = customerIds ? new Set(customerIds) : null;
+  const picked = chosen ? plan.candidates.filter((candidate) => chosen.has(candidate.customerId)) : plan.candidates;
+
+  const batchId = randomUUID();
+  const skipped = plan.skipped;
+  const rows: Prisma.NotificationOutboxCreateManyInput[] = picked.map((candidate) => ({
+    customerId: candidate.customerId,
+    recipient: candidate.recipient,
+    // Bills go out as the approved "monthly_bill_link_v1" template: the customer
+    // gets the headline figure and a View bill button. The signed link is made at
+    // SEND time from billId (see zoepact-sender.ts), so it is as fresh as the
+    // message and nothing secret is stored here.
+    template: "monthly_bill_link_v1",
+    variables: {
+      customerName: candidate.customerName,
+      month: billingMonth.getUTCMonth() + 1,
+      amountDue: candidate.amountDue,
+      billId: candidate.billId,
+    } as unknown as Prisma.InputJsonValue,
+    // The bill's own id — so re-running this for the same month cannot
+    // produce a second message, whoever clicks and however many times.
+    dedupeKey: candidate.billId,
+    batchId,
+  }));
 
   // skipDuplicates relies on the plain unique index on
   // (customerId, template, dedupeKey). It would NOT dedupe against a partial
@@ -356,6 +390,69 @@ export async function cancelPending(input: { cityId: string; batchId: string }):
     entityId: input.batchId,
     action: "CANCEL_BATCH",
     summary: `Cancelled ${result.count} unsent WhatsApp message(s)`,
+  });
+
+  return result.count;
+}
+
+export type PendingMessage = {
+  id: string;
+  customerCode: string;
+  customerName: string;
+  recipient: string;
+  template: string;
+  createdAt: Date;
+};
+
+// Messages queued but not yet picked up. The sender takes them from the oldest,
+// so this is the window to take someone off before they are sent.
+export async function getPendingMessages(cityId: string, limit = 300): Promise<PendingMessage[]> {
+  const rows = await withDbTimeout(
+    prisma.notificationOutbox.findMany({
+      where: { status: "PENDING", customer: { cityId } },
+      select: {
+        id: true,
+        recipient: true,
+        template: true,
+        createdAt: true,
+        customer: { select: { code: true, name: true } },
+      },
+      orderBy: { createdAt: "asc" },
+      take: limit,
+    }),
+    "Loading waiting messages",
+    10_000,
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    customerCode: row.customer.code,
+    customerName: row.customer.name,
+    recipient: row.recipient,
+    template: row.template,
+    createdAt: row.createdAt,
+  }));
+}
+
+// Takes specific people off the queue. Only rows still PENDING qualify: one
+// already SENDING is in flight and one SENT cannot be recalled, so those are left
+// alone and simply not counted. CANCELLED records that this was a decision.
+export async function cancelMessages(input: { cityId: string; ids: string[] }): Promise<number> {
+  assertNotificationsEnabled();
+  if (input.ids.length === 0) return 0;
+
+  const result = await prisma.notificationOutbox.updateMany({
+    where: { id: { in: input.ids }, status: "PENDING", customer: { cityId: input.cityId } },
+    data: { status: "CANCELLED" },
+  });
+
+  await logAudit(prisma, {
+    cityId: input.cityId,
+    entityType: "NotificationOutbox",
+    entityId: null,
+    action: "CANCEL_MESSAGES",
+    summary: `Removed ${result.count} waiting WhatsApp message(s) from the queue`,
+    after: { requested: input.ids.length, cancelled: result.count },
   });
 
   return result.count;

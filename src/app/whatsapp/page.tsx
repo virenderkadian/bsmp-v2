@@ -4,7 +4,7 @@ import { getCurrentCityId } from "@/lib/current-city";
 import { getCurrentUser } from "@/lib/current-user";
 import { isNotificationsEnabled } from "@/lib/notifications/config";
 import { getConsentCustomers, getConsentSummary } from "@/lib/notifications/consent";
-import { getFailedMessages, getRecentBatches, getSendableMonths } from "@/lib/notifications/outbox";
+import { getFailedMessages, getPendingMessages, getRecentBatches, getSendableMonths } from "@/lib/notifications/outbox";
 
 // Single home for everything sent to customers over WhatsApp — bills today,
 // rate changes and notices next. Centralised deliberately: the alternative was
@@ -34,10 +34,11 @@ export default async function WhatsAppPage() {
 
   const cityId = await getCurrentCityId();
 
-  const [months, batches, failed, consentSummary, consentCustomers] = await Promise.all([
+  const [months, batches, failed, waiting, consentSummary, consentCustomers] = await Promise.all([
     getSendableMonths(cityId),
     getRecentBatches(cityId),
     getFailedMessages(cityId),
+    getPendingMessages(cityId),
     getConsentSummary(cityId),
     getConsentCustomers(cityId),
   ]);
@@ -48,6 +49,7 @@ export default async function WhatsAppPage() {
       months={months}
       batches={batches}
       failed={failed}
+      waiting={waiting}
       consentSummary={consentSummary}
       consentCustomers={consentCustomers}
     />

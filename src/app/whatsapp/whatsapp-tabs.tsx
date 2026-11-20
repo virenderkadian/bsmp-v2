@@ -9,7 +9,7 @@ import { TemplatesPanel } from "@/app/whatsapp/templates-panel";
 import { SendBillsPanel } from "@/app/whatsapp/send-bills-panel";
 import { MasterTabs } from "@/components/admin/master-tabs";
 import type { ConsentCustomer, ConsentSummary } from "@/lib/notifications/consent";
-import type { BatchProgress, FailedMessage, SendableMonth } from "@/lib/notifications/outbox";
+import type { BatchProgress, FailedMessage, PendingMessage, SendableMonth } from "@/lib/notifications/outbox";
 
 type WhatsAppTab = "bills" | "reminders" | "notices" | "outbox" | "consent" | "templates";
 
@@ -18,6 +18,7 @@ export function WhatsAppTabs({
   months,
   batches,
   failed,
+  waiting,
   consentSummary,
   consentCustomers,
 }: {
@@ -25,6 +26,7 @@ export function WhatsAppTabs({
   months: SendableMonth[];
   batches: BatchProgress[];
   failed: FailedMessage[];
+  waiting: PendingMessage[];
   consentSummary: ConsentSummary;
   consentCustomers: ConsentCustomer[];
 }) {
@@ -56,7 +58,7 @@ export function WhatsAppTabs({
       {activeTab === "reminders" ? <RemindersPanel canSend={canSend} /> : null}
       {activeTab === "notices" ? <NoticesPanel /> : null}
       {activeTab === "outbox" ? (
-        <OutboxPanel canSend={canSend} batches={batches} failed={failed} />
+        <OutboxPanel canSend={canSend} batches={batches} failed={failed} waiting={waiting} />
       ) : null}
       {activeTab === "templates" ? <TemplatesPanel /> : null}
       {activeTab === "consent" ? (

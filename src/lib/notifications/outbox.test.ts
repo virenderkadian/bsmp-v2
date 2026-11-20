@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
-import { enqueueMonthlyBills } from "@/lib/notifications/outbox";
+import { cancelMessages, enqueueMonthlyBills, getPendingMessages, planMonthlyBills } from "@/lib/notifications/outbox";
 import { claimForZoepact, claimPending, reportOutcomes } from "@/lib/notifications/dispatch";
 import { enqueuePaymentReminders, planPaymentReminders } from "@/lib/notifications/reminders";
 
@@ -330,6 +330,85 @@ describe("payment reminders", () => {
       expect(plan.candidates.some((candidate) => candidate.customerId === customers.ok)).toBe(false);
     } finally {
       await db.payment.delete({ where: { id: payment.id } });
+    }
+  });
+});
+
+describe("choosing who gets a message", () => {
+  it("lists the eligible bills without queueing anything", async () => {
+    const plan = await planMonthlyBills({ cityId, billingMonth: month });
+
+    expect(plan.candidates.map((candidate) => candidate.customerId)).toEqual([customers.ok]);
+    expect(plan.candidates[0]).toMatchObject({ recipient: "919812345678", billId: bills.ok, amountDue: "2340" });
+    expect(plan.skipped).toHaveLength(4);
+    expect(await db.notificationOutbox.count({ where: { customerId: { in: Object.values(customers) } } })).toBe(0);
+  });
+
+  it("queues only the customers chosen", async () => {
+    const result = await enqueueMonthlyBills({ cityId, billingMonth: month, customerIds: [customers.ok] });
+    expect(result.queued).toBe(1);
+
+    const none = await enqueueMonthlyBills({ cityId, billingMonth: month, customerIds: [] });
+    expect(none.queued).toBe(0);
+  });
+
+  it("can only narrow the list: a customer the rules exclude is ignored even if named", async () => {
+    // noconsent / nomobile / badmobile / zero are all ineligible; naming them must do nothing.
+    const result = await enqueueMonthlyBills({
+      cityId,
+      billingMonth: month,
+      customerIds: [customers.noconsent, customers.nomobile, customers.badmobile, customers.zero],
+    });
+    expect(result.queued).toBe(0);
+    expect(await db.notificationOutbox.count({ where: { customerId: { in: Object.values(customers) } } })).toBe(0);
+  });
+
+  it("queues only the chosen reminders, and ignores an ineligible customer even if named", async () => {
+    const now = new Date("2026-11-20T06:00:00Z");
+
+    const ignored = await enqueuePaymentReminders({ cityId, now, customerIds: [customers.noconsent] });
+    expect(ignored.queued).toBe(0);
+
+    const chosen = await enqueuePaymentReminders({ cityId, now, customerIds: [customers.ok] });
+    expect(chosen.queued).toBe(1);
+  });
+});
+
+describe("removing people from the queue", () => {
+  it("removes a waiting message and records it as cancelled", async () => {
+    const result = await enqueueMonthlyBills({ cityId, billingMonth: month });
+    const waiting = (await getPendingMessages(cityId)).filter((message) => message.customerCode.endsWith(suffix));
+    expect(waiting).toHaveLength(1);
+    expect(waiting[0]).toMatchObject({ customerName: "WhatsApp Test ok", template: "monthly_bill_link_v1" });
+
+    expect(await cancelMessages({ cityId, ids: [waiting[0].id] })).toBe(1);
+    const row = await db.notificationOutbox.findFirstOrThrow({ where: { batchId: result.batchId } });
+    expect(row.status).toBe("CANCELLED");
+    expect((await getPendingMessages(cityId)).some((message) => message.id === waiting[0].id)).toBe(false);
+  });
+
+  it("leaves a message alone once it has been picked up or sent", async () => {
+    await enqueueMonthlyBills({ cityId, billingMonth: month });
+    const [claimed] = await claimForZoepact(50);
+    expect(claimed).toBeDefined();
+
+    expect(await cancelMessages({ cityId, ids: [claimed.id] })).toBe(0);
+    const row = await db.notificationOutbox.findFirstOrThrow({ where: { id: claimed.id } });
+    expect(row.status).toBe("SENDING");
+  });
+
+  it("does nothing for ids that don't exist or belong to another city", async () => {
+    expect(await cancelMessages({ cityId, ids: ["00000000-0000-4000-8000-000000000000"] })).toBe(0);
+    expect(await cancelMessages({ cityId, ids: [] })).toBe(0);
+
+    const other = await db.city.create({ data: { code: `WB${suffix}`, name: `Other ${suffix}` } });
+    try {
+      await enqueueMonthlyBills({ cityId, billingMonth: month });
+      const [mine] = await getPendingMessages(cityId);
+      expect(await cancelMessages({ cityId: other.id, ids: [mine.id] })).toBe(0);
+    } finally {
+      await db.auditLog.deleteMany({ where: { cityId: other.id } });
+      await db.city.delete({ where: { id: other.id } });
     }
   });
 });

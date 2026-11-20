@@ -7,7 +7,7 @@ import { getCurrentUser } from "@/lib/current-user";
 import { bulkOptIn, setCustomerConsent } from "@/lib/notifications/consent";
 import { enqueuePaymentReminders, planPaymentReminders } from "@/lib/notifications/reminders";
 import { loadTemplates, submitOurTemplate, type TemplatesState } from "@/lib/notifications/template-admin";
-import { cancelPending, enqueueMonthlyBills, retryFailed, type SkippedCustomer } from "@/lib/notifications/outbox";
+import { cancelMessages, cancelPending, enqueueMonthlyBills, planMonthlyBills, retryFailed, type SkippedCustomer } from "@/lib/notifications/outbox";
 import { monthInputToDate } from "@/lib/monthly-route-sequence";
 
 export type WhatsAppActionState = {
@@ -227,58 +227,126 @@ export async function submitTemplateAction(key: string): Promise<TemplatesState>
   return submitOurTemplate({ key, cityId });
 }
 
-// ---- Payment reminders (admin only) ----
+// ---- Choosing who gets a message (admin only) ----
+//
+// Every list is previewed first, read-only, then queued with the exact customers
+// the office left ticked. The server re-plans on queue and only ever NARROWS to the
+// chosen ids, so a tampered request can't message someone the rules exclude.
 
-export type ReminderState =
+const idList = z.array(z.string().uuid()).max(5000);
+
+export type RecipientRow = { id: string; code: string; name: string; detail: string };
+
+export type PickerState =
   | { status: "idle" }
   | { status: "error"; message: string }
-  | {
-      status: "ready" | "queued";
-      message: string;
-      eligible: number;
-      totalOutstanding: string;
-      sample: Array<{ code: string; name: string; month: number; outstanding: string }>;
-      skipped: SkippedCustomer[];
-    };
+  | { status: "ready" | "queued"; message: string; rows: RecipientRow[]; skipped: SkippedCustomer[]; totalOutstanding?: string };
 
-// Read-only: who WOULD get a reminder, so the office sees the list before anything is queued.
-export async function previewRemindersAction(): Promise<ReminderState> {
+const money = (value: string | number) =>
+  `₹${Number(value).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+function queuedMessage(result: { queued: number; alreadyQueued: number; skipped: SkippedCustomer[] }, noun: string): string {
+  const parts = [`Queued ${result.queued} ${noun}(s).`];
+  if (result.alreadyQueued > 0) parts.push(`${result.alreadyQueued} were already queued.`);
+  if (result.skipped.length > 0) parts.push(`${result.skipped.length} skipped.`);
+  return parts.join(" ");
+}
+
+export async function previewRemindersAction(): Promise<PickerState> {
   try {
     await requireSendPermission();
     const plan = await planPaymentReminders(await getCurrentCityId());
     return {
       status: "ready",
-      message: plan.candidates.length > 0 ? `${plan.candidates.length} customer(s) would get a reminder.` : "Nobody to remind right now.",
-      eligible: plan.candidates.length,
-      totalOutstanding: plan.totalOutstanding.toFixed(2),
-      sample: plan.candidates.slice(0, 10).map((candidate) => ({
-        code: candidate.customerCode, name: candidate.customerName, month: candidate.month, outstanding: candidate.outstanding.toFixed(2),
+      message: plan.candidates.length > 0 ? `${plan.candidates.length} customer(s) are eligible for a reminder.` : "Nobody to remind right now.",
+      rows: plan.candidates.map((candidate) => ({
+        id: candidate.customerId,
+        code: candidate.customerCode,
+        name: candidate.customerName,
+        detail: money(candidate.outstanding),
       })),
       skipped: plan.skipped,
+      totalOutstanding: plan.totalOutstanding.toFixed(2),
     };
   } catch (error) {
     return { status: "error", message: error instanceof Error ? error.message : "Unable to prepare reminders." };
   }
 }
 
-export async function queueRemindersAction(): Promise<ReminderState> {
+export async function queueRemindersAction(customerIds: string[]): Promise<PickerState> {
   try {
     await requireSendPermission();
-    const result = await enqueuePaymentReminders({ cityId: await getCurrentCityId() });
-    revalidatePath("/whatsapp");
+    const ids = idList.safeParse(customerIds);
+    if (!ids.success) return { status: "error", message: "Invalid selection." };
+    if (ids.data.length === 0) return { status: "error", message: "Select at least one customer." };
 
-    const parts = [`Queued ${result.queued} reminder(s).`];
-    if (result.alreadyQueued > 0) parts.push(`${result.alreadyQueued} were already queued today.`);
-    if (result.skipped.length > 0) parts.push(`${result.skipped.length} skipped.`);
-    return {
-      status: "queued",
-      message: parts.join(" "),
-      eligible: result.queued + result.alreadyQueued,
-      totalOutstanding: "",
-      sample: [],
-      skipped: result.skipped,
-    };
+    const result = await enqueuePaymentReminders({ cityId: await getCurrentCityId(), customerIds: ids.data });
+    revalidatePath("/whatsapp");
+    return { status: "queued", message: queuedMessage(result, "reminder"), rows: [], skipped: result.skipped };
   } catch (error) {
     return { status: "error", message: error instanceof Error ? error.message : "Unable to queue reminders." };
+  }
+}
+
+export async function previewBillsAction(billingMonth: string): Promise<PickerState> {
+  const parsed = queueBillsSchema.safeParse({ billingMonth });
+  if (!parsed.success) return { status: "error", message: parsed.error.issues[0]?.message ?? "Select a valid month." };
+
+  try {
+    await requireSendPermission();
+    const plan = await planMonthlyBills({ cityId: await getCurrentCityId(), billingMonth: monthInputToDate(parsed.data.billingMonth) });
+    return {
+      status: "ready",
+      message: plan.candidates.length > 0 ? `${plan.candidates.length} customer(s) are eligible for a bill message.` : "No eligible bills for that month.",
+      rows: plan.candidates.map((candidate) => ({
+        id: candidate.customerId,
+        code: candidate.customerCode,
+        name: candidate.customerName,
+        detail: money(candidate.amountDue),
+      })),
+      skipped: plan.skipped,
+    };
+  } catch (error) {
+    return { status: "error", message: error instanceof Error ? error.message : "Unable to prepare bill messages." };
+  }
+}
+
+export async function queueBillsAction(billingMonth: string, customerIds: string[]): Promise<PickerState> {
+  const parsed = queueBillsSchema.safeParse({ billingMonth });
+  if (!parsed.success) return { status: "error", message: parsed.error.issues[0]?.message ?? "Select a valid month." };
+
+  try {
+    await requireSendPermission();
+    const ids = idList.safeParse(customerIds);
+    if (!ids.success) return { status: "error", message: "Invalid selection." };
+    if (ids.data.length === 0) return { status: "error", message: "Select at least one customer." };
+
+    const result = await enqueueMonthlyBills({
+      cityId: await getCurrentCityId(),
+      billingMonth: monthInputToDate(parsed.data.billingMonth),
+      customerIds: ids.data,
+    });
+    revalidatePath("/whatsapp");
+    return { status: "queued", message: queuedMessage(result, "bill message"), rows: [], skipped: result.skipped };
+  } catch (error) {
+    return { status: "error", message: error instanceof Error ? error.message : "Unable to queue bill messages." };
+  }
+}
+
+// Takes specific people off the queue before they are sent.
+export async function removeFromQueueAction(ids: string[]): Promise<WhatsAppActionState> {
+  try {
+    await requireSendPermission();
+    const parsed = idList.safeParse(ids);
+    if (!parsed.success || parsed.data.length === 0) return { status: "error", message: "Select at least one message." };
+
+    const count = await cancelMessages({ cityId: await getCurrentCityId(), ids: parsed.data });
+    revalidatePath("/whatsapp");
+    return {
+      status: "success",
+      message: count > 0 ? `Removed ${count} message(s) from the queue.` : "Nothing removed — those messages had already been picked up for sending.",
+    };
+  } catch (error) {
+    return { status: "error", message: error instanceof Error ? error.message : "Unable to remove messages." };
   }
 }

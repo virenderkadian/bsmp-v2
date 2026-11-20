@@ -145,15 +145,23 @@ export async function planPaymentReminders(cityId: string): Promise<ReminderPlan
   return { candidates, skipped, totalOutstanding: Math.round(totalOutstanding * 100) / 100 };
 }
 
-export async function enqueuePaymentReminders(input: { cityId: string; now?: Date }): Promise<EnqueueResult> {
+// `customerIds`, when given, narrows the list to exactly those customers (the picker
+// on the screen). It can only NARROW: anyone the rules exclude is ignored.
+export async function enqueuePaymentReminders(input: {
+  cityId: string;
+  now?: Date;
+  customerIds?: string[];
+}): Promise<EnqueueResult> {
   assertNotificationsEnabled();
 
   const { cityId } = input;
   const plan = await planPaymentReminders(cityId);
   const day = istDay(input.now ?? new Date());
   const batchId = randomUUID();
+  const chosen = input.customerIds ? new Set(input.customerIds) : null;
+  const picked = chosen ? plan.candidates.filter((candidate) => chosen.has(candidate.customerId)) : plan.candidates;
 
-  const rows: Prisma.NotificationOutboxCreateManyInput[] = plan.candidates.map((candidate) => ({
+  const rows: Prisma.NotificationOutboxCreateManyInput[] = picked.map((candidate) => ({
     customerId: candidate.customerId,
     recipient: candidate.recipient,
     template: "payment_reminder_hi_en_v1",
