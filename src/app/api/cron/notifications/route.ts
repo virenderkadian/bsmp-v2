@@ -22,5 +22,9 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const result = await runZoepactBatch();
+  // Only log runs that did something or are stuck; "idle"/"outside-window" every minute is noise.
+  if (result.status !== "idle" && result.status !== "outside-window") {
+    console.log("notifications cron", JSON.stringify(result));
+  }
   return NextResponse.json(result);
 }

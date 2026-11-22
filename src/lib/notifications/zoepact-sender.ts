@@ -50,6 +50,32 @@ export function isInSendWindow(
   return hourIst >= hours.from && hourIst < hours.until;
 }
 
+export type SenderStatus = {
+  keyConfigured: boolean;
+  inWindow: boolean;
+  fromHour: number;
+  untilHour: number;
+  wallet: { state: "ok"; balance: number } | { state: "low"; balance: number } | { state: "unreadable"; message: string };
+};
+
+// What the office needs to know when messages are "queued but nothing arrives": is the key
+// set, are we inside sending hours, is the wallet funded. Read-only.
+export async function getSenderStatus(now = new Date()): Promise<SenderStatus> {
+  const fromHour = hourFromEnv("NOTIFICATIONS_SEND_FROM_HOUR", DEFAULT_FROM_HOUR_IST);
+  const untilHour = hourFromEnv("NOTIFICATIONS_SEND_UNTIL_HOUR", DEFAULT_UNTIL_HOUR_IST);
+  const keyConfigured = Boolean(process.env.ZOEPACT_API_KEY);
+  let wallet: SenderStatus["wallet"] = { state: "unreadable", message: "No API key set" };
+  if (keyConfigured) {
+    const result = await getWalletBalance();
+    wallet = !result.ok
+      ? { state: "unreadable", message: result.message }
+      : result.data.balance < WALLET_MIN
+        ? { state: "low", balance: result.data.balance }
+        : { state: "ok", balance: result.data.balance };
+  }
+  return { keyConfigured, inWindow: isInSendWindow(now, { from: fromHour, until: untilHour }), fromHour, untilHour, wallet };
+}
+
 type Built = { ok: true; input: Omit<SendTemplateInput, "phone"> } | { ok: false; error: string };
 
 // Turns a stored (template key, variables) pair into the exact API call. Pure

@@ -6,6 +6,8 @@ import { isNotificationsEnabled } from "@/lib/notifications/config";
 import { getConsentCustomers, getConsentSummary } from "@/lib/notifications/consent";
 import { getNoticeProducts } from "@/lib/notifications/notices";
 import { loadActiveTemplates } from "@/lib/notifications/template-wording";
+import { getSenderStatus } from "@/lib/notifications/zoepact-sender";
+import { SenderStatusNote } from "@/app/whatsapp/sender-status-note";
 import { getFailedMessages, getPendingMessages, getRecentBatches, getSendableMonths } from "@/lib/notifications/outbox";
 
 // Single home for everything sent to customers over WhatsApp — bills today,
@@ -36,7 +38,7 @@ export default async function WhatsAppPage() {
 
   const cityId = await getCurrentCityId();
 
-  const [months, batches, failed, waiting, products, active, consentSummary, consentCustomers] = await Promise.all([
+  const [months, batches, failed, waiting, products, active, consentSummary, consentCustomers, senderStatus] = await Promise.all([
     getSendableMonths(cityId),
     getRecentBatches(cityId),
     getFailedMessages(cityId),
@@ -45,9 +47,12 @@ export default async function WhatsAppPage() {
     loadActiveTemplates(),
     getConsentSummary(cityId),
     getConsentCustomers(cityId),
+    getSenderStatus(),
   ]);
 
   return (
+    <>
+    <SenderStatusNote status={senderStatus} />
     <WhatsAppTabs
       canSend={canSend}
       months={months}
@@ -59,5 +64,6 @@ export default async function WhatsAppPage() {
       consentSummary={consentSummary}
       consentCustomers={consentCustomers}
     />
+    </>
   );
 }
