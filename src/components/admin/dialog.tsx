@@ -12,6 +12,8 @@ export function Dialog({
   children,
   onClose,
   footer,
+  size = "md",
+  toolbar,
 }: {
   open: boolean;
   title: string;
@@ -19,6 +21,10 @@ export function Dialog({
   children: ReactNode;
   onClose: () => void;
   footer?: ReactNode | null;
+  // "xl" is a wide, fixed-height dialog for list screens; "md" is the default.
+  size?: "md" | "xl";
+  // Stays put above the scrolling body, for filters and totals that must not scroll away.
+  toolbar?: ReactNode;
 }) {
   useEffect(() => {
     if (!open) {
@@ -59,7 +65,8 @@ export function Dialog({
         aria-modal="true"
         aria-label={title}
         className={cn(
-          "relative z-10 flex max-h-[calc(100vh-4rem)] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-surface-border bg-surface shadow-2xl",
+          "relative z-10 flex max-h-[calc(100vh-4rem)] w-full flex-col overflow-hidden rounded-2xl border border-surface-border bg-surface shadow-2xl",
+          size === "xl" ? "h-[44rem] max-w-4xl" : "max-w-2xl",
         )}
       >
         <header className="border-b border-surface-border px-6 py-5">
@@ -69,7 +76,9 @@ export function Dialog({
           ) : null}
         </header>
 
-        <div className="overflow-y-auto px-6 py-5">{children}</div>
+        {toolbar ? <div className="border-b border-surface-border px-6 py-3">{toolbar}</div> : null}
+
+        <div className={cn("overflow-y-auto", size === "xl" ? "min-h-0 flex-1 px-6 pb-3" : "px-6 py-5")}>{children}</div>
 
         {footer === null ? null : (
           <footer className="flex items-center justify-end gap-3 border-t border-surface-border px-6 py-4">

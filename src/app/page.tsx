@@ -2,7 +2,8 @@ import { ComparisonChart, ProductContributionCharts, TrendChart } from "@/app/da
 import { LoadingBarProvider } from "@/components/admin/loading-bar";
 import { DataTable } from "@/components/admin/data-table";
 import { SummaryStatBar } from "@/components/admin/summary-stat-bar";
-import { CashSaleCard, CollectedCard, DeliveredCard, OutstandingCard, UnsettledVehiclesCard } from "@/app/dashboard-detail-cards";
+import { CashSaleCard, CollectedCard, DeliveredCard, UnsettledVehiclesCard } from "@/app/dashboard-detail-cards";
+import { OutstandingCard } from "@/app/outstanding-card";
 import { DashboardDateStepper } from "@/app/dashboard-date-stepper";
 import { formatMoney, SummaryCard } from "@/app/summary-card";
 import { RoutesByVehicle } from "@/app/routes-by-vehicle";

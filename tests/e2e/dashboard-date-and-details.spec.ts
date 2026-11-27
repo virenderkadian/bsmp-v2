@@ -43,18 +43,21 @@ test.describe("Dashboard date and card details", () => {
     const dialog = page.getByRole("dialog", { name: "Customer outstanding" });
     await expect(dialog).toBeVisible();
 
-    const summary = dialog.getByText(/^\d+ of \d+ customers$/);
-    await expect(summary).toBeVisible();
-    const before = await summary.innerText();
+    // The toolbar (search, filters, sort, total) is always there, even with nobody owing.
+    await expect(dialog.getByRole("searchbox", { name: "Search customers" })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: /Vehicle:/ })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: /Route:/ })).toBeVisible();
+    await expect(dialog.getByRole("combobox", { name: "Sort by" })).toBeVisible();
+    await expect(dialog.getByText(/customers$/)).toBeVisible();
 
-    const vehicleChips = dialog.locator("button[aria-pressed]");
-    if ((await vehicleChips.count()) > 0) {
-      await vehicleChips.first().click();
-      await expect(dialog.locator("button[aria-pressed='true']").first()).toBeVisible();
-      const after = await summary.innerText();
-      const [shownAfter] = after.split(" of ");
-      const [shownBefore] = before.split(" of ");
-      expect(Number(shownAfter)).toBeLessThanOrEqual(Number(shownBefore));
+    // A vehicle filter, when there is anyone to filter, never lists more people than before.
+    const countText = async () => (await dialog.getByText(/^\d+ of \d+ customers$/).innerText()).split(" of ")[0];
+    const before = Number(await countText());
+    await dialog.getByRole("button", { name: /Vehicle:/ }).click();
+    const options = dialog.getByRole("checkbox");
+    if ((await options.count()) > 0) {
+      await options.first().check();
+      expect(Number(await countText())).toBeLessThanOrEqual(before);
     }
   });
 });
