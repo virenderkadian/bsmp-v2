@@ -29,7 +29,7 @@ function formatQty(value: string) {
 function WowLabel({ deltaQuantity, deltaPercent }: { deltaQuantity: string; deltaPercent: string | null }) {
   const isNegative = Number(deltaQuantity) < 0;
   return (
-    <span className={`font-semibold ${isNegative ? "text-rose-600" : "text-emerald-700"}`}>
+    <span className={`font-semibold ${isNegative ? "text-status-danger-text" : "text-status-success-text"}`}>
       WoW {Number(deltaQuantity) >= 0 ? "+" : ""}
       {formatQty(deltaQuantity)} L
       {deltaPercent !== null ? ` (${Number(deltaPercent) >= 0 ? "+" : ""}${deltaPercent}%)` : ""}
@@ -47,7 +47,7 @@ export function TrendChart({ trend }: { trend: AnalyticsPayload["trend"] }) {
   return (
     <section className="rounded-lg border border-surface-border bg-surface p-4 shadow-sm">
       <div>
-        <h2 className="text-base font-semibold text-text-primary">Milk Trend — {trend.vehicleName}</h2>
+        <h2 className="text-base font-semibold text-text-primary">Milk trend — {trend.vehicleName}</h2>
         <p className="mt-1 text-sm text-text-secondary">
           Total {formatQty(trend.totalQuantity)} L over range ·{" "}
           <WowLabel deltaQuantity={trend.wowDeltaQuantity} deltaPercent={trend.wowDeltaPercent} />
@@ -56,7 +56,7 @@ export function TrendChart({ trend }: { trend: AnalyticsPayload["trend"] }) {
       <div className="mt-3 h-56">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--surface-border)" />
             <XAxis dataKey="date" tick={{ fontSize: 12 }} />
             <YAxis tick={{ fontSize: 12 }} />
             <Tooltip formatter={(value) => `${Number(value).toFixed(1)} L`} />
@@ -90,14 +90,14 @@ export function ComparisonChart({
 
   return (
     <section className="rounded-lg border border-surface-border bg-surface p-4 shadow-sm">
-      <h2 className="text-base font-semibold text-text-primary">Group Comparison</h2>
+      <h2 className="text-base font-semibold text-text-primary">Group comparison</h2>
       <p className="mt-1 text-sm text-text-secondary">
         {comparison ? `${trend.vehicleName} vs ${comparison.vehicleName}` : "Pick a second vehicle to compare"}
       </p>
       <div className="mt-3 h-56">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--surface-border)" />
             <XAxis dataKey="date" tick={{ fontSize: 12 }} />
             <YAxis tick={{ fontSize: 12 }} />
             <Tooltip formatter={(value) => `${Number(value).toFixed(1)} L`} />
@@ -145,7 +145,7 @@ export function ProductContributionCharts({
 
   return (
     <section className="rounded-lg border border-surface-border bg-surface p-4 shadow-sm">
-      <h2 className="text-base font-semibold text-text-primary">Product Contribution by Vehicle</h2>
+      <h2 className="text-base font-semibold text-text-primary">Product contribution by vehicle</h2>
       <p className="mt-1 text-sm text-text-secondary">Share of each product&apos;s total volume delivered by vehicle, over the selected range.</p>
 
       <div className="mt-3 grid gap-4 md:grid-cols-2 xl:grid-cols-3">

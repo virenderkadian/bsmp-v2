@@ -1,11 +1,9 @@
 import { getCurrentCityId } from "@/lib/current-city";
+import { resolveDashboardDate } from "@/lib/dashboard-date";
+import { getOutstandingCustomers, type OutstandingCustomer } from "@/lib/dashboard-outstanding";
 import { getReconciliationPayload } from "@/lib/reconciliation";
 import { withDbTimeout } from "@/lib/db-timeout";
 import { prisma } from "@/lib/prisma";
-
-function toDateInput(date: Date) {
-  return date.toISOString().slice(0, 10);
-}
 
 function getMonthBounds(date: Date) {
   const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1));
@@ -19,6 +17,8 @@ export type RouteReadinessRow = {
   routeCode: string;
   routeName: string;
   shift: "MORNING" | "EVENING";
+  vehicleId: string | null;
+  vehicleCode: string | null;
   vehicleName: string | null;
   hasEntryToday: boolean;
 };
@@ -42,6 +42,20 @@ export type VehicleCashSaleRow = {
   amount: string;
 };
 
+// One product's line in a card's detail: what was delivered or sold, and its worth.
+export type ProductBreakdownRow = { productId: string; name: string; unit: string; quantity: string; amount: string };
+
+// One vehicle's cash position for the selected day: balance = cash sale - payments received,
+// so a positive balance is cash the vehicle has not yet handed in.
+export type VehicleBalanceRow = {
+  vehicleId: string;
+  vehicleCode: string;
+  vehicleName: string;
+  cashSale: string;
+  received: string;
+  balance: string;
+};
+
 export type DashboardPayload = {
   dbConnected: boolean;
   today: string;
@@ -58,8 +72,6 @@ export type DashboardPayload = {
 
   // Collections & receivables
   paymentsCollectedToday: string;
-  pendingPaymentsCount: number;
-  pendingPaymentsAmount: string;
   customerOutstandingTotal: string;
   vehicleCashSaleBalanceToday: string;
 
@@ -83,6 +95,10 @@ export type DashboardPayload = {
   routeSummary: RouteSummaryRow[];
   reconciliationProducts: DashboardProduct[];
   vehicleCashSaleSummary: VehicleCashSaleRow[];
+  deliveredByProduct: ProductBreakdownRow[];
+  cashSaleByProduct: ProductBreakdownRow[];
+  outstandingCustomers: OutstandingCustomer[];
+  vehicleBalances: VehicleBalanceRow[];
   error?: string;
 };
 
@@ -99,8 +115,6 @@ function fallbackPayload(today: string, error?: string): DashboardPayload {
     cashSaleTotalToday: "0.00",
     hasNegativeDifferenceToday: false,
     paymentsCollectedToday: "0.00",
-    pendingPaymentsCount: 0,
-    pendingPaymentsAmount: "0.00",
     customerOutstandingTotal: "0.00",
     vehicleCashSaleBalanceToday: "0.00",
     billsGeneratedThisMonth: 0,
@@ -118,27 +132,32 @@ function fallbackPayload(today: string, error?: string): DashboardPayload {
     routeSummary: [],
     reconciliationProducts: [],
     vehicleCashSaleSummary: [],
+    deliveredByProduct: [],
+    cashSaleByProduct: [],
+    outstandingCustomers: [],
+    vehicleBalances: [],
     error,
   };
 }
 
-export async function getDashboardPayload(): Promise<DashboardPayload> {
-  const today = toDateInput(new Date());
+// `date` is the day the "Today" figures describe (default: today in India). The billing-cycle
+// figures use that date's month. Customer outstanding is always as of now.
+export async function getDashboardPayload(input?: { date?: string }): Promise<DashboardPayload> {
+  const today = resolveDashboardDate(input?.date);
 
   try {
     const cityId = await getCurrentCityId();
-    const { start: monthStart } = getMonthBounds(new Date());
+    const { start: monthStart } = getMonthBounds(new Date(`${today}T00:00:00.000Z`));
 
     const [
       routes,
       vehicleCount,
       customerCount,
-      productCount,
+      allProducts,
       dailyEntryProducts,
       todaysEntries,
       verifiedPaymentsToday,
-      pendingPayments,
-      latestBillsPerCustomer,
+      outstanding,
       customersDueThisMonth,
       billsThisMonth,
       reconciliationToday,
@@ -152,12 +171,12 @@ export async function getDashboardPayload(): Promise<DashboardPayload> {
             code: true,
             name: true,
             shift: true,
-            vehicle: { select: { name: true } },
+            vehicle: { select: { id: true, code: true, name: true } },
           },
         }),
         prisma.vehicle.count({ where: { cityId, isActive: true } }),
         prisma.customer.count({ where: { cityId, isActive: true } }),
-        prisma.product.count({ where: { cityId, isActive: true } }),
+        prisma.product.findMany({ where: { cityId }, select: { id: true, name: true, unit: true, isActive: true } }),
         prisma.product.findMany({
           where: { cityId, isActive: true, showInDailyEntry: true },
           orderBy: { displayOrder: "asc" },
@@ -180,17 +199,7 @@ export async function getDashboardPayload(): Promise<DashboardPayload> {
           where: { status: "VERIFIED", paymentDate: new Date(today), customer: { cityId } },
           _sum: { amount: true },
         }),
-        prisma.payment.aggregate({
-          where: { status: "PENDING", customer: { cityId } },
-          _sum: { amount: true },
-          _count: true,
-        }),
-        prisma.monthlyBill.findMany({
-          where: { route: { cityId } },
-          orderBy: [{ customerId: "asc" }, { billingMonth: "desc" }],
-          distinct: ["customerId"],
-          select: { customerId: true, closingBalance: true },
-        }),
+        getOutstandingCustomers(cityId),
         prisma.monthlyRouteCustomerSequence.findMany({
           where: { route: { cityId }, sequenceMonth: monthStart, status: "ACTIVE" },
           distinct: ["customerId"],
@@ -261,10 +270,47 @@ export async function getDashboardPayload(): Promise<DashboardPayload> {
         amount: cycle.cashSaleAmount,
       }));
 
-    const customerOutstandingTotal = latestBillsPerCustomer.reduce(
-      (sum, bill) => sum + Number(bill.closingBalance),
-      0,
-    );
+    const customerOutstandingTotal = outstanding.total;
+
+    const productInfo = new Map(allProducts.map((product) => [product.id, product]));
+    const deliveredTotals = new Map<string, { quantity: number; amount: number }>();
+    for (const entry of todaysEntries) {
+      for (const line of entry.lines) {
+        for (const productEntry of line.productEntries) {
+          const qty = Number(productEntry.quantity);
+          const current = deliveredTotals.get(productEntry.productId) ?? { quantity: 0, amount: 0 };
+          current.quantity += qty;
+          current.amount += qty * Number(productEntry.rateSnapshot);
+          deliveredTotals.set(productEntry.productId, current);
+        }
+      }
+    }
+    const deliveredByProduct: ProductBreakdownRow[] = [...deliveredTotals.entries()]
+      .filter(([, total]) => total.quantity !== 0)
+      .map(([productId, total]) => ({
+        productId,
+        name: productInfo.get(productId)?.name ?? "Unknown product",
+        unit: productInfo.get(productId)?.unit ?? "",
+        quantity: total.quantity.toFixed(3),
+        amount: total.amount.toFixed(2),
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+
+    // Cash sale = the leftover milk of every vehicle, valued at the product's rate.
+    const cashTotals = new Map<string, { name: string; unit: string; quantity: number; amount: number }>();
+    for (const cycle of reconciliationToday.cycles) {
+      for (const product of cycle.products) {
+        const quantity = Number(product.leftover);
+        if (quantity === 0) continue;
+        const current = cashTotals.get(product.productId) ?? { name: product.productName, unit: product.unit, quantity: 0, amount: 0 };
+        current.quantity += quantity;
+        current.amount += Number(product.leftoverValue);
+        cashTotals.set(product.productId, current);
+      }
+    }
+    const cashSaleByProduct: ProductBreakdownRow[] = [...cashTotals.entries()]
+      .map(([productId, total]) => ({ productId, name: total.name, unit: total.unit, quantity: total.quantity.toFixed(3), amount: total.amount.toFixed(2) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
 
     const totalBilledThisMonth = billsThisMonth.reduce((sum, bill) => sum + Number(bill.deliveryAmount), 0);
     const totalCollectedThisMonth = billsThisMonth.reduce((sum, bill) => sum + Number(bill.paymentAmount), 0);
@@ -291,6 +337,8 @@ export async function getDashboardPayload(): Promise<DashboardPayload> {
       routeCode: route.code,
       routeName: route.name,
       shift: route.shift,
+      vehicleId: route.vehicle?.id ?? null,
+      vehicleCode: route.vehicle?.code ?? null,
       vehicleName: route.vehicle?.name ?? null,
       hasEntryToday: todaysEntries.some((entry) => entry.routeId === route.id),
     }));
@@ -307,8 +355,6 @@ export async function getDashboardPayload(): Promise<DashboardPayload> {
       cashSaleTotalToday: cashSaleTotalToday.toFixed(2),
       hasNegativeDifferenceToday,
       paymentsCollectedToday: Number(verifiedPaymentsToday._sum.amount ?? 0).toFixed(2),
-      pendingPaymentsCount: pendingPayments._count,
-      pendingPaymentsAmount: Number(pendingPayments._sum.amount ?? 0).toFixed(2),
       customerOutstandingTotal: customerOutstandingTotal.toFixed(2),
       vehicleCashSaleBalanceToday: vehicleCashSaleBalanceToday.toFixed(2),
       billsGeneratedThisMonth: billsThisMonth.length,
@@ -320,7 +366,7 @@ export async function getDashboardPayload(): Promise<DashboardPayload> {
       activeRoutes: routes.length,
       activeCustomers: customerCount,
       activeVehicles: vehicleCount,
-      activeProducts: productCount,
+      activeProducts: allProducts.filter((product) => product.isActive).length,
       routeReadiness,
       dailyEntryProducts,
       routeSummary,
@@ -331,6 +377,17 @@ export async function getDashboardPayload(): Promise<DashboardPayload> {
         unit: product.unit,
       })),
       vehicleCashSaleSummary,
+      deliveredByProduct,
+      cashSaleByProduct,
+      outstandingCustomers: outstanding.rows,
+      vehicleBalances: reconciliationToday.cycles.map((cycle) => ({
+        vehicleId: cycle.vehicleId,
+        vehicleCode: cycle.vehicleCode,
+        vehicleName: cycle.vehicleName,
+        cashSale: cycle.cashSaleAmount,
+        received: cycle.paymentsReceived,
+        balance: cycle.balance,
+      })),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to load dashboard data.";
